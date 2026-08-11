@@ -111,7 +111,8 @@
     "minOnscreen": "Экранное время",
     "minOnscreenHint": "Минимальное время присутствия лица на экране в секундах (Crowd-фильтрация)",
     "recalculateCasting": "Пересчитать кастинг",
-    "auto": "Авто"
+    "auto": "Авто",
+    "castingAdvanced": "Расширенные настройки"
   },
   "actions": {
     "translate": "Перевод",

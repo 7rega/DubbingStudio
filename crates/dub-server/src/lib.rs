@@ -2392,7 +2392,6 @@ async fn save_text(State(st): State<AppState>, AxPath(pid): AxPath<String>, Json
     if let Err(e) = std::fs::write(&f, text) {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("write failed: {e}")).into_response();
     }
-    reveal_in_explorer(f.to_string_lossy().to_string());
     Json(json!({ "ok": true, "path": f.to_string_lossy() })).into_response()
 }
 

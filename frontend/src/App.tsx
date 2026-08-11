@@ -2276,7 +2276,10 @@ function CastingPanel({ pid, characters, voices, onChange }: {
     setDraft((d) => ({ ...d, [id]: { ...d[id], ...patch } })); setSaved(false);
   };
   const voiceOpts = cloudOn
-    ? cloudVoices.map((v) => ({ value: v.name, label: v.gender ? `${prettyVoice(v.name)} · ${v.gender}` : prettyVoice(v.name), search: v.name }))
+    ? [
+        ...voices.map((v) => ({ value: v, label: `${prettyVoice(v)} (local)`, search: v })),
+        ...cloudVoices.map((v) => ({ value: v.name, label: v.gender ? `${prettyVoice(v.name)} · ${v.gender}` : prettyVoice(v.name), search: v.name }))
+      ]
     : voices.map((v) => ({ value: v, label: prettyVoice(v), search: v }));
   // Инициал имени (или «?») для заглушки-аватара; цвет из палитры спикеров (как кружки в TranscriptView).
   const initialOf = (name: string) => (name.trim()[0] ?? "?").toUpperCase();
@@ -4991,6 +4994,9 @@ function TranscriptView() {
   // #122/#4: свой гейт ре-анализа. Старый `busy` — стейт СОЗДАНИЯ ГОЛОСОВ, switchMode его не ставил ->
   // двойной клик по разным режимам запускал 2 analyze. reanalyzing блокирует и дизейблит кнопки портала.
   const [reanalyzing, setReanalyzing] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(() => {
+    return p.casting_mode === "face" || p.max_speakers !== null || p.max_faces !== null || (p.min_onscreen_sec !== null && p.min_onscreen_sec !== 3.0);
+  });
   const trAudioOnly = !((p.meta.width || 0) > 0 && (p.meta.height || 0) > 0);   // транскрипт может быть аудио-входом
   async function switchMode(k: string) {
     if (k === "transcribe" || reanalyzing) return;                  // уже в транскрипте / ре-анализ уже идёт
@@ -5221,86 +5227,113 @@ function TranscriptView() {
             <Users size={14} className="text-[var(--color-accent)]" />
             <span>{t("transcribe.castingSettings")}</span>
           </div>
-          
-          {/* Режим кастинга */}
-          <div>
-            <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1">{t("transcribe.castingMode")}</label>
-            <select
-              value={p.casting_mode || "speaker"}
+
+          <label className="flex items-center gap-2 cursor-pointer select-none text-[12px] text-[var(--color-text)]">
+            <input
+              type="checkbox"
+              checked={showAdvanced}
               onChange={async (e) => {
-                const updated = await api.patch(pid, { op: "casting_config", casting_mode: e.target.value });
-                setProject(updated);
+                const checked = e.target.checked;
+                setShowAdvanced(checked);
+                if (!checked) {
+                  const updated = await api.patch(pid, {
+                    op: "casting_config",
+                    casting_mode: "speaker",
+                    max_speakers: null,
+                    max_faces: null,
+                    min_onscreen_sec: null
+                  });
+                  setProject(updated);
+                }
               }}
-              className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
-            >
-              <option value="speaker">{t("transcribe.castingModeSpeaker")}</option>
-              <option value="face">{t("transcribe.castingModeFace")}</option>
-            </select>
-          </div>
+              className="rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-accent)] focus:ring-[var(--color-accent)] w-3.5 h-3.5"
+            />
+            <span>{t("transcribe.castingAdvanced")}</span>
+          </label>
+          
+          {showAdvanced && (
+            <>
+              {/* Режим кастинга */}
+              <div>
+                <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1">{t("transcribe.castingMode")}</label>
+                <select
+                  value={p.casting_mode || "speaker"}
+                  onChange={async (e) => {
+                    const updated = await api.patch(pid, { op: "casting_config", casting_mode: e.target.value });
+                    setProject(updated);
+                  }}
+                  className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+                >
+                  <option value="speaker">{t("transcribe.castingModeSpeaker")}</option>
+                  <option value="face">{t("transcribe.castingModeFace")}</option>
+                </select>
+              </div>
 
-          <div className="grid grid-cols-3 gap-2">
-            {/* Макс. спикеров */}
-            <div>
-              <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1" title={t("transcribe.maxSpeakersHint")}>{t("transcribe.maxSpeakers")}</label>
-              <input
-                type="number"
-                min="0"
-                placeholder={t("transcribe.auto")}
-                value={p.max_speakers || ""}
-                onChange={async (e) => {
-                  const val = e.target.value === "" ? null : parseInt(e.target.value, 10);
-                  const updated = await api.patch(pid, { op: "casting_config", max_speakers: val });
-                  setProject(updated);
-                }}
-                className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
-              />
-            </div>
+              <div className="grid grid-cols-3 gap-2">
+                {/* Макс. спикеров */}
+                <div>
+                  <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1" title={t("transcribe.maxSpeakersHint")}>{t("transcribe.maxSpeakers")}</label>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder={t("transcribe.auto")}
+                    value={p.max_speakers || ""}
+                    onChange={async (e) => {
+                      const val = e.target.value === "" ? null : parseInt(e.target.value, 10);
+                      const updated = await api.patch(pid, { op: "casting_config", max_speakers: val });
+                      setProject(updated);
+                    }}
+                    className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+                  />
+                </div>
 
-            {/* Макс. лиц */}
-            <div>
-              <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1" title={t("transcribe.maxFacesHint")}>{t("transcribe.maxFaces")}</label>
-              <input
-                type="number"
-                min="0"
-                placeholder={t("transcribe.auto")}
-                value={p.max_faces || ""}
-                onChange={async (e) => {
-                  const val = e.target.value === "" ? null : parseInt(e.target.value, 10);
-                  const updated = await api.patch(pid, { op: "casting_config", max_faces: val });
-                  setProject(updated);
-                }}
-                className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
-              />
-            </div>
+                {/* Макс. лиц */}
+                <div>
+                  <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1" title={t("transcribe.maxFacesHint")}>{t("transcribe.maxFaces")}</label>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder={t("transcribe.auto")}
+                    value={p.max_faces || ""}
+                    onChange={async (e) => {
+                      const val = e.target.value === "" ? null : parseInt(e.target.value, 10);
+                      const updated = await api.patch(pid, { op: "casting_config", max_faces: val });
+                      setProject(updated);
+                    }}
+                    className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+                  />
+                </div>
 
-            {/* Время на экране */}
-            <div>
-              <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1" title={t("transcribe.minOnscreenHint")}>{t("transcribe.minOnscreen")}</label>
-              <input
-                type="number"
-                min="0"
-                step="0.5"
-                placeholder="3.0"
-                value={p.min_onscreen_sec !== undefined && p.min_onscreen_sec !== null ? p.min_onscreen_sec : ""}
-                onChange={async (e) => {
-                  const val = e.target.value === "" ? null : parseFloat(e.target.value);
-                  const updated = await api.patch(pid, { op: "casting_config", min_onscreen_sec: val });
-                  setProject(updated);
-                }}
-                className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
-              />
-            </div>
-          </div>
+                {/* Время на экране */}
+                <div>
+                  <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1" title={t("transcribe.minOnscreenHint")}>{t("transcribe.minOnscreen")}</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder="3.0"
+                    value={p.min_onscreen_sec !== undefined && p.min_onscreen_sec !== null ? p.min_onscreen_sec : ""}
+                    onChange={async (e) => {
+                      const val = e.target.value === "" ? null : parseFloat(e.target.value);
+                      const updated = await api.patch(pid, { op: "casting_config", min_onscreen_sec: val });
+                      setProject(updated);
+                    }}
+                    className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+                  />
+                </div>
+              </div>
 
-          {/* Кнопка пересчета */}
-          <button
-            onClick={runRecalculateCasting}
-            disabled={reanalyzing || busy !== null}
-            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--color-surface-2)] text-[var(--color-text)] text-[12px] font-semibold border border-[var(--color-border)] hover:bg-[var(--color-surface-3)] disabled:opacity-50 transition"
-          >
-            {reanalyzing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-            <span>{t("transcribe.recalculateCasting")}</span>
-          </button>
+              {/* Кнопка пересчета */}
+              <button
+                onClick={runRecalculateCasting}
+                disabled={reanalyzing || busy !== null}
+                className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--color-surface-2)] text-[var(--color-text)] text-[12px] font-semibold border border-[var(--color-border)] hover:bg-[var(--color-surface-3)] disabled:opacity-50 transition"
+              >
+                {reanalyzing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                <span>{t("transcribe.recalculateCasting")}</span>
+              </button>
+            </>
+          )}
         </div>
 
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">

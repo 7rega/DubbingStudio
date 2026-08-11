@@ -111,7 +111,8 @@
     "minOnscreen": "On-screen time",
     "minOnscreenHint": "Minimum time a face appears on screen in seconds (Crowd filtering)",
     "recalculateCasting": "Recalculate casting",
-    "auto": "Auto"
+    "auto": "Auto",
+    "castingAdvanced": "Advanced options"
   },
   "actions": {
     "translate": "Translate",
