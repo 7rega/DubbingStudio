@@ -279,6 +279,10 @@ pub struct AnalyzeArgs {
                               // рисованных лиц + CCIP). Пусто = "real". Аниме-путь ловит мульт/аниме лица.
     pub import_translated: bool, // импортированные субтитры УЖЕ на языке перевода -> MT/vision пропустить,
                                  // tgt = импортированный текст, Даб Студио только озвучивает. Работает лишь с import_subs.
+    pub casting_mode: Option<String>,
+    pub max_speakers: Option<usize>,
+    pub max_faces: Option<usize>,
+    pub min_onscreen_sec: Option<f64>,
 }
 
 /// Пути к моделям/входу для одной джобы analyze.
@@ -791,7 +795,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     // часто схлопывает многоголосый клип в 1 спикера (шум/моно) — именно этот случай фича и чинит;
     // внутренний guard recluster (k<=1 || k<=orig) не трогает истинно-односпикерные.
     if args.casting && paths.import_subs.is_none() {
-        let k = crate::casting::recluster_segments(paths, &mut segments, progress);
+        let k = crate::casting::recluster_segments(paths, &mut segments, args.max_speakers, progress);
         if k > 0 {
             emit(progress, "asr", &format!("персонажей по голосу: {k}"));
         }
@@ -933,6 +937,10 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     //     ОДНОГО кадра не сканируется (ноль оверхеда, как OCR). Ставится ПОСЛЕ ASR/диаризации (нужны
     //     спикеры+тайминги) и перевода. Fail-safe: сбой не валит analyze (кастинг — не блокер).
     proj.casting_enabled = args.casting;
+    proj.casting_mode = args.casting_mode.clone();
+    proj.max_speakers = args.max_speakers;
+    proj.max_faces = args.max_faces;
+    proj.min_onscreen_sec = args.min_onscreen_sec;
     bench.stage("casting");
     if args.casting && meta.width > 0 && meta.height > 0 {
         // content_type="auto" -> берём тип, определённый Gemma в translate-стадии (proj.audio.content_type).

@@ -31,6 +31,11 @@ export type Project = {
   };
   render: { burn_cq: number; blur_sigma: number; blur: boolean; codec: string };
   work_dir?: string | null;
+  casting_enabled?: boolean;
+  casting_mode?: string | null;
+  max_speakers?: number | null;
+  max_faces?: number | null;
+  min_onscreen_sec?: number | null;
 };
 export type ProjectSummary = {
   pid: string; video: string; tgt_lang: string; mode: string;
@@ -174,6 +179,7 @@ export const api = {
   exportLang: (pid: string, lang: string) => fetch(`${BASE}/projects/${pid}/export-lang?lang=${encodeURIComponent(lang)}`, { method: "POST" }).then(j<{ job_id: string; project_id: string }>),
   // #122: смена режима из транскрипта — перевод готовых сегментов на lang + смена режима, БЕЗ повторного ASR.
   retranslate: (pid: string, lang: string, mode: string) => fetch(`${BASE}/projects/${pid}/retranslate?lang=${encodeURIComponent(lang)}&mode=${encodeURIComponent(mode)}`, { method: "POST" }).then(j<{ job_id: string; project_id: string }>),
+  recalculateCasting: (pid: string) => fetch(`${BASE}/projects/${pid}/casting/recalculate`, { method: "POST" }).then(j<{ job_id: string }>),
   dubAudio: (pid: string) => fetch(`${BASE}/projects/${pid}/dub-audio`, { method: "POST" }).then(j<{ job_id: string }>),   // сгенерить только озвучку (без сборки видео) — слушать дуб в редакторе
   remix: (pid: string, instruction: string) =>
     fetch(`${BASE}/projects/${pid}/remix?instruction=${encodeURIComponent(instruction)}`, { method: "POST" }).then(j<{ job_id: string }>),

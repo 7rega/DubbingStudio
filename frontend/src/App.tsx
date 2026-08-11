@@ -2233,9 +2233,13 @@ function CastingPanel({ pid, characters, voices, onChange }: {
   pid: string; characters: Character[]; voices: string[]; onChange: (c: Character[]) => void;
 }) {
   const { t } = useTranslation();
-  // Черновик правок: имя / заметка о речи / голос — редактируются локально, коммит одной кнопкой.
-  const [draft, setDraft] = useState<Record<string, { name: string; speech_note: string; voice: string | null }>>(
-    () => Object.fromEntries(characters.map((c) => [c.id, { name: c.name, speech_note: c.speech_note ?? "", voice: c.voice }])),
+  const project = useStore((s) => s.project);
+  const projectSpeakers = project
+    ? [...new Set(project.segments.map((s) => s.speaker).filter(Boolean) as string[])].sort()
+    : [];
+  // Черновик правок: имя / заметка о речи / голос / связь со спикером — редактируются локально, коммит одной кнопкой.
+  const [draft, setDraft] = useState<Record<string, { name: string; speech_note: string; voice: string | null; speaker_ids: string[] }>>(
+    () => Object.fromEntries(characters.map((c) => [c.id, { name: c.name, speech_note: c.speech_note ?? "", voice: c.voice, speaker_ids: c.speaker_ids ?? [] }])),
   );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -2259,7 +2263,7 @@ function CastingPanel({ pid, characters, voices, onChange }: {
   useEffect(() => {
     setDraft((d) => {
       const next: typeof d = {};
-      for (const c of characters) next[c.id] = d[c.id] ?? { name: c.name, speech_note: c.speech_note ?? "", voice: c.voice };
+      for (const c of characters) next[c.id] = d[c.id] ?? { name: c.name, speech_note: c.speech_note ?? "", voice: c.voice, speaker_ids: c.speaker_ids ?? [] };
       return next;
     });
     setImgFail((m) => {
@@ -2268,7 +2272,7 @@ function CastingPanel({ pid, characters, voices, onChange }: {
       return next;
     });
   }, [characters]);
-  const setField = (id: string, patch: Partial<{ name: string; speech_note: string; voice: string | null }>) => {
+  const setField = (id: string, patch: Partial<{ name: string; speech_note: string; voice: string | null; speaker_ids: string[] }>) => {
     setDraft((d) => ({ ...d, [id]: { ...d[id], ...patch } })); setSaved(false);
   };
   const voiceOpts = cloudOn
@@ -2283,6 +2287,7 @@ function CastingPanel({ pid, characters, voices, onChange }: {
       const payload = characters.map((c) => ({
         id: c.id, name: draft[c.id]?.name ?? c.name,
         speech_note: draft[c.id]?.speech_note ?? "", dub_voice: draft[c.id]?.voice ?? null,
+        speaker_ids: draft[c.id]?.speaker_ids ?? c.speaker_ids ?? [],
       }));
       const r = await api.setCasting(pid, payload);
       onChange(r.characters);
@@ -2401,6 +2406,20 @@ function CastingPanel({ pid, characters, voices, onChange }: {
                   {/* Кол-во реплик. */}
                   <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
                     <FileText size={12} />{t("casting.lines", { n: c.line_count })}
+                  </div>
+                  {/* Связь со спикером */}
+                  <div>
+                    <div className="text-[10px] uppercase tracking-[0.1em] text-[var(--color-muted)] mb-1">{t("casting.speakerLink")}</div>
+                    <select
+                      value={d.speaker_ids?.[0] ?? ""}
+                      onChange={(e) => setField(c.id, { speaker_ids: e.target.value ? [e.target.value] : [] })}
+                      className="w-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg px-2 py-1.5 text-[12px] focus:border-[var(--color-accent)] focus:outline-none"
+                    >
+                      <option value="">{t("casting.unassigned")}</option>
+                      {projectSpeakers.map((s) => (
+                        <option key={s} value={s}>{t("transcribe.speaker")} {s}</option>
+                      ))}
+                    </select>
                   </div>
                   {/* Характер речи — уходит в Гемму. */}
                   <div>
@@ -5035,6 +5054,32 @@ function TranscriptView() {
       setStage("editor");
     } finally { setReanalyzing(false); }
   }
+  async function runRecalculateCasting() {
+    if (reanalyzing) return;
+    setReanalyzing(true);
+    setJobSteps(["diarization", "casting"]);
+    setAudioOnly(trAudioOnly);
+    setProgress("", "", null);
+    setStage("analyzing");
+    try {
+      const { job_id } = await api.recalculateCasting(pid);
+      await api.watchJob(job_id, (e) => {
+        if (e.type === "progress") {
+          if (e.msg) useStore.getState().pushActivity(e.msg, "work");
+          setProgress(e.stage || "", e.msg || "", e.pct ?? null);
+        }
+      });
+      const updated = await api.getProject(pid);
+      setProject(updated);
+      setStage("editor");
+    } catch (err) {
+      useStore.getState().pushActivity(String(err), "error");
+      try {
+        setProject(await api.getProject(pid));
+      } catch { /* offline */ }
+      setStage("editor");
+    } finally { setReanalyzing(false); }
+  }
   const [busy, setBusy] = useState<string | null>(null);            // спикер в работе, либо "__all__"
   const [made, setMade] = useState<Record<string, string>>({});     // спикер -> имя созданного голоса
   const [scrub, setScrub] = useState(() => initialScrub() || 0);      // ?t=SEC — deep-link на кадр транскрипта
@@ -5171,6 +5216,93 @@ function TranscriptView() {
       </div>
 
       <div className="min-h-0 flex flex-col gap-3">
+        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-3">
+          <div className="text-[12px] font-semibold text-[var(--color-text)] flex items-center gap-1.5 border-b border-[var(--color-border)] pb-1.5">
+            <Users size={14} className="text-[var(--color-accent)]" />
+            <span>{t("transcribe.castingSettings")}</span>
+          </div>
+          
+          {/* Режим кастинга */}
+          <div>
+            <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1">{t("transcribe.castingMode")}</label>
+            <select
+              value={p.casting_mode || "speaker"}
+              onChange={async (e) => {
+                const updated = await api.patch(pid, { op: "casting_config", casting_mode: e.target.value });
+                setProject(updated);
+              }}
+              className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+            >
+              <option value="speaker">{t("transcribe.castingModeSpeaker")}</option>
+              <option value="face">{t("transcribe.castingModeFace")}</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            {/* Макс. спикеров */}
+            <div>
+              <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1" title={t("transcribe.maxSpeakersHint")}>{t("transcribe.maxSpeakers")}</label>
+              <input
+                type="number"
+                min="0"
+                placeholder={t("transcribe.auto")}
+                value={p.max_speakers || ""}
+                onChange={async (e) => {
+                  const val = e.target.value === "" ? null : parseInt(e.target.value, 10);
+                  const updated = await api.patch(pid, { op: "casting_config", max_speakers: val });
+                  setProject(updated);
+                }}
+                className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+              />
+            </div>
+
+            {/* Макс. лиц */}
+            <div>
+              <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1" title={t("transcribe.maxFacesHint")}>{t("transcribe.maxFaces")}</label>
+              <input
+                type="number"
+                min="0"
+                placeholder={t("transcribe.auto")}
+                value={p.max_faces || ""}
+                onChange={async (e) => {
+                  const val = e.target.value === "" ? null : parseInt(e.target.value, 10);
+                  const updated = await api.patch(pid, { op: "casting_config", max_faces: val });
+                  setProject(updated);
+                }}
+                className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+              />
+            </div>
+
+            {/* Время на экране */}
+            <div>
+              <label className="block text-[11px] text-[var(--color-muted)] uppercase tracking-wider mb-1" title={t("transcribe.minOnscreenHint")}>{t("transcribe.minOnscreen")}</label>
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                placeholder="3.0"
+                value={p.min_onscreen_sec !== undefined && p.min_onscreen_sec !== null ? p.min_onscreen_sec : ""}
+                onChange={async (e) => {
+                  const val = e.target.value === "" ? null : parseFloat(e.target.value);
+                  const updated = await api.patch(pid, { op: "casting_config", min_onscreen_sec: val });
+                  setProject(updated);
+                }}
+                className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Кнопка пересчета */}
+          <button
+            onClick={runRecalculateCasting}
+            disabled={reanalyzing || busy !== null}
+            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--color-surface-2)] text-[var(--color-text)] text-[12px] font-semibold border border-[var(--color-border)] hover:bg-[var(--color-surface-3)] disabled:opacity-50 transition"
+          >
+            {reanalyzing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+            <span>{t("transcribe.recalculateCasting")}</span>
+          </button>
+        </div>
+
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
           <div className="text-[12px] text-[var(--color-muted)] mb-2">{t("transcribe.speakers")}</div>
           <div>

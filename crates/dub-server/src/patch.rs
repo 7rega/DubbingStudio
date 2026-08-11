@@ -726,6 +726,7 @@ pub fn apply(p: &mut Project, edit: &Value) -> PatchResult {
         "sub_blur" => op_sub_blur(p, edit),
         "keep_original" => op_keep_original(p, edit),
         "reorder_segments" => op_reorder_segments(p, edit),
+        "casting_config" => op_casting_config(p, edit),
         other => Err((400, format!("unknown op {other:?}"))),
     }
 }
@@ -745,6 +746,32 @@ fn op_reorder_segments(p: &mut Project, edit: &Value) -> PatchResult {
     }
     for (_, s) in map {
         p.segments.push(s);
+    }
+    Ok(())
+}
+
+/// casting_config — настроить режим и лимиты кастинга
+fn op_casting_config(p: &mut Project, edit: &Value) -> PatchResult {
+    if let Some(mode) = s(edit, "casting_mode") {
+        p.casting_mode = Some(mode);
+    }
+    if let Some(enabled) = b(edit, "casting_enabled") {
+        p.casting_enabled = enabled;
+    }
+    if let Some(speakers) = i(edit, "max_speakers") {
+        p.max_speakers = if speakers <= 0 { None } else { Some(speakers as usize) };
+    } else if edit.get("max_speakers").map_or(false, |v| v.is_null()) {
+        p.max_speakers = None;
+    }
+    if let Some(faces) = i(edit, "max_faces") {
+        p.max_faces = if faces <= 0 { None } else { Some(faces as usize) };
+    } else if edit.get("max_faces").map_or(false, |v| v.is_null()) {
+        p.max_faces = None;
+    }
+    if let Some(onscreen) = f(edit, "min_onscreen_sec") {
+        p.min_onscreen_sec = if onscreen <= 0.0 { None } else { Some(onscreen) };
+    } else if edit.get("min_onscreen_sec").map_or(false, |v| v.is_null()) {
+        p.min_onscreen_sec = None;
     }
     Ok(())
 }

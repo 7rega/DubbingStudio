@@ -373,6 +373,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/projects/{pid}/render", post(render_project))
         .route("/projects/{pid}/export-lang", post(export_lang))   // клон+ре-перевод+рендер на другом языке (экспорт-уровень мультиязыка)
         .route("/projects/{pid}/retranslate", post(retranslate_project))   // #122: смена режима из транскрипта — перевод готовых сегментов БЕЗ ASR
+        .route("/projects/{pid}/casting/recalculate", post(recalculate_casting_project))
         .route("/projects/{pid}/waveform", get(endpoints::waveform))
         .route("/projects/{pid}/preview", get(endpoints::preview))
         .route("/projects/{pid}/output", get(output))
@@ -1082,6 +1083,9 @@ async fn casting_save(
             if let Some(v) = e.get("gender").and_then(|v| v.as_str()) {
                 ch.gender = v.to_string();
             }
+            if let Some(v) = e.get("speaker_ids").and_then(|v| v.as_array()) {
+                ch.speaker_ids = v.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect();
+            }
         }
     }
     // Валидация голосов. В ОБЛАЧНОМ TTS-режиме (OpenRouter) имена — облачные голоса, локального файла в
@@ -1557,6 +1561,10 @@ async fn analyze_project(
         content_type: qget("content_type", "auto"),
         // «сабы уже на языке перевода» — эффективно только если сабы реально импортированы.
         import_translated: import_subs.is_some() && qget("import_translated", "0") == "1",
+        casting_mode: q.get("casting_mode").cloned(),
+        max_speakers: q.get("max_speakers").and_then(|s| s.parse().ok()),
+        max_faces: q.get("max_faces").and_then(|s| s.parse().ok()),
+        min_onscreen_sec: q.get("min_onscreen_sec").and_then(|s| s.parse().ok()),
     };
     // Активный вариант модели резолвится ПРИ КАЖДОЙ джобе (не морозится на старте): скачал/выбрал
     // квант -> применяется без рестарта. См. models::resolve_*.
@@ -2008,6 +2016,91 @@ async fn retranslate_project(
     });
     let job_id = st.jobs.enqueue(job).await;
     Json(json!({ "job_id": job_id, "project_id": pid })).into_response()
+}
+
+/// POST /projects/{pid}/casting/recalculate — пересчитать кастинг с учетом новых лимитов и режима.
+async fn recalculate_casting_project(
+    State(st): State<AppState>,
+    AxPath(pid): AxPath<String>,
+) -> Response {
+    let dir = match st.proj_dir(&pid) {
+        Ok(d) => d,
+        Err(resp) => return resp,
+    };
+    let src_txt = dir.join("source.txt");
+    let input = match std::fs::read_to_string(&src_txt) {
+        Ok(s) => std::path::PathBuf::from(s.trim()),
+        Err(_) => {
+            return (StatusCode::CONFLICT, "no source uploaded").into_response();
+        }
+    };
+    if !input.is_file() {
+        return (StatusCode::CONFLICT, "source video missing").into_response();
+    }
+    if !dir.join("project.json").is_file() {
+        return (StatusCode::CONFLICT, "project not analyzed yet").into_response();
+    }
+
+    let sel = models::load_selection(&st.models_root);
+    std::env::set_var("DUB_ASR_BACKEND", models::local_backend(&st.models_root));
+    let (mt_model, mmproj) = models::resolve_mt(&st.models_root, &sel);
+    let asr = models::resolve_asr_choice(&st.repo_root, &st.models_root, &sel);
+
+    let paths = analyze::AnalyzePaths {
+        input,
+        work_dir: dir.clone(),
+        repo_root: st.repo_root.clone(),
+        asr,
+        sortformer_onnx: st.sortformer_onnx.clone(),
+        llama_bin: st.llama_bin.clone(),
+        mt_model,
+        mmproj,
+        models_root: st.models_root.clone(),
+        caption_fps: st.opts.caption_fps,
+        import_subs: None,
+        bsroformer_cli: dub_sep::engine_cli(&st.repo_root, models::stage_backend(&st.models_root, "sep_backend")),
+        bsroformer_model: st.bsroformer_model.clone(),
+    };
+
+    let dir_for_job = dir.clone();
+    let pid_for_result = pid.clone();
+    let job: jobs::JobFn = Box::new(move |progress: jobs::ProgressFn| {
+        let cb = |ev: Value| progress(ev);
+        let pj = dir_for_job.join("project.json");
+        let text = std::fs::read_to_string(&pj).map_err(|e| e.to_string())?;
+        let mut proj = Project::from_json(&text).map_err(|e| e.to_string())?;
+
+        proj.casting_enabled = true;
+
+        ensure_job_components(&paths.repo_root, &paths.models_root, true, &cb)?;
+
+        // 1) Голосовая переразметка спикеров
+        cb(json!({ "type": "progress", "stage": "diarization", "msg": "Голосовая переразметка спикеров..." }));
+        let max_spk = proj.max_speakers;
+        let _ = crate::casting::recluster_segments(&paths, &mut proj.segments, max_spk, &cb);
+
+        // 2) Детекция лиц и кастинг
+        cb(json!({ "type": "progress", "stage": "casting", "msg": "Детекция лиц и расчет кастинга..." }));
+        
+        let eff_ct = if proj.casting_mode.as_deref() == Some("face") {
+            "real".to_string()
+        } else {
+            match media::detect_content_type(&paths.input) {
+                Ok(t) => t,
+                Err(_) => "real".to_string(),
+            }
+        };
+        
+        crate::casting::stage(&paths, &proj, "", &eff_ct, &cb);
+
+        save_project_atomic(&dir_for_job, &proj)?;
+
+        cb(json!({ "type": "done", "result": { "project_id": pid_for_result } }));
+        Ok(json!({ "project_id": pid_for_result }))
+    });
+
+    let job_id = st.jobs.enqueue(job).await;
+    Json(json!({ "job_id": job_id })).into_response()
 }
 
 /// POST /projects/{pid}/dub-audio — сгенерить ТОЛЬКО озвучку (без сборки видео) -> dub_audio.m4a.

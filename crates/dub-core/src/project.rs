@@ -464,6 +464,14 @@ pub struct Project {
     /// ОДНОГО кадра не сканируется, ноль оверхеда (как detect_text/OCR). Аддитивно, не нарушает extra=allow.
     #[serde(default)]
     pub casting_enabled: bool,
+    #[serde(default)]
+    pub casting_mode: Option<String>,
+    #[serde(default)]
+    pub max_speakers: Option<usize>,
+    #[serde(default)]
+    pub max_faces: Option<usize>,
+    #[serde(default)]
+    pub min_onscreen_sec: Option<f64>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -490,6 +498,10 @@ impl Default for Project {
             raw_ctx: Map::new(),
             stage_ckpts: Map::new(),
             casting_enabled: false,
+            casting_mode: None,
+            max_speakers: None,
+            max_faces: None,
+            min_onscreen_sec: None,
             extra: Extra::new(),
         }
     }
