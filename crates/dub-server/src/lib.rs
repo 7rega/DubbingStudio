@@ -2145,9 +2145,14 @@ async fn save_output(State(st): State<AppState>, AxPath(pid): AxPath<String>, Js
     // <исходный stem>.<расширение реального выхода> — имя как у оригинала, контейнер как у результата.
     let stem = std::path::Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or(name);
     let out_ext = src.extension().and_then(|s| s.to_str()).unwrap_or("mp4");
-    let base = std::path::Path::new(dest_dir);
+    let base_path = std::path::Path::new(dest_dir);
+    let base = if base_path.is_relative() {
+        dir.join(base_path)
+    } else {
+        base_path.to_path_buf()
+    };
     if !base.is_dir() {
-        if let Err(e) = std::fs::create_dir_all(base) {
+        if let Err(e) = std::fs::create_dir_all(&base) {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("создание каталога {}: {e}", base.display()),

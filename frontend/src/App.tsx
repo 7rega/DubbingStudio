@@ -3395,14 +3395,12 @@ function Editor() {
       await api.watchJob(job_id, (e) => { if (e.type === "progress") { updateExport(exId, { msg: e.msg || "" }); pushActivity(e.msg || "", "work"); } });
       
       // Копируем готовый файл в папку Export внутри рабочей папки проекта с сохранением оригинального имени
-      const exportDir = p.work_dir ? `${p.work_dir}/Export` : "";
+      const exportDir = p.work_dir ? `${p.work_dir}/Export` : "Export";
       let saveRes: { ok: boolean; path?: string } | null = null;
-      if (exportDir) {
-        try {
-          saveRes = await api.saveOutput(pid, exportDir, name);
-        } catch (saveErr) {
-          console.error("Ошибка при копировании в папку Export:", saveErr);
-        }
+      try {
+        saveRes = await api.saveOutput(pid, exportDir, name);
+      } catch (saveErr) {
+        console.error("Ошибка при копировании в папку Export:", saveErr);
       }
 
       updateExport(exId, { status: "done", msg: "", url: `${api.outputUrl(pid)}?rev=${Date.now()}` });   // bust cache on re-export
