@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Права по умолчанию для окна Dub Studio","local":true,"windows":["main"],"permissions":["core:default","shell:default","updater:default","dialog:default","opener:default"]}}

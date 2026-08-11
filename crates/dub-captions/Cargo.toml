@@ -1,0 +1,18 @@
+[package]
+name = "dub-captions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CapCut-стиль вжжёные субтитры: ASS-генерация (26 пресетов) + ffmpeg/libass burn. Порт captions.py"
+
+[dependencies]
+# Метрики глифов TTF (замена PIL ImageFont.getbbox/getmetrics в питоне): чистый Rust, без сборочных
+# зависимостей. Нужны для fit-размера плашки/переноса строк, чтобы плашка хватала ink глифов.
+ab_glyph = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[[example]]
+name = "build_ass"
+path = "examples/build_ass.rs"

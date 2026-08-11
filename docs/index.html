@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dub Studio — Free Offline AI Video Dubbing for Windows</title>
+<meta name="description" content="Dub Studio re-voices any video into another language with a cloned voice, translated captions and on-screen-text localization — 100% offline on your Windows PC. Free, open source, one native .exe, zero Python." />
+<meta name="keywords" content="AI video dubbing, video dubbing software, voice cloning, video translation, automatic subtitles, speaker diarization, offline AI, local AI, free dubbing, open source, Windows, text to speech, speech recognition, voice over, transcription" />
+<link rel="canonical" href="https://timoncool.github.io/dub-studio/" />
+<link rel="icon" href="favicon.svg" />
+<link rel="alternate" hreflang="en" href="https://timoncool.github.io/dub-studio/?lang=en" />
+<link rel="alternate" hreflang="ru" href="https://timoncool.github.io/dub-studio/?lang=ru" />
+<link rel="alternate" hreflang="zh" href="https://timoncool.github.io/dub-studio/?lang=zh" />
+<link rel="alternate" hreflang="es" href="https://timoncool.github.io/dub-studio/?lang=es" />
+<link rel="alternate" hreflang="pt" href="https://timoncool.github.io/dub-studio/?lang=pt" />
+<link rel="alternate" hreflang="fr" href="https://timoncool.github.io/dub-studio/?lang=fr" />
+<link rel="alternate" hreflang="x-default" href="https://timoncool.github.io/dub-studio/" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Dub Studio — Free Offline AI Video Dubbing for Windows" />
+<meta property="og:description" content="Re-voice any video into another language with a cloned voice, translated captions and on-screen-text localization — 100% offline. Free & open source." />
+<meta property="og:image" content="https://raw.githubusercontent.com/timoncool/dub-studio/master/docs/shots/mode-dub-ru.png" />
+<meta property="og:url" content="https://timoncool.github.io/dub-studio/" />
+<meta property="og:locale" content="en_US" />
+<meta property="og:locale:alternate" content="ru_RU" />
+<meta property="og:locale:alternate" content="zh_CN" />
+<meta property="og:locale:alternate" content="es_ES" />
+<meta property="og:locale:alternate" content="pt_BR" />
+<meta property="og:locale:alternate" content="fr_FR" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Dub Studio — Free Offline AI Video Dubbing for Windows" />
+<meta name="twitter:description" content="Re-voice any video into another language with a cloned voice — 100% offline, free & open source." />
+<meta name="twitter:image" content="https://raw.githubusercontent.com/timoncool/dub-studio/master/docs/shots/mode-dub-ru.png" />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Dub Studio",
+  "applicationCategory": "MultimediaApplication",
+  "operatingSystem": "Windows 10, Windows 11",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "description": "Free, offline AI video dubbing studio for Windows — voice cloning, translation, subtitles and on-screen-text localization, 100% local.",
+  "url": "https://github.com/timoncool/dub-studio",
+  "downloadUrl": "https://github.com/timoncool/dub-studio/releases",
+  "softwareVersion": "2.3.3",
+  "license": "https://github.com/timoncool/dub-studio/blob/master/LICENSE"
+}
+</script>
+<style>
+  :root{--bg:#0b0c0e;--surface:#14161a;--surface2:#1b1e24;--border:#282c34;--text:#e9edf2;--muted:#9aa3b0;--accent:#c6f24e;--on-accent:#0b0c0e}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  header{position:sticky;top:0;z-index:10;backdrop-filter:blur(10px);background:rgba(11,12,14,.7);border-bottom:1px solid var(--border)}
+  header .wrap{display:flex;align-items:center;gap:16px;height:60px}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px}
+  .logo img{width:26px;height:26px}
+  nav{margin-left:auto;display:flex;gap:22px;align-items:center;font-size:14px;color:var(--muted)}
+  nav a:hover{color:var(--text)}
+  nav .hide-s{display:inline}
+  .langsel{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 8px;font-size:13px;cursor:pointer}
+  .btn{display:inline-flex;align-items:center;gap:8px;background:var(--accent);color:var(--on-accent);font-weight:700;padding:11px 20px;border-radius:10px;font-size:15px;transition:filter .15s}
+  .btn:hover{filter:brightness(1.08)}
+  .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--border)}
+  .hero{text-align:center;padding:90px 0 70px}
+  .eyebrow{font:600 12px/1 ui-monospace,monospace;letter-spacing:.22em;color:var(--muted);text-transform:uppercase}
+  .hero h1{font-size:clamp(34px,6vw,60px);line-height:1.05;font-weight:800;letter-spacing:-.02em;margin:20px auto 0;max-width:18ch}
+  .hero p{color:var(--muted);font-size:19px;max-width:62ch;margin:22px auto 0}
+  .cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:34px}
+  .sub{color:var(--muted);font-size:13px;margin-top:16px}
+  .shot{margin:56px auto 0;max-width:960px;border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 30px 80px -30px rgba(0,0,0,.7)}
+  .shot img{display:block;width:100%}
+  section{padding:64px 0}
+  h2{font-size:clamp(26px,4vw,38px);font-weight:800;letter-spacing:-.02em;text-align:center}
+  .lead{color:var(--muted);text-align:center;max-width:62ch;margin:14px auto 0}
+  .modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:44px}
+  .mode{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .mode .ic{font-size:24px}
+  .mode h3{margin:12px 0 6px;font-size:17px}
+  .mode p{color:var(--muted);font-size:14px}
+  .feats{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px 30px;margin-top:44px;list-style:none}
+  .feats li{padding-left:28px;position:relative;color:var(--muted);font-size:15px}
+  .feats li b{color:var(--text)}
+  .feats li::before{content:"";position:absolute;left:0;top:9px;width:9px;height:9px;border-radius:2px;background:var(--accent)}
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin-top:44px;counter-reset:s}
+  .step{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px}
+  .step::before{counter-increment:s;content:counter(s);display:grid;place-items:center;width:30px;height:30px;border-radius:8px;background:var(--surface2);color:var(--accent);font-weight:800;margin-bottom:12px}
+  .step p{color:var(--muted);font-size:14px}
+  .band{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border);text-align:center}
+  .langs{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:22px}
+  .langs a{border:1px solid var(--border);border-radius:8px;padding:7px 14px;font-size:14px;color:var(--muted)}
+  .langs a:hover{border-color:var(--accent);color:var(--text)}
+  .showcase{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:26px;margin-top:44px}
+  .pair{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:16px}
+  .pair figcaption{font-size:14px;color:var(--muted);margin-top:14px;text-align:center}
+  .pair .tag{display:inline-block;font:600 11px/1 ui-monospace,monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:5px 9px;margin-bottom:10px}
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .ba.stack{grid-template-columns:1fr;gap:12px}
+  .v{position:relative}
+  .v span{position:absolute;top:8px;left:8px;z-index:2;font:600 10px/1 ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase;background:rgba(11,12,14,.82);color:var(--muted);padding:5px 8px;border-radius:6px}
+  .v video{display:block;width:100%;border-radius:10px;background:#000;max-height:560px;cursor:pointer}
+  .v .snd{position:absolute;top:auto;left:auto;bottom:10px;right:10px;z-index:3;font:600 11px/1 -apple-system,"Segoe UI",sans-serif;background:var(--accent);color:var(--on-accent);padding:6px 9px;border-radius:8px;cursor:pointer;user-select:none;box-shadow:0 3px 10px rgba(0,0,0,.4)}
+  .v.on .snd{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+  .gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:44px}
+  .gallery figure{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+  .gallery img{display:block;width:100%}
+  .gallery figcaption{padding:12px 14px;font-size:13px;color:var(--muted)}
+  .gallery figcaption b{color:var(--text)}
+  .gallery img{cursor:zoom-in}
+  .featgrid{display:flex;flex-wrap:wrap;justify-content:center;gap:16px;margin-top:44px}
+  .feat{flex:1 1 300px;max-width:335px;background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:18px 20px;display:flex;gap:14px;align-items:flex-start;transition:border-color .15s,transform .15s}
+  .feat:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .feat .fic{font-size:22px;line-height:1;flex-shrink:0;width:40px;height:40px;display:grid;place-items:center;background:var(--surface2);border:1px solid var(--border);border-radius:10px}
+  .feat p{color:var(--muted);font-size:14.5px;margin:0}
+  .feat p b{color:var(--text);display:block;margin-bottom:2px}
+  #lightbox{display:none;position:fixed;inset:0;z-index:100;background:rgba(6,7,9,.94);cursor:zoom-out;padding:24px;align-items:center;justify-content:center}
+  #lightbox img{max-width:96vw;max-height:92vh;border-radius:10px;box-shadow:0 24px 70px rgba(0,0,0,.7)}
+  footer{border-top:1px solid var(--border);padding:40px 0;color:var(--muted);font-size:14px;text-align:center}
+  footer a{color:var(--text);text-decoration:underline;text-underline-offset:2px}
+  @media(max-width:640px){nav .hide-s{display:none}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <a class="logo" href="#top"><img src="favicon.svg" alt="Dub Studio"/>Dub Studio</a>
+  <nav>
+    <a class="hide-s" href="#showcase" data-i18n="nav_showcase">Showcase</a>
+    <a class="hide-s" href="#modes" data-i18n="nav_modes">Modes</a>
+    <a class="hide-s" href="#features" data-i18n="nav_features">Features</a>
+    <a class="hide-s" href="#how" data-i18n="nav_how">How it works</a>
+    <a href="https://github.com/timoncool/dub-studio">GitHub</a>
+    <select class="langsel" id="langsel" aria-label="Language">
+      <option value="en">EN</option><option value="ru">RU</option><option value="zh">中文</option>
+      <option value="es">ES</option><option value="pt">PT</option><option value="fr">FR</option>
+    </select>
+    <a class="btn" href="https://github.com/timoncool/dub-studio/releases" data-i18n="nav_download">Download</a>
+  </nav>
+</div></header>
+
+<a id="top"></a>
+<div class="wrap hero">
+  <div class="eyebrow" data-i18n="eyebrow">Local · Offline · 100+ languages · Free &amp; open source</div>
+  <h1 data-i18n="h1">Dub any video like it was made that way.</h1>
+  <p data-i18n="hp">Re-voice any clip into another language — with the speaker's own voice cloned, captions translated, and on-screen text localized right on the frame. Local on your machine by default — no subscription; optional cloud (OpenRouter) for weak PCs or extra speed.</p>
+  <div class="cta">
+    <a class="btn" href="https://github.com/timoncool/dub-studio/releases" data-i18n="dl">↓ Download for Windows</a>
+    <a class="btn ghost" href="https://github.com/timoncool/dub-studio" data-i18n="star">★ Star on GitHub</a>
+  </div>
+  <div class="sub" data-i18n="sub">Windows 10/11 · NVIDIA GPU optional (CPU + cloud) · one native .exe · zero Python</div>
+  <div class="shot"><img src="shots/mode-dub-ru.png" alt="Dub Studio editor — dubbed video with translated captions and localized on-screen title" loading="lazy"/></div>
+</div>
+
+<section id="showcase"><div class="wrap">
+  <h2 data-i18n="sc_h2">Before / after — real clips, dubbed offline</h2>
+  <p class="lead" data-i18n="sc_lead">Every clip below was processed end-to-end on a local GPU. Different videos, different modes, different languages — nothing left the machine.</p>
+  <div class="showcase">
+    <figure class="pair">
+      <span class="tag" data-i18n="sc_t7">🎬 Clean dub · EN → JA · no subtitles</span>
+      <div class="ba">
+        <div class="v"><span data-i18n="l_orig">Original</span><video src="showcase/lucid_EN-JA_dubclean__BEFORE.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+        <div class="v"><span data-i18n="l_dub">Dubbed</span><video src="showcase/lucid_EN-JA_dubclean__AFTER.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+      </div>
+      <figcaption data-i18n="sc_c7">Cloned into Japanese with no burned subtitles — the picture is left pristine. One of 100+ target languages, in the new composable “dub without subtitles” mode.</figcaption>
+    </figure>
+    <figure class="pair">
+      <span class="tag" data-i18n="sc_t1">🎙️ Full dub · EN → RU</span>
+      <div class="ba">
+        <div class="v"><span data-i18n="l_orig">Original</span><video src="showcase/ducks_EN-RU_dub__BEFORE.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+        <div class="v"><span data-i18n="l_dub">Dubbed</span><video src="showcase/ducks_EN-RU_dub__AFTER.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+      </div>
+      <figcaption data-i18n="sc_c1">Voice cloned into Russian · translated captions · localized on-screen title</figcaption>
+    </figure>
+    <figure class="pair">
+      <span class="tag" data-i18n="sc_t2">🗣️ Voice-over · EN → ES</span>
+      <div class="ba">
+        <div class="v"><span data-i18n="l_orig">Original</span><video src="showcase/uncleboris_EN-ES_voiceover__BEFORE.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+        <div class="v"><span data-i18n="l_vo">Voice-over</span><video src="showcase/uncleboris_EN-ES_voiceover__AFTER.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+      </div>
+      <figcaption data-i18n="sc_c2">Spanish voice-over the ducked original · 2 speakers, distinct voices</figcaption>
+    </figure>
+    <figure class="pair">
+      <span class="tag" data-i18n="sc_t3">✨ Funny remix · EN → RU</span>
+      <div class="ba stack">
+        <div class="v"><span data-i18n="l_orig">Original</span><video src="showcase/rusttauri_EN-RU_funny__BEFORE.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+        <div class="v"><span data-i18n="l_remix">Remixed</span><video src="showcase/rusttauri_EN-RU_funny__AFTER.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+      </div>
+      <figcaption data-i18n="sc_c3">The model rewrote the whole script to a new theme, then re-dubbed it</figcaption>
+    </figure>
+    <figure class="pair">
+      <span class="tag" data-i18n="sc_t4">🎙️ Full dub · EN → ZH</span>
+      <div class="ba">
+        <div class="v"><span data-i18n="l_orig">Original</span><video src="showcase/adhd_EN-ZH_dub__BEFORE.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+        <div class="v"><span data-i18n="l_dub">Dubbed</span><video src="showcase/adhd_EN-ZH_dub__AFTER.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+      </div>
+      <figcaption data-i18n="sc_c4">Cloned into Chinese · a real talking-head; baked-in English title blurred and re-localized</figcaption>
+    </figure>
+    <figure class="pair">
+      <span class="tag" data-i18n="sc_t5">🎙️ Full dub · EN → PT</span>
+      <div class="ba">
+        <div class="v"><span data-i18n="l_orig">Original</span><video src="showcase/penman_EN-PT_dub__BEFORE.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+        <div class="v"><span data-i18n="l_dub">Dubbed</span><video src="showcase/penman_EN-PT_dub__AFTER.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+      </div>
+      <figcaption data-i18n="sc_c5">Cloned into Portuguese · burned-in original captions cleaned and re-subtitled</figcaption>
+    </figure>
+    <figure class="pair">
+      <span class="tag" data-i18n="sc_t6">🗣️ Voice-over · EN → FR</span>
+      <div class="ba">
+        <div class="v"><span data-i18n="l_orig">Original</span><video src="showcase/adhdcar_EN-FR_voiceover__BEFORE.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+        <div class="v"><span data-i18n="l_vo">Voice-over</span><video src="showcase/adhdcar_EN-FR_voiceover__AFTER.mp4" autoplay muted loop playsinline controls preload="metadata"></video></div>
+      </div>
+      <figcaption data-i18n="sc_c6">French voice-over the ducked original · single speaker</figcaption>
+    </figure>
+  </div>
+</div></section>
+
+<section id="modes"><div class="wrap">
+  <h2 data-i18n="modes_h2">Five modes, switchable on the fly</h2>
+  <p class="lead" data-i18n="modes_lead">Load a clip once and send it into any mode — right inside the editor.</p>
+  <div class="modes">
+    <div class="mode"><div class="ic">🎙️</div><h3 data-i18n="m1n">Dub</h3><p data-i18n="m1d">Full re-voice into the target language with the original timbre cloned — auto-cast per speaker or pick a voice.</p></div>
+    <div class="mode"><div class="ic">🗣️</div><h3 data-i18n="m2n">Voice-over</h3><p data-i18n="m2d">Translated voice over the ducked original — the source is still audible underneath, balance adjustable.</p></div>
+    <div class="mode"><div class="ic">📝</div><h3 data-i18n="m3n">Subtitles</h3><p data-i18n="m3d">Burn original-language captions and keep the original audio — no dubbing, no translation.</p></div>
+    <div class="mode"><div class="ic">✨</div><h3 data-i18n="m4n">Funny remix</h3><p data-i18n="m4d">Give a theme — the model rewrites the whole script, then re-dubs it.</p></div>
+    <div class="mode"><div class="ic">🎬</div><h3 data-i18n="m5n">Transcript</h3><p data-i18n="m5d">Clean diarized transcript with karaoke play-along, one-click voices, and .srt / .txt export.</p></div>
+  </div>
+</div></section>
+
+<section id="features" class="band"><div class="wrap">
+  <h2 data-i18n="feat_h2">Everything, running on your machine</h2>
+  <div class="featgrid">
+    <div class="feat"><span class="fic">🎙️</span><p data-i18n="f1"><b>Voice cloning</b> — the original timbre speaks the new language (Higgs Audio v3).</p></div>
+    <div class="feat"><span class="fic">👥</span><p data-i18n="f2"><b>Speaker diarization</b> — a distinct voice per speaker (NVIDIA Sortformer, up to 4).</p></div>
+    <div class="feat"><span class="fic">🖼️</span><p data-i18n="f3"><b>On-screen text localization</b> — OCR blurs the original and prints a matched localized title.</p></div>
+    <div class="feat"><span class="fic">🌐</span><p data-i18n="f4"><b>Local translation + vision</b> — Gemma-4 12B translates and reads the frame layout.</p></div>
+    <div class="feat"><span class="fic">🎚️</span><p data-i18n="f5"><b>SOTA vocal separation</b> — Mel-Band Roformer keeps the backing track intact.</p></div>
+    <div class="feat"><span class="fic">💬</span><p data-i18n="f6"><b>26 caption presets</b> — karaoke, word-by-word, neon and more, WYSIWYG.</p></div>
+    <div class="feat"><span class="fic">⚡</span><p data-i18n="f7"><b>Live editor</b> — ~0.17 s/frame preview; every change visible instantly.</p></div>
+    <div class="feat"><span class="fic">📦</span><p data-i18n="f8"><b>Batch processing</b> — a queue of files with one setup.</p></div>
+    <div class="feat"><span class="fic">🌍</span><p data-i18n="f9"><b>100+ languages</b> — dub into any major language: Spanish, Chinese, Japanese, Arabic, Hindi… source auto-detected.</p></div>
+    <div class="feat"><span class="fic">🧳</span><p data-i18n="f10"><b>Fully portable + auto-update</b> — nothing touches your user profile.</p></div>
+    <div class="feat"><span class="fic">🗣️</span><p data-i18n="f11"><b>Choice of ASR engine</b> — Parakeet-TDT (GPU) or Whisper (CPU); pick the model size and quant in settings.</p></div>
+    <div class="feat"><span class="fic">🎛️</span><p data-i18n="f12"><b>Composable modes</b> — mix any steps: dub without subtitles, translated subtitles without dubbing, funny dub with your own voices.</p></div>
+    <div class="feat"><span class="fic">🧠</span><p data-i18n="f13"><b>Tune for your hardware</b> — swap lighter quants per engine and cap the prefill batch + reference length to fit 8–12 GB GPUs and 32 GB RAM.</p></div>
+    <div class="feat"><span class="fic">🔁</span><p data-i18n="f14"><b>Resumable downloads</b> — large models resume from where they stopped after a dropped connection, instead of restarting.</p></div>
+    <div class="feat"><span class="fic">✍️</span><p data-i18n="f15"><b>Add your own lines</b> — insert custom phrases; voiced in the speaker's cloned voice and shown in subtitles.</p></div>
+    <div class="feat"><span class="fic">📥</span><p data-i18n="f16"><b>Import subtitles</b> — bring your own .srt/.ass as the exact transcript; tick “already in the target language” and it dubs straight from them, no translation.</p></div>
+    <div class="feat"><span class="fic">📤</span><p data-i18n="f17"><b>Multi-language export</b> — send one video into several languages at once; each inherits your layout, styles, blur and cloned voice.</p></div>
+    <div class="feat"><span class="fic">💾</span><p data-i18n="f18"><b>Projects — save &amp; resume</b> — autosave, recent projects on the start screen, back to unfinished work in a click.</p></div>
+    <div class="feat"><span class="fic">🎭</span><p data-i18n="f19"><b>Character casting</b> — bind a face to a voice; the app recognizes each character across the video and saves a casting profile reused across the whole series.</p></div>
+    <div class="feat"><span class="fic">🧩</span><p data-i18n="f20"><b>GPU, CPU or cloud — per stage</b> — run separation, diarization and ASR on any of them; with the heavy stages in the cloud it works even with no NVIDIA.</p></div>
+  </div>
+</div></section>
+
+<section id="gallery"><div class="wrap">
+  <h2 data-i18n="gal_h2">Every mode, in your language</h2>
+  <p class="lead" data-i18n="gal_lead">The full editor — dub, voice-over, subtitles, funny remix and transcript — localized into 6 languages.</p>
+  <div class="gallery">
+    <figure><img src="shots/mode-dub-en.png" alt="Full dub mode, English interface" loading="lazy"/><figcaption data-i18n="g6"><b>Full dub</b> · English UI · voice cloned + localized title</figcaption></figure>
+    <figure><img src="shots/mode-dub-ru.png" alt="Full dub mode, Russian interface" loading="lazy"/><figcaption data-i18n="g1"><b>Full dub</b> · Russian UI · translated captions</figcaption></figure>
+    <figure><img src="shots/mode-voiceover-es.png" alt="Voice-over mode, Spanish interface" loading="lazy"/><figcaption data-i18n="g2"><b>Voice-over</b> · Spanish UI · original-volume balance slider</figcaption></figure>
+    <figure><img src="shots/mode-dub-zh.png" alt="Full dub mode, Chinese interface, CJK captions" loading="lazy"/><figcaption data-i18n="g3"><b>Full dub</b> · Chinese UI · CJK captions on the frame</figcaption></figure>
+    <figure><img src="shots/mode-subtitles-ru.png" alt="Subtitles mode, Russian interface" loading="lazy"/><figcaption data-i18n="g4"><b>Subtitles</b> · Russian UI · styled burned-in captions</figcaption></figure>
+    <figure><img src="shots/mode-dub-cinema-fr.png" alt="Full dub mode, widescreen clip, French interface" loading="lazy"/><figcaption data-i18n="g5"><b>Full dub</b> · French UI · widescreen 16:9 clip</figcaption></figure>
+    <figure><img src="shots/mode-transcribe-pt.png" alt="Transcript and diarization mode, Portuguese interface" loading="lazy"/><figcaption data-i18n="g7"><b>Transcript + diarization</b> · Portuguese UI · karaoke play-along</figcaption></figure>
+  </div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <h2 data-i18n="how_h2">How it works</h2>
+  <p class="lead" data-i18n="how_lead">A smart auto-pass builds the first draft; then you fine-tune everything with a live preview.</p>
+  <div class="steps">
+    <div class="step"><p data-i18n="s1">Drop a video and pick a target language — separation, ASR, diarization, translation and OCR run in one pass.</p></div>
+    <div class="step"><p data-i18n="s2">Choose a mode: dub, voice-over, subtitles, funny remix or transcript.</p></div>
+    <div class="step"><p data-i18n="s3">Edit anything — transcript, voices, caption style, blur boxes, titles — with an instant preview.</p></div>
+    <div class="step"><p data-i18n="s4">Export the finished video. Everything runs locally on your GPU.</p></div>
+  </div>
+</div></section>
+
+<section class="band"><div class="wrap" style="text-align:center">
+  <h2 data-i18n="get_h2">Get Dub Studio</h2>
+  <p class="lead" data-i18n="get_lead">Free and open source. Download the portable build or the installer.</p>
+  <div class="cta"><a class="btn" href="https://github.com/timoncool/dub-studio/releases" data-i18n="get_dl">↓ Download latest release</a></div>
+  <div class="langs">
+    <a href="https://github.com/timoncool/dub-studio/blob/master/README.md">English</a>
+    <a href="https://github.com/timoncool/dub-studio/blob/master/README.ru.md">Русский</a>
+    <a href="https://github.com/timoncool/dub-studio/blob/master/README.zh.md">中文</a>
+    <a href="https://github.com/timoncool/dub-studio/blob/master/README.es.md">Español</a>
+    <a href="https://github.com/timoncool/dub-studio/blob/master/README.pt.md">Português</a>
+    <a href="https://github.com/timoncool/dub-studio/blob/master/README.fr.md">Français</a>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <span data-i18n="foot_built">Built by</span> <a href="https://t.me/nerual_dreming">Nerual Dreming</a> &amp; <a href="https://t.me/neuroport">Neuro-Soft</a> ·
+  <a href="https://github.com/timoncool/dub-studio">GitHub</a> ·
+  <a href="https://github.com/timoncool/dub-studio/blob/master/LICENSE">MIT</a><br/>
+  <span style="opacity:.6" data-i18n="foot_kw">AI video dubbing · voice cloning · video translation · automatic subtitles · offline · open source</span>
+</div></footer>
+
+<div id="lightbox"><img id="lbimg" src="" alt="screenshot"/></div>
+
+<script>
+const T={
+ en:{},
+ ru:{nav_showcase:"Примеры",nav_modes:"Режимы",nav_features:"Возможности",nav_how:"Как работает",nav_download:"Скачать",
+   eyebrow:"Локально · Оффлайн · 100+ языков · Бесплатно и открыто",
+   h1:"Дубляж любого видео — будто так и снято.",
+   hp:"Переозвучь любой клип на другой язык — с клонированным голосом спикера, переведёнными субтитрами и локализованным текстом прямо в кадре. Локально по умолчанию — без подписок; опционально облако (OpenRouter) для слабых ПК или скорости.",
+   dl:"↓ Скачать для Windows",star:"★ Звезда на GitHub",sub:"Windows 10/11 · NVIDIA опционально (CPU + облако) · один нативный .exe · без Python",
+   sc_h2:"До / после — реальные ролики, дубляж оффлайн",
+   sc_lead:"Каждый ролик ниже обработан от и до на локальной GPU. Разные видео, разные режимы, разные языки — ничего не покидало компьютер.",
+   sc_t1:"🎙️ Полный дубляж · EN → RU",sc_t2:"🗣️ Закадровый · EN → ES",sc_t3:"✨ Шуточный ремикс · EN → RU",
+   l_orig:"Оригинал",l_dub:"Дубляж",l_vo:"Закадр",l_remix:"Ремикс",
+   sc_c1:"Голос клонирован на русский · переведённые сабы · локализованный титр в кадре",
+   sc_c2:"Испанский закадр поверх приглушённого оригинала · 2 спикера, разные голоса",
+   sc_c3:"Модель переписала весь сценарий под новую тему и переозвучила",
+   sc_t4:"🎙️ Полный дубляж · EN → ZH",sc_t5:"🎙️ Полный дубляж · EN → PT",sc_t6:"🗣️ Закадровый · EN → FR",sc_c4:"Клонирование на китайский · реальный человек в кадре; вшитый англ. титр заблюрен и локализован",sc_c5:"Клонирование на португальский · вшитые оригинальные сабы вычищены и переозвучены",sc_c6:"Французский закадр поверх приглушённого оригинала · один спикер",sc_t7:"🎬 Дубляж без субтитров · EN → JA",sc_c7:"Клонирование на японский без вшитых субтитров — картинка нетронута. Один из 100+ языков дубляжа, в новом композируемом режиме «дубляж без субтитров».",modes_h2:"Пять режимов, переключаются на лету",modes_lead:"Загрузи клип один раз и отправляй его в любой режим — прямо в редакторе.",
+   m1n:"Дубляж",m1d:"Полная переозвучка на целевой язык с клонированным тембром оригинала — авто-кастинг по спикерам или свой голос.",
+   m2n:"Закадровый",m2d:"Перевод поверх приглушённого оригинала — исходник слышно снизу, баланс настраивается.",
+   m3n:"Субтитры",m3d:"Вшить субтитры на языке оригинала, оставить оригинальный звук — без дубляжа и перевода.",
+   m4n:"Шуточный ремикс",m4d:"Задай тему — модель переписывает весь сценарий и переозвучивает.",
+   m5n:"Транскрипт",m5d:"Чистый транскрипт с диаризацией, караоке-подсветкой, голосами в один клик и экспортом .srt / .txt.",
+   feat_h2:"Всё работает на твоём компьютере",
+   f1:"<b>Клонирование голоса</b> — тембр оригинала говорит на новом языке (Higgs Audio v3).",
+   f2:"<b>Диаризация спикеров</b> — отдельный голос на каждого (NVIDIA Sortformer, до 4).",
+   f3:"<b>Локализация текста в кадре</b> — OCR заблюривает оригинал и печатает подходящий локализованный титр.",
+   f4:"<b>Локальный перевод + vision</b> — Gemma-4 12B переводит и читает раскладку кадра.",
+   f5:"<b>SOTA-разделение вокала</b> — Mel-Band Roformer сохраняет музыкальную дорожку.",
+   f6:"<b>26 пресетов субтитров</b> — караоке, по словам, неон и другие, WYSIWYG.",
+   f7:"<b>Живой редактор</b> — превью ~0.17 с/кадр; каждое изменение видно сразу.",
+   f8:"<b>Пакетный режим</b> — очередь файлов на одной настройке.",
+   f9:"<b>100+ языков</b> — дубляж на любой крупный язык: испанский, китайский, японский, арабский, хинди… источник — автоопределение.",
+   f10:"<b>Полностью портативно + автообновление</b> — ничего не трогает твой профиль.",
+   f11:"<b>Выбор ASR-движка</b> — Parakeet-TDT (GPU) или Whisper (CPU); размер модели и квант — в настройках.",f12:"<b>Композируемые режимы</b> — любые сочетания: дубляж без субтитров, перевод субтитров без дубляжа, шуточный дубляж своими голосами.",f13:"<b>Настройка под железо</b> — лёгкие кванты на каждый движок + лимиты prefill-батча и длины реф-клипа под 8–12 ГБ GPU и 32 ГБ RAM.",f14:"<b>Резюмируемая докачка</b> — большие модели при обрыве связи докачиваются с места, а не заново.",f15:"<b>Свои реплики</b> — добавляй свои фразы; озвучиваются склонированным голосом спикера и попадают в субтитры.",f16:"<b>Импорт субтитров</b> — загрузи свой .srt/.ass как готовый транскрипт; галочка «уже на языке перевода» → дубляж напрямую из них, без перевода.",f17:"<b>Мультиязычный экспорт</b> — одно видео сразу на несколько языков; каждый наследует твою раскладку, стили, блюр и клон голоса.",f18:"<b>Проекты — сохранение</b> — автосейв, недавние проекты на старте, возврат к незаконченному в клик.",f19:"<b>Кастинг персонажей</b> — свяжи лицо с голосом; приложение узнаёт каждого персонажа по всему видео и хранит профиль кастинга, переиспользуя его на весь сериал.",f20:"<b>GPU, CPU или облако — по стадиям</b> — сепарация, диаризация и ASR на любом из них; с тяжёлыми стадиями в облаке работает даже без NVIDIA.",
+   gal_h2:"Каждый режим — на твоём языке",gal_lead:"Полный редактор — дубляж, закадровый, субтитры, шуточный ремикс и транскрипт — локализован на 6 языков.",
+   g1:"<b>Полный дубляж</b> · интерфейс RU · клон голоса + локализованный титр",
+   g2:"<b>Закадровый</b> · интерфейс ES · ползунок громкости оригинала",
+   g3:"<b>Полный дубляж</b> · интерфейс ZH · иероглифы вшиты в кадр",
+   g4:"<b>Субтитры</b> · интерфейс RU · стилизованные вшитые сабы",
+   g5:"<b>Полный дубляж</b> · интерфейс FR · широкий кадр 16:9",
+   g6:"<b>Полный дубляж</b> · интерфейс EN · клон голоса + локализованный титр",g7:"<b>Транскрипт + диаризация</b> · интерфейс PT · караоке-подсветка",how_h2:"Как это работает",how_lead:"Умный авто-проход делает первый черновик; дальше ты донастраиваешь всё с живым превью.",
+   s1:"Кинь видео и выбери целевой язык — разделение, ASR, диаризация, перевод и OCR за один проход.",
+   s2:"Выбери режим: дубляж, закадровый, субтитры, шуточный ремикс или транскрипт.",
+   s3:"Правь что угодно — транскрипт, голоса, стиль субтитров, блюр-боксы, титры — с мгновенным превью.",
+   s4:"Экспортируй готовое видео. Всё работает локально на твоей GPU.",
+   get_h2:"Скачать Dub Studio",get_lead:"Бесплатно и с открытым кодом. Портативная сборка или установщик.",get_dl:"↓ Скачать последний релиз",
+   foot_built:"Сделали",foot_kw:"AI-дубляж видео · клонирование голоса · перевод видео · авто-субтитры · оффлайн · открытый код"},
+ zh:{nav_showcase:"展示",nav_modes:"模式",nav_features:"功能",nav_how:"工作原理",nav_download:"下载",
+   eyebrow:"本地 · 离线 · 100+ 种语言 · 免费开源",
+   h1:"为任何视频配音，宛如原生拍摄。",
+   hp:"将任意片段重新配音成另一种语言 —— 克隆说话人本人的音色，翻译字幕，并在画面上本地化屏幕文字。默认本地运行 —— 无订阅；可选云端（OpenRouter），适合弱机或追求速度。",
+   dl:"↓ 下载 Windows 版",star:"★ 在 GitHub 加星",sub:"Windows 10/11 · NVIDIA 显卡可选（CPU + 云端） · 单个原生 .exe · 无需 Python",
+   sc_h2:"前后对比 —— 真实片段，离线配音",
+   sc_lead:"下方每个片段都在本地 GPU 上端到端处理。不同的视频、不同的模式、不同的语言 —— 一切都不离开电脑。",
+   sc_t1:"🎙️ 完整配音 · EN → RU",sc_t2:"🗣️ 旁白配音 · EN → ES",sc_t3:"✨ 恶搞混剪 · EN → RU",
+   l_orig:"原片",l_dub:"配音",l_vo:"旁白",l_remix:"混剪",
+   sc_c1:"音色克隆为俄语 · 翻译字幕 · 画面内本地化标题",
+   sc_c2:"西语旁白盖在压低的原声上 · 两位说话人，不同声音",
+   sc_c3:"模型将整段脚本改写为新主题后重新配音",
+   sc_t4:"🎙️ 完整配音 · EN → ZH",sc_t5:"🎙️ 完整配音 · EN → PT",sc_t6:"🗣️ 旁白配音 · EN → FR",sc_c4:"克隆为中文 · 真实出镜；烧录的英文标题被模糊并本地化",sc_c5:"克隆为葡萄牙语 · 烧录的原字幕被清除并重新配字幕",sc_c6:"法语旁白盖在压低的原声上 · 单个说话人",sc_t7:"🎬 无字幕配音 · EN → JA",sc_c7:"克隆为日语且不烧录字幕——画面保持原样。100+ 目标语言之一，采用新的可组合「无字幕配音」模式。",modes_h2:"五种模式，随时切换",modes_lead:"载入一次片段，即可在编辑器内送入任意模式。",
+   m1n:"完整配音",m1d:"完整重新配音为目标语言，克隆原始音色 —— 按说话人自动分配或自选声音。",
+   m2n:"旁白配音",m2d:"译文盖在压低的原声之上 —— 底下仍能听到原声，音量可调。",
+   m3n:"字幕",m3d:"烧录原语言字幕并保留原声 —— 不配音、不翻译。",
+   m4n:"恶搞混剪",m4d:"给个主题 —— 模型改写整段脚本再重新配音。",
+   m5n:"转录",m5d:"干净的说话人分离转录，卡拉OK跟读，一键生成声音，导出 .srt / .txt。",
+   feat_h2:"一切都在你的电脑上运行",
+   f1:"<b>声音克隆</b> —— 原始音色说出新语言（Higgs Audio v3）。",
+   f2:"<b>说话人分离</b> —— 每位说话人独立声音（NVIDIA Sortformer，最多 4 个）。",
+   f3:"<b>画面文字本地化</b> —— OCR 模糊原文并叠加匹配的本地化标题。",
+   f4:"<b>本地翻译 + 视觉</b> —— Gemma-4 12B 翻译并读取画面布局。",
+   f5:"<b>顶尖人声分离</b> —— Mel-Band Roformer 保留背景音乐。",
+   f6:"<b>26 种字幕预设</b> —— 卡拉OK、逐字、霓虹等，所见即所得。",
+   f7:"<b>实时编辑器</b> —— 每帧约 0.17 秒预览；改动即刻可见。",
+   f8:"<b>批量处理</b> —— 一次设置，文件排队处理。",
+   f9:"<b>100+ 种语言</b> —— 配音到任何主要语言：西班牙语、中文、日语、阿拉伯语、印地语……自动识别源语言。",
+   f10:"<b>完全便携 + 自动更新</b> —— 不动你的用户目录。",
+   f11:"<b>可选 ASR 引擎</b> —— Parakeet-TDT（GPU）或 Whisper（CPU）；在设置中选择模型大小和量化。",f12:"<b>可组合模式</b> —— 任意组合：配音但不加字幕、翻译字幕但不配音、用自己的声音做搞笑配音。",f13:"<b>按硬件调优</b> —— 每个引擎切换更轻量化，限制 prefill 批大小与参考时长，适配 8–12 GB 显卡和 32 GB 内存。",f14:"<b>可续传下载</b> —— 大模型断线后从中断处续传，而非重新开始。",f15:"<b>自定义台词</b> —— 插入自己的短语；用说话人的克隆声音配音并显示在字幕中。",f16:"<b>导入字幕</b> —— 用你自己的 .srt/.ass 作为精确文稿；勾选“已是目标语言”即可直接据此配音，无需翻译。",f17:"<b>多语言导出</b> —— 一个视频一次导出为多种语言；每种都继承你的排版、样式、模糊框和克隆音色。",f18:"<b>项目保存与续作</b> —— 自动保存、启动页近期项目列表，一键回到未完成的工作。",f19:"<b>角色选角</b> —— 把人脸与声音绑定；应用在整段视频中识别每个角色，并保存选角档案，在整部剧集中复用。",f20:"<b>GPU、CPU 或云端 —— 按阶段</b> —— 分离、说话人分离和 ASR 可任选其一；把繁重阶段交给云端，即使没有 NVIDIA 也能运行。",
+   gal_h2:"每种模式，用你的语言",gal_lead:"完整编辑器 —— 配音、旁白、字幕、恶搞混剪与转录 —— 本地化为 6 种语言。",
+   g1:"<b>完整配音</b> · 俄语界面 · 声音克隆 + 本地化标题",
+   g2:"<b>旁白配音</b> · 西语界面 · 原声音量平衡滑块",
+   g3:"<b>完整配音</b> · 中文界面 · 画面上的中文字幕",
+   g4:"<b>字幕</b> · 俄语界面 · 风格化烧录字幕",
+   g5:"<b>完整配音</b> · 法语界面 · 宽屏 16:9 片段",
+   g6:"<b>完整配音</b> · 英语界面 · 声音克隆 + 本地化标题",g7:"<b>转录 + 说话人分离</b> · 葡语界面 · 卡拉OK跟读",how_h2:"工作原理",how_lead:"智能自动流程生成初稿；随后你用实时预览微调一切。",
+   s1:"拖入视频并选择目标语言 —— 人声分离、识别、分离说话人、翻译与 OCR 一次完成。",
+   s2:"选择模式：配音、旁白、字幕、恶搞混剪或转录。",
+   s3:"随意编辑 —— 转录、声音、字幕样式、模糊框、标题 —— 即时预览。",
+   s4:"导出成片。一切都在你的 GPU 上本地运行。",
+   get_h2:"获取 Dub Studio",get_lead:"免费开源。下载便携版或安装程序。",get_dl:"↓ 下载最新版本",
+   foot_built:"作者",foot_kw:"AI 视频配音 · 声音克隆 · 视频翻译 · 自动字幕 · 离线 · 开源"},
+ es:{nav_showcase:"Ejemplos",nav_modes:"Modos",nav_features:"Funciones",nav_how:"Cómo funciona",nav_download:"Descargar",
+   eyebrow:"Local · Sin conexión · 100+ idiomas · Gratis y de código abierto",
+   h1:"Dobla cualquier vídeo como si se hubiera hecho así.",
+   hp:"Cambia la voz de cualquier clip a otro idioma — con la propia voz del hablante clonada, subtítulos traducidos y texto en pantalla localizado en el propio fotograma. Local por defecto — sin suscripción; nube opcional (OpenRouter) para PCs limitados o más velocidad.",
+   dl:"↓ Descargar para Windows",star:"★ Estrella en GitHub",sub:"Windows 10/11 · GPU NVIDIA opcional (CPU + nube) · un .exe nativo · sin Python",
+   sc_h2:"Antes / después — clips reales, doblados sin conexión",
+   sc_lead:"Cada clip se procesó de principio a fin en una GPU local. Distintos vídeos, distintos modos, distintos idiomas — nada salió del equipo.",
+   sc_t1:"🎙️ Doblaje completo · EN → RU",sc_t2:"🗣️ Voz superpuesta · EN → ES",sc_t3:"✨ Remix divertido · EN → RU",
+   l_orig:"Original",l_dub:"Doblado",l_vo:"Voz sup.",l_remix:"Remix",
+   sc_c1:"Voz clonada al ruso · subtítulos traducidos · título localizado en el fotograma",
+   sc_c2:"Voz superpuesta en español sobre el original atenuado · 2 hablantes, voces distintas",
+   sc_c3:"El modelo reescribió todo el guion con un nuevo tema y lo volvió a doblar",
+   sc_t4:"🎙️ Doblaje completo · EN → ZH",sc_t5:"🎙️ Doblaje completo · EN → PT",sc_t6:"🗣️ Voz superpuesta · EN → FR",sc_c4:"Clonado al chino · persona real; el título incrustado en inglés se difumina y se localiza",sc_c5:"Clonado al portugués · los subtítulos incrustados se limpian y se re-subtitulan",sc_c6:"Voz superpuesta en francés sobre el original atenuado · un hablante",sc_t7:"🎬 Doblaje sin subtítulos · EN → JA",sc_c7:"Clonado al japonés sin subtítulos incrustados — la imagen queda intacta. Uno de más de 100 idiomas, en el nuevo modo componible «doblaje sin subtítulos».",modes_h2:"Cinco modos, conmutables al vuelo",modes_lead:"Carga un clip una vez y envíalo a cualquier modo — dentro del editor.",
+   m1n:"Doblaje",m1d:"Redoblaje completo al idioma destino con el timbre original clonado — reparto automático por hablante o elige una voz.",
+   m2n:"Voz superpuesta",m2d:"Voz traducida sobre el original atenuado — la fuente aún se oye debajo, con balance ajustable.",
+   m3n:"Subtítulos",m3d:"Quema subtítulos en el idioma original y conserva el audio original — sin doblaje ni traducción.",
+   m4n:"Remix divertido",m4d:"Da un tema — el modelo reescribe todo el guion y lo vuelve a doblar.",
+   m5n:"Transcripción",m5d:"Transcripción diarizada limpia con karaoke, voces en un clic y exportación .srt / .txt.",
+   feat_h2:"Todo funciona en tu equipo",
+   f1:"<b>Clonación de voz</b> — el timbre original habla el nuevo idioma (Higgs Audio v3).",
+   f2:"<b>Diarización de hablantes</b> — una voz distinta por hablante (NVIDIA Sortformer, hasta 4).",
+   f3:"<b>Localización de texto en pantalla</b> — el OCR difumina el original e imprime un título localizado a juego.",
+   f4:"<b>Traducción local + visión</b> — Gemma-4 12B traduce y lee la composición del fotograma.",
+   f5:"<b>Separación vocal SOTA</b> — Mel-Band Roformer conserva la pista de fondo.",
+   f6:"<b>26 preajustes de subtítulos</b> — karaoke, palabra a palabra, neón y más, WYSIWYG.",
+   f7:"<b>Editor en vivo</b> — vista previa ~0,17 s/fotograma; cada cambio visible al instante.",
+   f8:"<b>Procesamiento por lotes</b> — una cola de archivos con una sola configuración.",
+   f9:"<b>100+ idiomas</b> — dobla a cualquier idioma principal: español, chino, japonés, árabe, hindi… origen autodetectado.",
+   f10:"<b>Totalmente portable + autoactualización</b> — no toca tu perfil de usuario.",
+   f11:"<b>Elección de motor ASR</b> —— Parakeet-TDT (GPU) o Whisper (CPU); elige tamaño de modelo y cuantización en ajustes.",f12:"<b>Modos combinables</b> —— cualquier combinación: doblaje sin subtítulos, subtítulos traducidos sin doblaje, doblaje humorístico con tus voces.",f13:"<b>Ajusta a tu hardware</b> —— cuantizaciones más ligeras por motor y límites de lote de prefill y duración de referencia para GPU de 8–12 GB y 32 GB de RAM.",f14:"<b>Descargas reanudables</b> —— los modelos grandes se reanudan desde donde se cortaron, en vez de reiniciar.",f15:"<b>Tus propias líneas</b> —— inserta frases personalizadas; se doblan con la voz clonada del hablante y aparecen en los subtítulos.",f16:"<b>Importar subtítulos</b> —— usa tu .srt/.ass como transcripción exacta; marca «ya en el idioma destino» y dobla directo desde ellos, sin traducir.",f17:"<b>Exportación multiidioma</b> —— un vídeo a varios idiomas a la vez; cada uno hereda tu diseño, estilos, desenfoque y voz clonada.",f18:"<b>Proyectos — guardar y seguir</b> —— autoguardado, proyectos recientes en el inicio, vuelve al trabajo sin terminar en un clic.",f19:"<b>Reparto de personajes</b> —— vincula una cara a una voz; la app reconoce a cada personaje en todo el vídeo y guarda un perfil de reparto reutilizable en toda la serie.",f20:"<b>GPU, CPU o nube — por etapa</b> —— ejecuta separación, diarización y ASR en cualquiera; con las etapas pesadas en la nube funciona incluso sin NVIDIA.",
+   gal_h2:"Cada modo, en tu idioma",gal_lead:"El editor completo — doblaje, voz superpuesta, subtítulos, remix divertido y transcripción — localizado en 6 idiomas.",
+   g1:"<b>Doblaje completo</b> · interfaz RU · voz clonada + título localizado",
+   g2:"<b>Voz superpuesta</b> · interfaz ES · control de volumen del original",
+   g3:"<b>Doblaje completo</b> · interfaz ZH · subtítulos CJK sobre el fotograma",
+   g4:"<b>Subtítulos</b> · interfaz RU · subtítulos incrustados con estilo",
+   g5:"<b>Doblaje completo</b> · interfaz FR · clip panorámico 16:9",
+   g6:"<b>Doblaje completo</b> · interfaz EN · voz clonada + título localizado",g7:"<b>Transcripción + diarización</b> · interfaz PT · karaoke",how_h2:"Cómo funciona",how_lead:"Un paso automático inteligente crea el primer borrador; luego ajustas todo con vista previa en vivo.",
+   s1:"Suelta un vídeo y elige un idioma destino — separación, ASR, diarización, traducción y OCR en una pasada.",
+   s2:"Elige un modo: doblaje, voz superpuesta, subtítulos, remix divertido o transcripción.",
+   s3:"Edita lo que sea — transcripción, voces, estilo de subtítulos, difuminados, títulos — con vista previa instantánea.",
+   s4:"Exporta el vídeo final. Todo se ejecuta localmente en tu GPU.",
+   get_h2:"Consigue Dub Studio",get_lead:"Gratis y de código abierto. Descarga la versión portable o el instalador.",get_dl:"↓ Descargar última versión",
+   foot_built:"Creado por",foot_kw:"doblaje de vídeo con IA · clonación de voz · traducción de vídeo · subtítulos automáticos · sin conexión · código abierto"},
+ pt:{nav_showcase:"Exemplos",nav_modes:"Modos",nav_features:"Recursos",nav_how:"Como funciona",nav_download:"Baixar",
+   eyebrow:"Local · Offline · 100+ idiomas · Grátis e código aberto",
+   h1:"Duble qualquer vídeo como se fosse gravado assim.",
+   hp:"Reduble qualquer clipe para outro idioma — com a própria voz do locutor clonada, legendas traduzidas e texto na tela localizado no próprio quadro. Local por padrão — sem assinatura; nuvem opcional (OpenRouter) para PCs fracos ou mais velocidade.",
+   dl:"↓ Baixar para Windows",star:"★ Estrela no GitHub",sub:"Windows 10/11 · GPU NVIDIA opcional (CPU + nuvem) · um .exe nativo · sem Python",
+   sc_h2:"Antes / depois — clipes reais, dublados offline",
+   sc_lead:"Cada clipe abaixo foi processado de ponta a ponta numa GPU local. Vídeos, modos e idiomas diferentes — nada saiu da máquina.",
+   sc_t1:"🎙️ Dublagem completa · EN → RU",sc_t2:"🗣️ Locução · EN → ES",sc_t3:"✨ Remix divertido · EN → RU",
+   l_orig:"Original",l_dub:"Dublado",l_vo:"Locução",l_remix:"Remix",
+   sc_c1:"Voz clonada para russo · legendas traduzidas · título localizado no quadro",
+   sc_c2:"Locução em espanhol sobre o original atenuado · 2 locutores, vozes distintas",
+   sc_c3:"O modelo reescreveu todo o roteiro com um novo tema e redublou",
+   sc_t4:"🎙️ Dublagem completa · EN → ZH",sc_t5:"🎙️ Dublagem completa · EN → PT",sc_t6:"🗣️ Locução · EN → FR",sc_c4:"Clonado para chinês · pessoa real; o título embutido em inglês é desfocado e localizado",sc_c5:"Clonado para português · as legendas embutidas são limpas e re-legendadas",sc_c6:"Locução em francês sobre o original atenuado · um locutor",sc_t7:"🎬 Dublagem sem legendas · EN → JA",sc_c7:"Clonado para japonês sem legendas embutidas — a imagem fica intacta. Um de mais de 100 idiomas, no novo modo combinável «dublagem sem legendas».",modes_h2:"Cinco modos, alternáveis na hora",modes_lead:"Carregue um clipe uma vez e envie-o para qualquer modo — dentro do editor.",
+   m1n:"Dublagem",m1d:"Redublagem completa para o idioma-alvo com o timbre original clonado — elenco automático por locutor ou escolha uma voz.",
+   m2n:"Locução",m2d:"Voz traduzida sobre o original atenuado — a fonte ainda é ouvida por baixo, com balanço ajustável.",
+   m3n:"Legendas",m3d:"Grave legendas no idioma original e mantenha o áudio original — sem dublagem, sem tradução.",
+   m4n:"Remix divertido",m4d:"Dê um tema — o modelo reescreve todo o roteiro e redubla.",
+   m5n:"Transcrição",m5d:"Transcrição diarizada limpa com karaokê, vozes num clique e exportação .srt / .txt.",
+   feat_h2:"Tudo roda na sua máquina",
+   f1:"<b>Clonagem de voz</b> — o timbre original fala o novo idioma (Higgs Audio v3).",
+   f2:"<b>Diarização de locutores</b> — uma voz distinta por locutor (NVIDIA Sortformer, até 4).",
+   f3:"<b>Localização de texto na tela</b> — o OCR desfoca o original e imprime um título localizado combinando.",
+   f4:"<b>Tradução local + visão</b> — Gemma-4 12B traduz e lê o layout do quadro.",
+   f5:"<b>Separação vocal SOTA</b> — Mel-Band Roformer preserva a trilha de fundo.",
+   f6:"<b>26 predefinições de legenda</b> — karaokê, palavra a palavra, neon e mais, WYSIWYG.",
+   f7:"<b>Editor ao vivo</b> — prévia ~0,17 s/quadro; cada mudança visível na hora.",
+   f8:"<b>Processamento em lote</b> — uma fila de arquivos com uma configuração.",
+   f9:"<b>100+ idiomas</b> — dublagem para qualquer idioma principal: espanhol, chinês, japonês, árabe, hindi… origem autodetectada.",
+   f10:"<b>Totalmente portátil + autoatualização</b> — não toca no seu perfil de usuário.",
+   f11:"<b>Escolha do motor de ASR</b> —— Parakeet-TDT (GPU) ou Whisper (CPU); escolha o tamanho do modelo e a quantização nas configurações.",f12:"<b>Modos combináveis</b> —— qualquer combinação: dublagem sem legendas, legendas traduzidas sem dublagem, dublagem humorística com suas vozes.",f13:"<b>Ajuste ao seu hardware</b> —— quantizações mais leves por motor e limites de lote de prefill e duração de referência para GPU de 8–12 GB e 32 GB de RAM.",f14:"<b>Downloads retomáveis</b> —— modelos grandes retomam de onde pararam, em vez de recomeçar.",f15:"<b>Suas próprias falas</b> —— insira frases personalizadas; dubladas com a voz clonada do falante e exibidas nas legendas.",f16:"<b>Importar legendas</b> —— use seu .srt/.ass como transcrição exata; marque «já no idioma de destino» e dubla direto delas, sem traduzir.",f17:"<b>Exportação multilíngue</b> —— um vídeo para vários idiomas de uma vez; cada um herda seu layout, estilos, desfoque e voz clonada.",f18:"<b>Projetos — salvar e retomar</b> —— salvamento automático, projetos recentes no início, volte ao trabalho inacabado em um clique.",f19:"<b>Elenco de personagens</b> —— vincule um rosto a uma voz; o app reconhece cada personagem em todo o vídeo e salva um perfil de elenco reutilizável na série inteira.",f20:"<b>GPU, CPU ou nuvem — por etapa</b> —— rode separação, diarização e ASR em qualquer uma; com as etapas pesadas na nuvem, funciona até sem NVIDIA.",
+   gal_h2:"Cada modo, no seu idioma",gal_lead:"O editor completo — dublagem, locução, legendas, remix divertido e transcrição — localizado em 6 idiomas.",
+   g1:"<b>Dublagem completa</b> · interface RU · voz clonada + título localizado",
+   g2:"<b>Locução</b> · interface ES · controle de volume do original",
+   g3:"<b>Dublagem completa</b> · interface ZH · legendas CJK no quadro",
+   g4:"<b>Legendas</b> · interface RU · legendas incrustadas estilizadas",
+   g5:"<b>Dublagem completa</b> · interface FR · clipe panorâmico 16:9",
+   g6:"<b>Dublagem completa</b> · interface EN · voz clonada + título localizado",g7:"<b>Transcrição + diarização</b> · interface PT · karaokê",how_h2:"Como funciona",how_lead:"Uma passagem automática inteligente cria o primeiro rascunho; depois você ajusta tudo com prévia ao vivo.",
+   s1:"Solte um vídeo e escolha um idioma-alvo — separação, ASR, diarização, tradução e OCR numa passada.",
+   s2:"Escolha um modo: dublagem, locução, legendas, remix divertido ou transcrição.",
+   s3:"Edite qualquer coisa — transcrição, vozes, estilo de legenda, caixas de desfoque, títulos — com prévia instantânea.",
+   s4:"Exporte o vídeo final. Tudo roda localmente na sua GPU.",
+   get_h2:"Baixe o Dub Studio",get_lead:"Grátis e código aberto. Baixe a versão portátil ou o instalador.",get_dl:"↓ Baixar versão mais recente",
+   foot_built:"Feito por",foot_kw:"dublagem de vídeo com IA · clonagem de voz · tradução de vídeo · legendas automáticas · offline · código aberto"},
+ fr:{nav_showcase:"Exemples",nav_modes:"Modes",nav_features:"Fonctions",nav_how:"Comment ça marche",nav_download:"Télécharger",
+   eyebrow:"Local · Hors ligne · 100+ langues · Gratuit et open source",
+   h1:"Doublez n'importe quelle vidéo comme si c'était l'original.",
+   hp:"Redonnez voix à n'importe quel clip dans une autre langue — avec la voix du locuteur clonée, les sous-titres traduits et le texte à l'écran localisé à même l'image. Local par défaut — sans abonnement ; cloud en option (OpenRouter) pour PC limités ou plus de vitesse.",
+   dl:"↓ Télécharger pour Windows",star:"★ Star sur GitHub",sub:"Windows 10/11 · GPU NVIDIA en option (CPU + cloud) · un .exe natif · sans Python",
+   sc_h2:"Avant / après — de vrais clips, doublés hors ligne",
+   sc_lead:"Chaque clip ci-dessous a été traité de bout en bout sur un GPU local. Des vidéos, des modes et des langues différents — rien n'a quitté la machine.",
+   sc_t1:"🎙️ Doublage complet · EN → RU",sc_t2:"🗣️ Voix off · EN → ES",sc_t3:"✨ Remix drôle · EN → RU",
+   l_orig:"Original",l_dub:"Doublé",l_vo:"Voix off",l_remix:"Remix",
+   sc_c1:"Voix clonée en russe · sous-titres traduits · titre localisé à l'écran",
+   sc_c2:"Voix off espagnole par-dessus l'original atténué · 2 locuteurs, voix distinctes",
+   sc_c3:"Le modèle a réécrit tout le script sur un nouveau thème puis l'a redoublé",
+   sc_t4:"🎙️ Doublage complet · EN → ZH",sc_t5:"🎙️ Doublage complet · EN → PT",sc_t6:"🗣️ Voix off · EN → FR",sc_c4:"Cloné en chinois · vraie personne ; le titre incrusté en anglais est flouté et localisé",sc_c5:"Cloné en portugais · les sous-titres incrustés sont nettoyés et re-sous-titrés",sc_c6:"Voix off française par-dessus l'original atténué · un seul locuteur",sc_t7:"🎬 Doublage sans sous-titres · EN → JA",sc_c7:"Cloné en japonais sans sous-titres incrustés — l'image reste intacte. Une des 100+ langues cibles, dans le nouveau mode composable « doublage sans sous-titres ».",modes_h2:"Cinq modes, commutables à la volée",modes_lead:"Chargez un clip une fois et envoyez-le dans n'importe quel mode — directement dans l'éditeur.",
+   m1n:"Doublage",m1d:"Redoublage complet dans la langue cible avec le timbre original cloné — distribution auto par locuteur ou choisissez une voix.",
+   m2n:"Voix off",m2d:"Voix traduite par-dessus l'original atténué — la source reste audible en dessous, équilibre réglable.",
+   m3n:"Sous-titres",m3d:"Incrustez des sous-titres en langue originale et gardez l'audio original — sans doublage ni traduction.",
+   m4n:"Remix drôle",m4d:"Donnez un thème — le modèle réécrit tout le script puis le redouble.",
+   m5n:"Transcription",m5d:"Transcription diarisée propre avec karaoké, voix en un clic et export .srt / .txt.",
+   feat_h2:"Tout tourne sur votre machine",
+   f1:"<b>Clonage de voix</b> — le timbre original parle la nouvelle langue (Higgs Audio v3).",
+   f2:"<b>Diarisation des locuteurs</b> — une voix distincte par locuteur (NVIDIA Sortformer, jusqu'à 4).",
+   f3:"<b>Localisation du texte à l'écran</b> — l'OCR floute l'original et imprime un titre localisé assorti.",
+   f4:"<b>Traduction locale + vision</b> — Gemma-4 12B traduit et lit la composition de l'image.",
+   f5:"<b>Séparation vocale SOTA</b> — Mel-Band Roformer préserve la piste de fond.",
+   f6:"<b>26 préréglages de sous-titres</b> — karaoké, mot à mot, néon et plus, WYSIWYG.",
+   f7:"<b>Éditeur en direct</b> — aperçu ~0,17 s/image ; chaque changement visible aussitôt.",
+   f8:"<b>Traitement par lot</b> — une file de fichiers avec une seule configuration.",
+   f9:"<b>100+ langues</b> — doublage vers toute langue majeure : espagnol, chinois, japonais, arabe, hindi… source détectée automatiquement.",
+   f10:"<b>Entièrement portable + mise à jour auto</b> — ne touche pas à votre profil.",
+   f11:"<b>Choix du moteur ASR</b> —— Parakeet-TDT (GPU) ou Whisper (CPU) ; choisissez la taille du modèle et la quantification dans les réglages.",f12:"<b>Modes composables</b> —— n’importe quelle combinaison : doublage sans sous-titres, sous-titres traduits sans doublage, doublage humoristique avec vos voix.",f13:"<b>Adaptez à votre matériel</b> —— quantifications plus légères par moteur et limites de lot de prefill et de durée de référence pour GPU de 8–12 Go et 32 Go de RAM.",f14:"<b>Téléchargements reprenables</b> —— les gros modèles reprennent là où ils se sont arrêtés, au lieu de tout recommencer.",f15:"<b>Vos propres répliques</b> —— insérez des phrases personnalisées ; doublées avec la voix clonée du locuteur et affichées dans les sous-titres.",f16:"<b>Importer des sous-titres</b> —— utilisez votre .srt/.ass comme transcription exacte ; cochez « déjà dans la langue cible » et il double directement à partir d'eux, sans traduction.",f17:"<b>Export multilingue</b> —— une vidéo dans plusieurs langues d'un coup ; chacune hérite de votre mise en page, styles, flou et voix clonée.",f18:"<b>Projets — sauvegarde</b> —— sauvegarde auto, projets récents à l'accueil, reprise du travail inachevé en un clic.",f19:"<b>Casting des personnages</b> —— liez un visage à une voix ; l'app reconnaît chaque personnage dans toute la vidéo et enregistre un profil de casting réutilisé sur toute la série.",f20:"<b>GPU, CPU ou cloud — par étape</b> —— exécutez séparation, diarisation et ASR sur l'un ou l'autre ; avec les étapes lourdes dans le cloud, ça marche même sans NVIDIA.",
+   gal_h2:"Chaque mode, dans votre langue",gal_lead:"L'éditeur complet — doublage, voix off, sous-titres, remix drôle et transcription — localisé en 6 langues.",
+   g1:"<b>Doublage complet</b> · interface RU · voix clonée + titre localisé",
+   g2:"<b>Voix off</b> · interface ES · curseur de volume de l'original",
+   g3:"<b>Doublage complet</b> · interface ZH · sous-titres CJK à l'image",
+   g4:"<b>Sous-titres</b> · interface RU · sous-titres incrustés stylés",
+   g5:"<b>Doublage complet</b> · interface FR · clip large 16:9",
+   g6:"<b>Doublage complet</b> · interface EN · voix clonée + titre localisé",g7:"<b>Transcription + diarisation</b> · interface PT · karaoké",how_h2:"Comment ça marche",how_lead:"Une passe automatique intelligente crée le premier brouillon ; ensuite vous peaufinez tout avec un aperçu en direct.",
+   s1:"Déposez une vidéo et choisissez une langue cible — séparation, ASR, diarisation, traduction et OCR en une passe.",
+   s2:"Choisissez un mode : doublage, voix off, sous-titres, remix drôle ou transcription.",
+   s3:"Modifiez tout — transcription, voix, style des sous-titres, zones de flou, titres — avec aperçu instantané.",
+   s4:"Exportez la vidéo finie. Tout tourne localement sur votre GPU.",
+   get_h2:"Obtenez Dub Studio",get_lead:"Gratuit et open source. Téléchargez la version portable ou l'installateur.",get_dl:"↓ Télécharger la dernière version",
+   foot_built:"Réalisé par",foot_kw:"doublage vidéo par IA · clonage de voix · traduction vidéo · sous-titres automatiques · hors ligne · open source"}
+};
+const LANGS=["en","ru","zh","es","pt","fr"];
+function detect(){
+  const u=new URLSearchParams(location.search).get("lang");
+  if(u&&LANGS.includes(u))return u;
+  const s=localStorage.getItem("lang");
+  if(s&&LANGS.includes(s))return s;
+  const n=(navigator.language||"en").slice(0,2).toLowerCase();
+  return LANGS.includes(n)?n:"en";
+}
+function apply(l){
+  const d=T[l]||{};
+  document.querySelectorAll("[data-i18n]").forEach(e=>{
+    const k=e.getAttribute("data-i18n");
+    if(l==="en")return; // English is the static default in the HTML
+    if(d[k]!=null){ if(d[k].indexOf("<")>=0)e.innerHTML=d[k]; else e.textContent=d[k]; }
+  });
+  document.documentElement.lang=l;
+  const sel=document.getElementById("langsel"); if(sel)sel.value=l;
+}
+(function(){
+  const l=detect(); apply(l);
+  const sel=document.getElementById("langsel");
+  if(sel)sel.addEventListener("change",e=>{const v=e.target.value;localStorage.setItem("lang",v);
+    if(v==="en")location.reload(); else apply(v);});
+  // lightbox — click any screenshot to view full-size
+  const lb=document.getElementById("lightbox"),lbi=document.getElementById("lbimg");
+  document.querySelectorAll(".gallery img, .shot img").forEach(img=>{
+    img.addEventListener("click",()=>{lbi.src=img.src;lb.style.display="flex";});
+  });
+  lb.addEventListener("click",()=>lb.style.display="none");
+  document.addEventListener("keydown",e=>{if(e.key==="Escape")lb.style.display="none";});
+  // sound — videos autoplay muted (browser policy); a badge unmutes one at a time
+  const allVids=[...document.querySelectorAll("#showcase video")];
+  document.querySelectorAll("#showcase .v").forEach(v=>{
+    const vid=v.querySelector("video"); if(!vid)return;
+    const badge=document.createElement("span"); badge.className="snd"; badge.textContent="🔊 "+(navigator.language.slice(0,2)==="ru"?"звук":"sound");
+    v.appendChild(badge);
+    const toggle=(e)=>{ e.preventDefault(); e.stopPropagation();
+      const turnOn=vid.muted;
+      allVids.forEach(o=>{o.muted=true; o.parentElement.classList.remove("on");});
+      document.querySelectorAll("#showcase .snd").forEach(b=>{b.textContent="🔊 "+(navigator.language.slice(0,2)==="ru"?"звук":"sound");});
+      if(turnOn){ vid.muted=false; v.classList.add("on"); badge.textContent="🔇 "+(navigator.language.slice(0,2)==="ru"?"выкл":"mute"); const p=vid.play(); if(p&&p.catch)p.catch(()=>{}); }
+    };
+    badge.addEventListener("click",toggle);
+    vid.addEventListener("click",toggle);
+  });
+})();
+</script>
+</body>
+</html>

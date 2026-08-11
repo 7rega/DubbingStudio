@@ -1,0 +1,14 @@
+{
+  "name": "dub-studio-desktop",
+  "version": "3.1.2",
+  "private": true,
+  "description": "Tauri-оболочка Dub Studio (поднимает нативный dub-server и открывает окно)",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build --no-bundle"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

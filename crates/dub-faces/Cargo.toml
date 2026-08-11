@@ -1,0 +1,29 @@
+[package]
+name = "dub-faces"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Кастинг персонажей: детект лиц (SCRFD) + эмбеддинг (LVFace-L) + кластеризация + связка лицо↔голос"
+
+[dependencies]
+# ort строго той же версии, что dub-asr/dub-ocr (=2.0.0-rc.12, load-dynamic + api-24): ДВЕ разные версии
+# ort в одном бинаре = рассинхрон OrtApi -> дедлок (тот же трап, что чужая system32 DLL). ensure_ort_dylib()
+# тут повторяет паттерн dub-ocr: ORT_DYLIB_PATH -> onnxruntime 1.24.2. ndarray для тензоров SCRFD/LVFace.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic", "ndarray", "api-24"] }
+ndarray = "0.16"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# кластеризация эмбеддингов лиц — берём готовые cosine/cluster_embeddings из dub-asr (#83), не дублируем.
+dub-asr = { path = "../dub-asr" }
+# WAV-декод реф-клипа голоса для WeSpeaker-эмбеддера (voice.rs). Та же версия, что dub-asr/dub-server.
+hound = "3.5"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = []
+cuda = ["ort/cuda"]
+
+[[example]]
+name = "smoke"
+path = "examples/smoke.rs"

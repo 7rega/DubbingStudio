@@ -1,0 +1,121 @@
+name: Build Dub Studio Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # Кеширование Node Modules для фронтенда и десктопа
+      - name: Cache Node Modules
+        uses: actions/cache@v4
+        id: node-cache
+        with:
+          path: |
+            frontend/node_modules
+            desktop/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('frontend/package-lock.json', 'desktop/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      # Автоматическое кеширование Rust зависимостей и скомпилированных файлов (cargo home + target)
+      - name: Cache Rust Compilation
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+
+      - name: Install Frontend Dependencies
+        if: steps.node-cache.outputs.cache-hit != 'true'
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Build Frontend SPA
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Install Desktop Dependencies
+        if: steps.node-cache.outputs.cache-hit != 'true'
+        run: |
+          cd desktop
+          npm ci
+
+      - name: Prepare Staging Directories
+        shell: pwsh
+        run: |
+          # Создаем структуру папок для сборки Tauri (чтобы tauri build не выдавал ошибки отсутствия ресурсов)
+          $stage = "desktop/src-tauri/staging"
+          New-Item -ItemType Directory -Force "$stage/models/higgs-engine"
+          New-Item -ItemType Directory -Force "$stage/models/ocr"
+          New-Item -ItemType Directory -Force "$stage/frontend"
+          New-Item -ItemType Directory -Force "$stage/tools/7Zip"
+          New-Item -ItemType Directory -Force "$stage/tools/openrouter-helper"
+          New-Item -ItemType Directory -Force "$stage/fonts"
+
+          # Копируем фронтенд в staging
+          Copy-Item -Path "frontend/dist/*" -Destination "$stage/frontend/dist" -Recurse -Force
+          Copy-Item -Path "fonts/*" -Destination "$stage/fonts" -Recurse -Force
+
+          # Копируем 7-Zip из репозитория
+          if (Test-Path "7Zip") {
+              Copy-Item -Path "7Zip/*" -Destination "$stage/tools/7Zip" -Recurse -Force
+          }
+
+      - name: Build Tauri Desktop Executable
+        run: |
+          cd desktop
+          npm run build
+
+      - name: Package Portable Version
+        shell: pwsh
+        run: |
+          # 1. Создаем структуру папок портативной версии
+          $portableDir = "DubStudio-Portable"
+          New-Item -ItemType Directory -Force $portableDir
+          
+          # 2. Находим скомпилированный исполняемый файл и копируем с переименованием в Dub Studio.exe
+          $exePath = "desktop/src-tauri/target/release/dub-studio-desktop.exe"
+          if (-not (Test-Path $exePath)) {
+              $exePath = "desktop/src-tauri/target/release/Dub Studio.exe"
+          }
+          Copy-Item -Path $exePath -Destination "$portableDir/Dub Studio.exe" -Force
+          
+          # 3. Копируем только папку frontend/dist
+          New-Item -ItemType Directory -Force "$portableDir/frontend"
+          Copy-Item -Path "frontend/dist" -Destination "$portableDir/frontend/dist" -Recurse -Force
+
+          # 4. Архивируем в ZIP-архив
+          $zipName = "DubStudio-Portable-${{ github.ref_name }}-Windows.zip"
+          Compress-Archive -Path "$portableDir" -DestinationPath "$zipName" -Force
+
+          # 5. Пробуем создать релиз (игнорируя ошибку, если он уже создан)
+          gh release create ${{ github.ref_name }} --title "Dub Studio ${{ github.ref_name }}" --draft --repo ${{ github.repository }} 2>$null
+          
+          # Загружаем ZIP-архив портативной версии в релиз
+          gh release upload ${{ github.ref_name }} "$zipName" --clobber --repo ${{ github.repository }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

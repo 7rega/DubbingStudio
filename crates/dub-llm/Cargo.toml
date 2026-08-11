@@ -1,0 +1,19 @@
+[package]
+name = "dub-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Сайдкар llama-server (llama.cpp CUDA) + OpenAI-совместимый чат-клиент с vision (mmproj)"
+
+[dependencies]
+# Блокирующий HTTP-клиент: тело джобы analyze синхронное (spawn_blocking), llama-server локальный —
+# rustls не нужен, хватает нативного стека. blocking = простой последовательный вызов /v1/chat/completions.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+base64 = "0.22"
+
+[[example]]
+name = "llm_smoke"
+path = "examples/llm_smoke.rs"

@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+/* Dub Studio — "dark studio console" aesthetic.
+   Near-black instrument panel · ONE acid-lime signal accent · depth via luminance steps + 1px hairlines (NOT
+   shadows) · Onest UI (Latin+Cyrillic) + JetBrains Mono for the console/timecode texture + Noto SC for CJK.
+   4 surface elevations on a near-black (never #000) base. Tokens drive both Tailwind utils and the Konva canvas. */
+@theme {
+  --color-bg: #0b0c0e;            /* canvas — near-black, never pure */
+  --color-surface: #121317;       /* panel  (elevation 1) */
+  --color-surface-2: #1a1c22;     /* raised / hover (elevation 2) */
+  --color-overlay: #23262e;       /* overlay (elevation 3) */
+  --color-border: #262a31;        /* hairline */
+  --color-hairline: #ffffff14;    /* inset top hairline for raised surfaces */
+  --color-text: #e8eaed;          /* soft off-white, never #fff */
+  --color-muted: #888e99;         /* cool gray */
+  --color-accent: #c6f24e;        /* THE signal accent — acid lime (one per screen) */
+  --color-on-accent: #0b0c0e;     /* near-black text on the lime accent */
+  --color-accent-2: #5be0c8;      /* teal — info / secondary highlight */
+  --color-warn: #ffb020;
+  --font-ui: "Onest", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background:
+    radial-gradient(120% 80% at 50% -10%, #16181d 0%, var(--color-bg) 55%) fixed,
+    var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-feature-settings: "ss01", "cv01";
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+::selection { background: color-mix(in oklab, var(--color-accent) 35%, transparent); color: var(--color-text); }
+
+/* faint grain overlay for studio texture (very subtle) */
+body::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 9999; opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* timecodes / numeric / labels → console mono */
+.mono, time, .tabnum { font-family: var(--font-mono); font-feature-settings: "tnum"; }
+
+/* indeterminate export progress bar (no real % from the engine yet — honest "working" motion) */
+@keyframes indet { 0% { transform: translateX(-130%); } 100% { transform: translateX(430%); } }
+.anim-indeterminate { animation: indet 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+@media (prefers-reduced-motion: reduce) { .anim-indeterminate { animation: none; width: 100% !important; opacity: 0.5; } }
+
+/* motion curves (blueprint named set: out=responses, in=exits, snap=toggles) */
+:root { --ease-out: cubic-bezier(0,0,0.2,1); --ease-in: cubic-bezier(0.4,0,1,1); --ease-snap: cubic-bezier(0.12,0,0.08,1); }
+
+/* floating chrome = GLASS (blueprint: only on floating UI — Cmd-K / modals / menus — NEVER over the playing preview).
+   solid tint scrim + one capped backdrop-filter layer; depth via hairline + drop, not heavy shadow stacks. */
+.glass-scrim { background: rgba(7, 8, 10, 0.55); backdrop-filter: blur(3px); }
+.glass-panel {
+  background: color-mix(in oklab, var(--color-overlay) 80%, transparent);
+  backdrop-filter: blur(22px) saturate(1.35);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 24px 70px rgba(0,0,0,0.55), inset 0 1px 0 var(--color-hairline);
+}
+@keyframes pop-in { from { opacity: 0; transform: translateY(6px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+.anim-pop { animation: pop-in 0.2s var(--ease-out) both; }
+.anim-fade { animation: fade-in 0.16s var(--ease-out) both; }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #333843; }
+::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) { * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
+
+/* Фулскрин области превью (клавиша F): контейнер занимает весь экран, а вложенное медиа
+   (video/img/canvas превью) снимает свои max-h/max-w-ограничения и вписывается целиком.
+   Скоуп ТОЛЬКО .fs-preview: голый :fullscreen матчит и <html> при фулскрине окна (F10) и ломает раскладку. */
+.fs-preview:fullscreen { width: 100vw; height: 100vh; max-height: none !important; background: #000; display: grid; place-items: center; }
+.fs-preview:fullscreen video, .fs-preview:fullscreen img { max-width: 100vw !important; max-height: 100vh !important; width: auto; height: auto; object-fit: contain; }

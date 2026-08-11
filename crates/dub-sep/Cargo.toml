@@ -1,0 +1,14 @@
+[package]
+name = "dub-sep"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Вокал/инструментал сепарация — Mel-Band Roformer voc_fv6-Q8_0 через BSRoformer.cpp (сайдкар)"
+
+[dependencies]
+hound = "3"
+thiserror = { workspace = true }
+
+[[example]]
+name = "separate"
+path = "examples/separate.rs"

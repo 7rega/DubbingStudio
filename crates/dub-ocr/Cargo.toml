@@ -1,0 +1,29 @@
+[package]
+name = "dub-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Экранный OCR (PP-OCR ONNX: DBNet det + CRNN rec) для блюр-боксов вшитого текста. Порт text_detect.py + compose.py"
+
+[dependencies]
+# ort строго той же версии, что dub-asr (=2.0.0-rc.12, load-dynamic + download-binaries): ДВЕ разные
+# версии ort в одном бинаре = рассинхрон OrtApi -> дедлок (тот же трап, что чужая system32 DLL).
+# ensure_ort_dylib() тут повторяет паттерн dub-asr: ORT_DYLIB_PATH -> onnxruntime 1.24.2.
+# load-dynamic (disable-linking) — onnxruntime.dll грузится в рантайме через ORT_DYLIB_PATH (общая
+# 1.24.2, ensure_ort_dylib). БЕЗ download-binaries: он требует TLS-фичу (ureq) и тянет линкуемую
+# сборку EP (VitisAI ломается о 1.24 хедеры). Версия ort строго = dub-asr (=rc.12) — один OrtApi.
+# api-24 явно: OrtApi под onnxruntime 1.24.2. ndarray: TensorRef::from_array_view / try_extract_tensor.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic", "ndarray", "api-24"] }
+ndarray = "0.16"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = []
+cuda = ["ort/cuda"]
+
+[[example]]
+name = "ocr"
+path = "examples/ocr.rs"

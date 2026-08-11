@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/audiocpp",
+    "crates/dub-asr",
+    "crates/dub-core",
+    "crates/dub-llm",
+    "crates/dub-translate",
+    "crates/dub-sep",
+    "crates/dub-captions",
+    "crates/dub-ocr",
+    "crates/dub-faces",
+    "crates/dub-server",
+]
+# Оболочка Tauri — отдельная единица сборки (тяжёлое дерево tauri), собирается своим
+# `npx tauri build --no-bundle`, не тянется в `cargo build --workspace`.
+exclude = ["desktop/src-tauri"]
+
+[workspace.package]
+version = "3.1.2"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Профиль релиза: движки FFI/ONNX тяжёлые, LTO ускоряет прогон.
+[profile.release]
+opt-level = 3
+lto = "thin"

@@ -1,0 +1,33 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.status
+
+# Node / JS / TS
+/node_modules/
+/npm-debug.log*
+/yarn-error.log*
+/yarn-debug.log*
+
+# Frontend build outputs and deps
+/frontend/dist/
+/frontend/node_modules/
+
+# Desktop / Tauri build outputs and deps
+/desktop/node_modules/
+/desktop/src-tauri/target/
+/desktop/src-tauri/staging/
+!/desktop/src-tauri/staging/**/.gitkeep
+
+# Application / Runtime Models & Cache (large files, downloaded on first run)
+/models/
+/webview-data/
+/workspace/
+/temp/
+/*.zip
+/*.exe
+/DubStudio-portable/
+
+# Operating System files
+Thumbs.db
+.DS_Store
