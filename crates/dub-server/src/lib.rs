@@ -2213,8 +2213,9 @@ fn reveal_in_explorer(path: String) {
     tokio::task::spawn_blocking(move || {
         #[cfg(windows)]
         {
+            let path_win = path.replace('/', "\\");
             // explorer /select,"<path>" — выделяет файл в открытом каталоге. Один аргумент.
-            let _ = crate::media::cmd_silent("explorer").arg(format!("/select,{path}")).spawn();
+            let _ = crate::media::cmd_silent("explorer").arg(format!("/select,{path_win}")).spawn();
         }
         #[cfg(not(windows))]
         {
