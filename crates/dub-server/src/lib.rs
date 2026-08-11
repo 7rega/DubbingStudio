@@ -2215,7 +2215,7 @@ fn reveal_in_explorer(path: String) {
         {
             let path_win = path.replace('/', "\\");
             // explorer /select,"<path>" — выделяет файл в открытом каталоге. Один аргумент.
-            let _ = crate::media::cmd_silent("explorer").arg(format!("/select,{path_win}")).spawn();
+            let _ = crate::media::cmd_silent("explorer").arg(format!("/select,\"{path_win}\"")).spawn();
         }
         #[cfg(not(windows))]
         {
