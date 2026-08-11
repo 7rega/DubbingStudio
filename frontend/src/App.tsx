@@ -4446,6 +4446,11 @@ function FilesPanel() {
                        className="inline-flex items-center justify-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]">
                       {opening === e.id ? <Loader2 size={13} className="animate-spin" /> : <ExternalLink size={13} />} {t("files.open")}
                     </button>
+                    <button onClick={async () => { if (!e.pid) return; try { await api.reveal(e.pid, `Export/${e.name}`); } catch { /* ignore */ } }}
+                       title={t("recent.openFolder")}
+                       className="inline-flex items-center justify-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]">
+                      <FolderOpen size={13} />
+                    </button>
                   </div>
                 )}
                 {e.status === "error" && <div className="mt-1 mono text-[10px] text-[var(--color-warn)] truncate">{e.msg}</div>}
