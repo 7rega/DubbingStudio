@@ -93,6 +93,10 @@ pub fn verify_captions_e2e(
         casting_ref: String::new(),
         content_type: String::new(),
         import_translated: false,
+        casting_mode: None,
+        max_speakers: None,
+        max_faces: None,
+        min_onscreen_sec: None,
     };
     let sel = models::load_selection(&mroot);
     let (mt_model, mmproj) = models::resolve_mt(&mroot, &sel);
@@ -2082,13 +2086,17 @@ async fn recalculate_casting_project(
         // 2) Детекция лиц и кастинг
         cb(json!({ "type": "progress", "stage": "casting", "msg": "Детекция лиц и расчет кастинга..." }));
         
+        let meta = media::probe(&paths.input).map_err(|e| e.to_string())?;
         let eff_ct = if proj.casting_mode.as_deref() == Some("face") {
             "real".to_string()
         } else {
-            match media::detect_content_type(&paths.input) {
-                Ok(t) => t,
-                Err(_) => "real".to_string(),
+            let mut d = proj.audio.content_type.clone();
+            if d.is_empty() {
+                if let Some(ct) = crate::translate::classify_content_type_standalone(&paths, meta.duration, &cb) {
+                    d = ct;
+                }
             }
+            if d.is_empty() { "real".to_string() } else { d }
         };
         
         crate::casting::stage(&paths, &proj, "", &eff_ct, &cb);

@@ -18,7 +18,7 @@ use dub_core::{Project, Segment};
 use dub_faces::{
     crop_sharpness, frontality, load_casting, save_casting, save_face_crop,
     AnimeFaceDetector, Casting, CcipEmbedder, Character, Face, FacesModels, LvFace,
-    Scrfd, CASTING_VERSION,
+    Scrfd, CASTING_VERSION, SpeakerTurn,
 };
 
 use crate::analyze::{AnalyzePaths, Progress};
