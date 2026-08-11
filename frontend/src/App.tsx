@@ -3373,16 +3373,13 @@ function Editor() {
   async function doExport() {
     const exId = `export-${pid}`;   // одна запись на проект (повторный экспорт заменяет её, а не плодит дубли)
     
-    // Получаем оригинальное название файла с видео из недавних проектов (recent),
+    // Получаем оригинальное название файла с видео из недавних проектов,
     // так как p.meta.video хранит внутренний путь к скопированному source.mp4
-    let originalName = recent.find((x) => x.pid === pid)?.video;
-    if (!originalName) {
-      try {
-        const r = await api.listProjects();
-        setRecent(r.projects);
-        originalName = r.projects.find((x) => x.pid === pid)?.video;
-      } catch {}
-    }
+    let originalName: string | undefined;
+    try {
+      const r = await api.listProjects();
+      originalName = r.projects.find((x: ProjectSummary) => x.pid === pid)?.video;
+    } catch {}
     const name = originalName || baseName(p.meta.video || pid);
 
     addExport({ id: exId, name, status: "rendering", msg: t("common.rendering"), pid });   // queue entry -> Files panel (no screen block)
