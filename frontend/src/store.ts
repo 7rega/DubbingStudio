@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Project } from "./lib/api";
+import type { Project, ProjectSummary } from "./lib/api";
 
 type Stage = "boot" | "setup" | "empty" | "analyzing" | "editor" | "batch" | "multilang";
 export type ExportItem = { id: string; name: string; status: "rendering" | "done" | "error"; msg: string; url?: string; pid?: string };
@@ -25,6 +25,8 @@ type State = {
   setAudioOnly: (b: boolean) => void;
   jobSteps: string[] | null;         // ключи шагов степпера ТЕКУЩЕЙ джобы (по конфигу запуска); null = все
   setJobSteps: (s: string[] | null) => void;
+  recent: ProjectSummary[];
+  setRecent: (recent: ProjectSummary[] | ((prev: ProjectSummary[]) => ProjectSummary[])) => void;
   setStage: (s: Stage) => void;
   setPid: (p: string | null) => void;
   setProject: (p: Project | null) => void;
@@ -43,6 +45,10 @@ type State = {
 };
 
 export const useStore = create<State>((set, get) => ({
+  recent: [],
+  setRecent: (recent) => set((s) => ({
+    recent: typeof recent === "function" ? recent(s.recent) : recent
+  })),
   stage: "boot",   // при загрузке SPA сперва проверяем /setup/status; если чего-то обязательного нет -> "setup"
   pid: null,
   project: null,

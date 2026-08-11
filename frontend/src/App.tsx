@@ -4,7 +4,7 @@ import { motion } from "motion/react";
 import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Columns2, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
-import { api, type Project, type Capabilities, type SetupStatus, type SetupComponent, type ProjectSummary, type Character } from "./lib/api";
+import { api, type Project, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
 import { LANGS, DUB_LANGS, setLang, type Lang } from "./lib/i18n";
 import { useStore } from "./store";
 import PreviewCanvas from "./components/PreviewCanvas";
@@ -1177,7 +1177,8 @@ function DropZone() {
 
   // «Недавние проекты»: всё уже автосохранено в workspace/<pid>/ (каждая правка = PATCH). Здесь тянем
   // список и даём открыть прошлый проект в один клик. Автообновление URL (?pid=) — чтобы перезагрузка держала.
-  const [recent, setRecent] = useState<ProjectSummary[]>([]);
+  const recent = useStore((s) => s.recent);
+  const setRecent = useStore((s) => s.setRecent);
   const [totalBytes, setTotalBytes] = useState<number>(0);
   const [allProjectsModal, setAllProjectsModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -2931,6 +2932,8 @@ function Editor() {
   const rendering = useStore((s) => s.rendering);
   const setRendering = useStore((s) => s.setRendering);
   const addExport = useStore((s) => s.addExport);
+  const recent = useStore((s) => s.recent);
+  const setRecent = useStore((s) => s.setRecent);
   const updateExport = useStore((s) => s.updateExport);
   const pushHistory = useStore((s) => s.pushHistory);
   const undo = useStore((s) => s.undo);
@@ -3373,13 +3376,16 @@ function Editor() {
   async function doExport() {
     const exId = `export-${pid}`;   // одна запись на проект (повторный экспорт заменяет её, а не плодит дубли)
     
-    // Получаем оригинальное название файла с видео из недавних проектов,
+    // Получаем оригинальное название файла с видео из недавних проектов (recent),
     // так как p.meta.video хранит внутренний путь к скопированному source.mp4
-    let originalName: string | undefined;
-    try {
-      const r = await api.listProjects();
-      originalName = r.projects.find((x: ProjectSummary) => x.pid === pid)?.video;
-    } catch {}
+    let originalName = recent.find((x) => x.pid === pid)?.video;
+    if (!originalName) {
+      try {
+        const r = await api.listProjects();
+        setRecent(r.projects);
+        originalName = r.projects.find((x) => x.pid === pid)?.video;
+      } catch {}
+    }
     const name = originalName || baseName(p.meta.video || pid);
 
     addExport({ id: exId, name, status: "rendering", msg: t("common.rendering"), pid });   // queue entry -> Files panel (no screen block)
@@ -4449,7 +4455,7 @@ function FilesPanel() {
                     <button onClick={async () => { if (!e.pid) return; try { await api.reveal(e.pid, `Export/${e.name}`); } catch { /* ignore */ } }}
                        title={t("recent.openFolder")}
                        className="inline-flex items-center justify-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]">
-                      <FolderOpen size={13} />
+                      <FolderOpen size={13} /> {t("recent.folder")}
                     </button>
                   </div>
                 )}
