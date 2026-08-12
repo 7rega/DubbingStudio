@@ -4433,11 +4433,22 @@ function FilesPanel() {
                 )}
                 {e.status === "done" && e.url && (
                   <div className="mt-2 flex gap-1.5">
-                    <a href={`${e.url}&dl=1`} download
-                       onClick={() => { setDled(e.id); window.setTimeout(() => setDled((c) => (c === e.id ? null : c)), 2500); }}
+                    <button onClick={async () => {
+                      if (!e.pid) return;
+                      try {
+                        const r = await api.pickFolder();
+                        if (r.dir) {
+                          await api.saveOutput(e.pid, r.dir, e.name);
+                          setDled(e.id);
+                          window.setTimeout(() => setDled((c) => (c === e.id ? null : c)), 2500);
+                        }
+                      } catch (err) {
+                        console.error("Ошибка сохранения:", err);
+                      }
+                    }}
                        className="flex-1 inline-flex items-center justify-center gap-1.5 text-[12px] py-1 rounded-md bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold">
                       {dled === e.id ? <><Check size={13} /> {t("files.downloaded")}</> : <><Download size={13} /> {t("files.download")}</>}
-                    </a>
+                    </button>
                     <button onClick={async () => { if (!e.pid) return; setOpening(e.id); try { await api.openOutput(e.pid); } catch { /* ignore */ } finally { window.setTimeout(() => setOpening((c) => (c === e.id ? null : c)), 800); } }}
                        className="inline-flex items-center justify-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]">
                       {opening === e.id ? <Loader2 size={13} className="animate-spin" /> : <ExternalLink size={13} />} {t("files.open")}
@@ -5188,6 +5199,11 @@ function TranscriptView() {
         <button onClick={makeAll} disabled={busy !== null}
           className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">
           {busy === "__all__" ? <Loader2 size={15} className="animate-spin" /> : <Users size={15} />}{t("transcribe.makeAll")}
+        </button>
+        <button onClick={() => switchMode("dub")} disabled={reanalyzing || busy !== null}
+          className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition shadow-sm">
+          {reanalyzing ? <Loader2 size={15} className="animate-spin" /> : <Languages size={15} />}
+          <span>{t("transcribe.translateText")}</span>
         </button>
         <button onClick={runTranscribe} disabled={reanalyzing || busy !== null}
           className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition shadow-sm">

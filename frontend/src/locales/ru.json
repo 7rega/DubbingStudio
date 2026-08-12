@@ -99,7 +99,8 @@
     "exportTxt": "Экспорт .txt",
     "empty": "Нет реплик в транскрипте",
     "speakersN": "спикеров",
-    "transcribeVideo": "Транскрибировать видео"
+    "transcribeVideo": "Транскрибировать видео",
+    "translateText": "Перевести текст"
   },
   "actions": {
     "translate": "Перевод",

@@ -99,7 +99,8 @@
     "exportTxt": "Export .txt",
     "empty": "No lines in the transcript",
     "speakersN": "speakers",
-    "transcribeVideo": "Transcribe Video"
+    "transcribeVideo": "Transcribe Video",
+    "translateText": "Translate Text"
   },
   "actions": {
     "translate": "Translate",
