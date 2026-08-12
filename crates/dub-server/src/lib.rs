@@ -338,6 +338,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/setup/cancel", post(setup_cancel))
         .route("/setup/browse", post(setup_browse))
         .route("/pick-folder", post(pick_folder))
+        .route("/pick-file-save", post(pick_file_save))
         .route("/setup/import", post(setup_import))
         .route("/hw/snapshot", get(hw_snapshot))
         .route("/record/devices", get(record_devices))
@@ -2126,6 +2127,28 @@ async fn pick_folder() -> Json<Value> {
     Json(json!({ "dir": dir.map(|d| d.to_string_lossy().into_owned()) }))
 }
 
+/// POST /pick-file-save — нативный диалог сохранения файла (rfd). Возвращает {path} или {path:null} при отмене.
+/// Принимает JSON: {default_name, filter_name, filter_ext}
+async fn pick_file_save(Json(body): Json<Value>) -> Json<Value> {
+    let default_name = body.get("default_name").and_then(|v| v.as_str()).unwrap_or("subtitle.srt").to_string();
+    let filter_name = body.get("filter_name").and_then(|v| v.as_str()).unwrap_or("Subtitles").to_string();
+    let filter_ext = body.get("filter_ext").and_then(|v| v.as_str()).unwrap_or("srt").to_string();
+
+    let file_path = tokio::task::spawn_blocking(move || {
+        rfd::FileDialog::new()
+            .set_title("Сохранить файл")
+            .set_file_name(&default_name)
+            .add_filter(&filter_name, &[&filter_ext])
+            .save_file()
+    })
+    .await
+    .ok()
+    .flatten();
+
+    Json(json!({ "path": file_path.map(|p| p.to_string_lossy().into_owned()) }))
+}
+
+
 /// POST /projects/{pid}/save-output {dir, name} — скопировать готовый output проекта в папку `dir` под
 /// именем `name` (оригинальное имя файла), сохранив расширение реального выхода. Для batch-вывода:
 /// все переведённые файлы в ОДНУ папку с исходными именами.
@@ -2295,8 +2318,11 @@ async fn save_text(State(st): State<AppState>, AxPath(pid): AxPath<String>, Json
     let text = body.get("text").and_then(|v| v.as_str()).unwrap_or("");
     let reveal = body.get("reveal").and_then(|v| v.as_bool()).unwrap_or(true);
     
-    // Если передана директория для сохранения, пишем туда. Иначе — в папку проекта.
-    let f = if let Some(dest_dir) = body.get("dir").and_then(|v| v.as_str()) {
+    // Если передан полный абсолютный путь для сохранения, пишем туда.
+    // Иначе, если передана директория для сохранения, пишем в неё. Иначе — в папку проекта.
+    let f = if let Some(path_str) = body.get("path").and_then(|v| v.as_str()) {
+        std::path::PathBuf::from(path_str)
+    } else if let Some(dest_dir) = body.get("dir").and_then(|v| v.as_str()) {
         let base_path = std::path::Path::new(dest_dir);
         let base = if base_path.is_relative() {
             dir.join(base_path)
