@@ -5096,9 +5096,17 @@ function TranscriptView() {
   };
   async function dl(name: string, text: string) {
     try {
+      // 1. Сначала сохраняем в подпапку проекта с исходным названием (например, transcript.srt) без вызова проводника
+      await api.saveText(pid, name, text, undefined, false);
+
+      // 2. Открываем меню выбора папки для экспорта
       const r = await api.pickFolder();
       if (!r.dir) return; // пользователь отменил выбор
-      await api.saveText(pid, name, text, r.dir);
+
+      // 3. Копируем файл в указанную папку под оригинальным именем видео
+      const ext = name.split('.').pop() || "srt";
+      const exportName = getExportName(ext);
+      await api.saveText(pid, exportName, text, r.dir, true);
     } catch {
       const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
       const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click();

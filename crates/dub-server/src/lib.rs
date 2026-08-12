@@ -2237,7 +2237,7 @@ fn reveal_in_explorer(path: String) {
                     }
                 }
                 // Иначе выделяем файл
-                let _ = crate::media::cmd_silent("explorer").arg(format!("/select,\"{path_win}\"")).spawn();
+                let _ = crate::media::cmd_silent("explorer").arg(format!("/select,{path_win}")).spawn();
             }
         }
         #[cfg(not(windows))]
@@ -2293,6 +2293,7 @@ async fn save_text(State(st): State<AppState>, AxPath(pid): AxPath<String>, Json
     let safe: String = name.chars().filter(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-')).collect();
     let safe = if safe.is_empty() { "transcript.txt".to_string() } else { safe };
     let text = body.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    let reveal = body.get("reveal").and_then(|v| v.as_bool()).unwrap_or(true);
     
     // Если передана директория для сохранения, пишем туда. Иначе — в папку проекта.
     let f = if let Some(dest_dir) = body.get("dir").and_then(|v| v.as_str()) {
@@ -2318,7 +2319,9 @@ async fn save_text(State(st): State<AppState>, AxPath(pid): AxPath<String>, Json
     if let Err(e) = std::fs::write(&f, text) {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("write failed: {e}")).into_response();
     }
-    reveal_in_explorer(f.to_string_lossy().to_string());
+    if reveal {
+        reveal_in_explorer(f.to_string_lossy().to_string());
+    }
     Json(json!({ "ok": true, "path": f.to_string_lossy() })).into_response()
 }
 

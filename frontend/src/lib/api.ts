@@ -183,7 +183,7 @@ export const api = {
   outputUrl: (pid: string) => `${BASE}/projects/${pid}/output`,
   openOutput: (pid: string) => fetch(`${BASE}/projects/${pid}/open`, { method: "POST" }).then(j<{ ok: boolean }>),   // открыть output.mp4 в системном плеере (нативный webview не открывает target=_blank)
   reveal: (pid: string, name: string) => postJson<{ ok: boolean }>(`/projects/${pid}/reveal`, { name }),   // показать файл в проводнике с выделением
-  saveText: (pid: string, name: string, text: string, dir?: string) => postJson<{ ok: boolean; path: string }>(`/projects/${pid}/save-text`, { name, text, dir }),   // записать SRT/TXT в каталог проекта + reveal (webview не качает blob)
+  saveText: (pid: string, name: string, text: string, dir?: string, reveal = true) => postJson<{ ok: boolean; path: string }>(`/projects/${pid}/save-text`, { name, text, dir, reveal }),   // записать SRT/TXT в каталог проекта + reveal (webview не качает blob)
   pickFolder: () => postJson<{ dir: string | null }>("/pick-folder", {}),   // нативный диалог выбора папки (batch-экспорт в одну папку)
   saveOutput: (pid: string, dir: string, name: string) => postJson<{ ok: boolean; path?: string }>(`/projects/${pid}/save-output`, { dir, name }),   // копия готового output в dir под именем оригинала
   dubUrl: (pid: string, rev = 0) => `${BASE}/projects/${pid}/dub?rev=${rev}`,   // playable dubbed video (frames + dub audio)
