@@ -3396,22 +3396,14 @@ function Editor() {
       
       // Копируем готовый файл в папку Export внутри рабочей папки проекта с сохранением оригинального имени
       const exportDir = p.work_dir ? `${p.work_dir}/Export` : "Export";
-      let saveRes: { ok: boolean; path?: string } | null = null;
       try {
-        saveRes = await api.saveOutput(pid, exportDir, name);
+        await api.saveOutput(pid, exportDir, name);
       } catch (saveErr) {
         console.error("Ошибка при копировании в папку Export:", saveErr);
       }
 
       updateExport(exId, { status: "done", msg: "", url: `${api.outputUrl(pid)}?rev=${Date.now()}` });   // bust cache on re-export
-      
-      // Открываем проводник с выделением скопированного файла в папке Export (или резервным в случае ошибки)
-      if (saveRes && saveRes.path) {
-        api.reveal(pid, saveRes.path).catch(() => {});
-      } else {
-        const outName = p.audio.keep_original_track && p.audio.container === "mkv" ? "output.mkv" : "output.mp4";
-        api.reveal(pid, outName).catch(() => {});
-      }
+
       
       pushActivity(`${t("compare.result")}: ${name}`, "done"); playSfx("success");
       setRendered(true); setDubRev(Date.now());   // /dub now serves the freshly rendered output.mp4 -> reload <audio>
@@ -4450,7 +4442,7 @@ function FilesPanel() {
                        className="inline-flex items-center justify-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]">
                       {opening === e.id ? <Loader2 size={13} className="animate-spin" /> : <ExternalLink size={13} />} {t("files.open")}
                     </button>
-                    <button onClick={async () => { if (!e.pid) return; try { await api.reveal(e.pid, `Export/${e.name}`); } catch { /* ignore */ } }}
+                    <button onClick={async () => { if (!e.pid) return; try { await api.reveal(e.pid, "Export"); } catch { /* ignore */ } }}
                        title={t("recent.openFolder")}
                        className="inline-flex items-center justify-center gap-1.5 text-[12px] px-2.5 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]">
                       <FolderOpen size={13} /> {t("recent.folder")}

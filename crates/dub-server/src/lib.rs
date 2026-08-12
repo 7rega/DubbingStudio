@@ -2160,13 +2160,16 @@ async fn save_output(State(st): State<AppState>, AxPath(pid): AxPath<String>, Js
                 .into_response();
         }
     }
+    let is_project_export = base == dir.join("Export");
     let mut dest = base.join(format!("{stem}.{out_ext}"));
-    // Коллизия имён: два входа с одинаковым basename (напр. разные папки, оба intro.mp4) при batch
-    // «Сохранить все в папку» затёрли бы друг друга → добавляем суффикс (2),(3)… (ревью-находка H).
-    let mut n = 2u32;
-    while dest.exists() {
-        dest = base.join(format!("{stem} ({n}).{out_ext}"));
-        n += 1;
+    if !is_project_export {
+        // Коллизия имён: два входа с одинаковым basename (напр. разные папки, оба intro.mp4) при batch
+        // «Сохранить все в папку» затёрли бы друг друга → добавляем суффикс (2),(3)… (ревью-находка H).
+        let mut n = 2u32;
+        while dest.exists() {
+            dest = base.join(format!("{stem} ({n}).{out_ext}"));
+            n += 1;
+        }
     }
     match std::fs::copy(&src, &dest) {
         Ok(_) => (
@@ -2211,21 +2214,39 @@ async fn open_output(State(st): State<AppState>, AxPath(pid): AxPath<String>) ->
 /// Открыть проводник/файловый менеджер с ВЫДЕЛЕННЫМ файлом (не плеер). Windows: explorer /select.
 fn reveal_in_explorer(path: String) {
     tokio::task::spawn_blocking(move || {
+        let p = std::path::Path::new(&path);
         #[cfg(windows)]
         {
-            // explorer /select,"<path>" — выделяет файл в открытом каталоге. Один аргумент.
-            let _ = crate::media::cmd_silent("explorer").arg(format!("/select,{path}")).spawn();
+            let path_win = path.replace('/', "\\");
+            if p.is_dir() {
+                // Открываем саму папку напрямую
+                let _ = crate::media::cmd_silent("explorer").arg(&path_win).spawn();
+            } else {
+                // Если файл содержит опасные символы, открываем его родительскую папку
+                if path_win.contains('#') || path_win.contains('&') || path_win.contains('%') || path_win.contains('^') || path_win.contains(';') {
+                    if let Some(parent) = p.parent() {
+                        let parent_win = parent.to_string_lossy().to_string().replace('/', "\\");
+                        let _ = crate::media::cmd_silent("explorer").arg(parent_win).spawn();
+                        return;
+                    }
+                }
+                // Иначе выделяем файл
+                let _ = crate::media::cmd_silent("explorer").arg(format!("/select,\"{path_win}\"")).spawn();
+            }
         }
         #[cfg(not(windows))]
         {
-            // прочие ОС: открыть родительский каталог (выделение файла непортабельно).
-            let parent = std::path::Path::new(&path).parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
-            let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+            let target = if p.is_dir() {
+                p.to_path_buf()
+            } else {
+                p.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."))
+            };
+            let _ = std::process::Command::new("xdg-open").arg(target).spawn();
         }
     });
 }
 
-/// POST /projects/{pid}/reveal — показать файл (по имени в каталоге проекта) в проводнике с выделением.
+/// POST /projects/{pid}/reveal — показать файл или папку (по имени в каталоге проекта) в проводнике.
 /// Body {name}. Для кнопок сохранения/экспорта: пользователь видит, КУДА сохранилось.
 async fn reveal_file(State(st): State<AppState>, AxPath(pid): AxPath<String>, Json(body): Json<Value>) -> Response {
     let dir = match st.proj_dir(&pid) {
@@ -2236,16 +2257,18 @@ async fn reveal_file(State(st): State<AppState>, AxPath(pid): AxPath<String>, Js
     // Сначала пробуем прямой путь (поддерживает пробелы, кириллицу и подкаталоги типа Export/)
     let mut f = dir.join(name);
     
-    // Проверка безопасности: путь должен быть внутри dir и быть файлом.
-    // Если нет, откатываемся на строгую очистку от спецсимволов.
-    if !f.is_file() || !f.starts_with(&dir) {
+    // Проверка безопасности: путь должен быть внутри dir и существовать.
+    // Сравнение префикса делаем в нижнем регистре для обхода несовпадения регистра буквы диска на Windows.
+    let f_lower = f.to_string_lossy().to_lowercase();
+    let dir_lower = dir.to_string_lossy().to_lowercase();
+    if !f.exists() || !f_lower.starts_with(&dir_lower) {
         let safe: String = name.chars().filter(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-')).collect();
         f = dir.join(&safe);
-        if !f.is_file() && safe.starts_with("output.") {
+        if !f.exists() && safe.starts_with("output.") {
             f = find_output_save(&dir);
         }
     }
-    if !f.is_file() {
+    if !f.exists() {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     reveal_in_explorer(f.to_string_lossy().to_string());
