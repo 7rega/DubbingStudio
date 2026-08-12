@@ -200,14 +200,9 @@ pub fn burn(
 
     let vargs: Vec<String> = if !blur_boxes.is_empty() && blur {
         let graph = blur_graph(&ass_f, blur_boxes, w, h, blur_sigma, &[], "0:v");
-        // Граф — В ФАЙЛ (-filter_complex_script): блюр-подложка на каждый субтитр даёт сотни цепочек
-        // (репро: 342 бокса = 37КБ аргументов), а CreateProcess ограничен 32767 символами —
-        // spawn падал с ENAMETOOLONG, и burn умирал мгновенно.
-        let graph_file = out.with_extension("filter");
-        std::fs::write(&graph_file, &graph).map_err(|e| format!("filter-скрипт: {e}"))?;
         vec![
-            "-filter_complex_script".into(),
-            graph_file.to_string_lossy().into_owned(),
+            "-filter_complex".into(),
+            graph,
             "-map".into(),
             "[outv]".into(),
         ]
@@ -372,12 +367,9 @@ pub fn burn_frame(
         // lead: select[,scale] -> [sel]; base label = sel.
         let lead = vec![format!("[0:v]{pre}[sel]")];
         let graph = blur_graph(&ass_f, boxes, w, h, blur_sigma, &lead, "sel");
-        // Граф в файл — тот же 32767-символьный лимит CreateProcess, что и у полного burn.
-        let graph_file = out_png.with_extension("filter");
-        std::fs::write(&graph_file, &graph).map_err(|e| format!("filter-скрипт: {e}"))?;
         vec![
-            "-filter_complex_script".into(),
-            graph_file.to_string_lossy().into_owned(),
+            "-filter_complex".into(),
+            graph,
             "-map".into(),
             "[outv]".into(),
         ]

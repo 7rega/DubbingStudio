@@ -391,26 +391,21 @@ fn mix_env_g(voice: &Path, music: &Path, blocks: &[SpeechBlock], g: f64, out: &P
          [1:a]aformat=channel_layouts=stereo,volume='{vol}':eval=frame[bg];\
          [v][bg]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]"
     );
-    // Граф — в файл: выражение огибающей на сотнях блоков раздувает cmdline за лимит CreateProcess.
-    let script = out.with_extension("envfilter");
-    std::fs::write(&script, &fc).map_err(|e| format!("env filter-скрипт: {e}"))?;
     // Таймаут пропорционален длине музыки (eval=frame дорог на многочасовом): max(600с, 2×длит.).
     let secs = (duration(music).unwrap_or(0.0) * 2.0).max(600.0) as u64;
-    let r = run_ff_timeout(&[
+    run_ff_timeout(&[
         OsStr::new("-y"), OsStr::new("-i"), voice.as_os_str(), OsStr::new("-i"), music.as_os_str(),
-        OsStr::new("-filter_complex_script"), script.as_os_str(),
+        OsStr::new("-filter_complex"), OsStr::new(&fc),
         OsStr::new("-map"), OsStr::new("[a]"),
         OsStr::new("-c:a"), OsStr::new("aac"), OsStr::new("-b:a"), OsStr::new("192k"), out.as_os_str(),
-    ], secs);
-    let _ = std::fs::remove_file(&script); // прибрать временный filter-скрипт (в т.ч. при ошибке)
-    r
+    ], secs)
 }
 
 /// Финальная нормализация программы по EBU R128 (ffmpeg loudnorm): интегральная громкость к I LUFS
 /// + true-peak лимитер к TP dBTP. Решение юзера (best-practice, НЕ питон): ставится последним шагом на
 /// смиксованную дорожку — держит целевую громкость соцсетей и ловит пики (пофразного клэмпа поэтому нет).
 pub fn loudnorm(src: &Path, dst: &Path, i: f64, tp: f64, lra: f64) -> Result<(), String> {
-    let af = format!("loudnorm=I={i}:TP={tp}:LRA={lra}");
+    let af = format!("aformat=channel_layouts=stereo,loudnorm=I={i}:TP={tp}:LRA={lra}");
     run_ff(&[
         OsStr::new("-y"), OsStr::new("-i"), src.as_os_str(),
         OsStr::new("-af"), OsStr::new(&af),
@@ -420,7 +415,7 @@ pub fn loudnorm(src: &Path, dst: &Path, i: f64, tp: f64, lra: f64) -> Result<(),
 
 /// Усилить всю дорожку на `gain_db` dB (монтажный гейн, наша opt-in фича). Перекодирование в aac.
 pub fn gain(src: &Path, dst: &Path, gain_db: f64) -> Result<(), String> {
-    let af = format!("volume={gain_db}dB");
+    let af = format!("aformat=channel_layouts=stereo,volume={gain_db}dB");
     run_ff(&[
         OsStr::new("-y"), OsStr::new("-i"), src.as_os_str(),
         OsStr::new("-af"), OsStr::new(&af),
@@ -515,8 +510,9 @@ pub fn mux_multitrack(
         OsStr::new("-i"), video.as_os_str(),
         OsStr::new("-i"), dub_audio.as_os_str(),
         OsStr::new("-i"), orig_source.as_os_str(),
+        OsStr::new("-filter_complex"), OsStr::new("[1:a]aformat=channel_layouts=stereo[dub]"),
         OsStr::new("-map"), OsStr::new("0:v:0"),
-        OsStr::new("-map"), OsStr::new("1:a:0"),
+        OsStr::new("-map"), OsStr::new("[dub]"),
         // без `?`: вызов гарантирует аудио в источнике (has_audio) — иначе -disposition:a:1 валит команду.
         OsStr::new("-map"), OsStr::new("2:a:0"),
         OsStr::new("-c:v"), OsStr::new("copy"),
