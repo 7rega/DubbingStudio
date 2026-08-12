@@ -4975,11 +4975,83 @@ function TranscriptView() {
   // #122/#4: свой гейт ре-анализа. Старый `busy` — стейт СОЗДАНИЯ ГОЛОСОВ, switchMode его не ставил ->
   // двойной клик по разным режимам запускал 2 analyze. reanalyzing блокирует и дизейблит кнопки портала.
   const [reanalyzing, setReanalyzing] = useState(false);
-  const trAudioOnly = !((p.meta.width || 0) > 0 && (p.meta.height || 0) > 0);   // транскрипт может быть аудио-входом
+  const trAudioOnly = !((p?.meta?.width || 0) > 0 && (p?.meta?.height || 0) > 0);   // транскрипт может быть аудио-входом
+
+  const [trStyleChoice, setTrStyleChoice] = useState<string>("");
+  const [customDraft, setCustomDraft] = useState<string>("");
+
+  useEffect(() => {
+    const raw = p?.audio?.translate_style || "";
+    if (raw === TR_STYLE_PRESETS.technical) {
+      setTrStyleChoice("technical");
+      setCustomDraft("");
+    } else if (raw === TR_STYLE_PRESETS.literary) {
+      setTrStyleChoice("literary");
+      setCustomDraft("");
+    } else if (raw === TR_STYLE_PRESETS.casual) {
+      setTrStyleChoice("casual");
+      setCustomDraft("");
+    } else if (raw !== "") {
+      setTrStyleChoice("custom");
+      setCustomDraft(raw);
+    } else {
+      setTrStyleChoice("");
+      setCustomDraft("");
+    }
+  }, [p?.audio?.translate_style]);
+
+  if (!p) return null;
+
+  const handleTrStyleChange = async (choice: string) => {
+    setTrStyleChoice(choice);
+    if (choice === "custom") {
+      if (customDraft) {
+        try {
+          const updated = await api.patch(pid, { op: "translate_style", style: customDraft });
+          setProject(updated);
+        } catch (err) {
+          console.error("Ошибка при сохранении стиля перевода:", err);
+        }
+      }
+    } else {
+      const resolved = TR_STYLE_PRESETS[choice] ?? "";
+      try {
+        const updated = await api.patch(pid, { op: "translate_style", style: resolved });
+        setProject(updated);
+      } catch (err) {
+        console.error("Ошибка при сохранении стиля перевода:", err);
+      }
+    }
+  };
+
+  const handleCustomBlur = async () => {
+    try {
+      const updated = await api.patch(pid, { op: "translate_style", style: customDraft });
+      setProject(updated);
+    } catch (err) {
+      console.error("Ошибка при сохранении стиля перевода:", err);
+    }
+  };
+
   async function switchMode(k: string) {
     if (k === "transcribe" || reanalyzing) return;                  // уже в транскрипте / ре-анализ уже идёт
     setReanalyzing(true);
     const mode = k === "subtitles" ? "nodub" : k === "funny" ? "dub" : k;   // dub|voiceover|nodub
+    try {
+      const patched = await api.patch(pid, { op: "mode", value: mode });
+      setProject(patched);
+      setStage("editor");
+    } catch (err) {
+      console.error("Ошибка смены режима:", err);
+      setProject({ ...p, mode });
+      setStage("editor");
+    } finally { setReanalyzing(false); }
+  }
+
+  async function runTranslation() {
+    if (reanalyzing) return;
+    setReanalyzing(true);
+    const mode = "dub";
     const tgt = (i18n.language as string) || p.tgt_lang || "ru";
     setJobSteps(["translating"]);
     setAudioOnly(trAudioOnly);
@@ -4995,15 +5067,16 @@ function TranscriptView() {
       });
       const updated = await api.getProject(pid);
       if (updated.mode === "transcribe") {
-        const patched = await api.patch(pid, { mode });
+        const patched = await api.patch(pid, { op: "mode", value: mode });
         setProject(patched);
       } else {
         setProject(updated);
       }
       setStage("editor");
-    } catch {
+    } catch (err) {
+      console.error("retranslate error", err);
       try {
-        const patched = await api.patch(pid, { mode });
+        const patched = await api.patch(pid, { op: "mode", value: mode });
         setProject(patched);
       } catch {
         setProject({ ...p, mode });
@@ -5211,7 +5284,24 @@ function TranscriptView() {
           className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">
           {busy === "__all__" ? <Loader2 size={15} className="animate-spin" /> : <Users size={15} />}{t("transcribe.makeAll")}
         </button>
-        <button onClick={() => switchMode("dub")} disabled={reanalyzing || busy !== null}
+
+        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2">
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-[var(--color-muted)]">{t("trStyle.label")}</div>
+          <select value={trStyleChoice} onChange={(e) => handleTrStyleChange(e.target.value)}
+            className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] focus:border-[var(--color-accent)] focus:outline-none">
+            <option value="">{t("trStyle.normal")}</option>
+            <option value="technical">{t("trStyle.technical")}</option>
+            <option value="literary">{t("trStyle.literary")}</option>
+            <option value="casual">{t("trStyle.casual")}</option>
+            <option value="custom">{t("trStyle.custom")}</option>
+          </select>
+          {trStyleChoice === "custom" && (
+            <textarea value={customDraft} onChange={(e) => setCustomDraft(e.target.value)} onBlur={handleCustomBlur} rows={2} placeholder={t("trStyle.customPlaceholder")}
+              className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-2 text-[12px] focus:border-[var(--color-accent)] focus:outline-none resize-none" />
+          )}
+        </div>
+
+        <button onClick={runTranslation} disabled={reanalyzing || busy !== null}
           className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition shadow-sm">
           {reanalyzing ? <Loader2 size={15} className="animate-spin" /> : <Languages size={15} />}
           <span>{t("transcribe.translateText")}</span>
