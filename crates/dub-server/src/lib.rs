@@ -2214,10 +2214,16 @@ async fn open_output(State(st): State<AppState>, AxPath(pid): AxPath<String>) ->
 /// Открыть проводник/файловый менеджер с ВЫДЕЛЕННЫМ файлом (не плеер). Windows: explorer /select.
 fn reveal_in_explorer(path: String) {
     tokio::task::spawn_blocking(move || {
-        let p = std::path::Path::new(&path);
+        let mut p = std::path::PathBuf::from(&path);
+        if p.is_relative() {
+            if let Ok(cur) = std::env::current_dir() {
+                p = cur.join(p);
+            }
+        }
+        let path_abs = p.to_string_lossy().to_string();
         #[cfg(windows)]
         {
-            let path_win = path.replace('/', "\\");
+            let path_win = path_abs.replace('/', "\\");
             if p.is_dir() {
                 // Открываем саму папку напрямую
                 let _ = crate::media::cmd_silent("explorer").arg(&path_win).spawn();
@@ -2237,7 +2243,7 @@ fn reveal_in_explorer(path: String) {
         #[cfg(not(windows))]
         {
             let target = if p.is_dir() {
-                p.to_path_buf()
+                p
             } else {
                 p.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."))
             };
@@ -2275,9 +2281,9 @@ async fn reveal_file(State(st): State<AppState>, AxPath(pid): AxPath<String>, Js
     Json(json!({ "ok": true })).into_response()
 }
 
-/// POST /projects/{pid}/save-text — записать текстовый файл (SRT/TXT) в каталог проекта и показать его в
+/// POST /projects/{pid}/save-text — записать текстовый файл (SRT/TXT) в каталог проекта или указанный dir и показать его в
 /// проводнике. В нативном Tauri-webview браузерный blob-download (<a download>) не работает — сохраняем
-/// через бэкенд. Body {name, text}.
+/// через бэкенд. Body {name, text, dir}.
 async fn save_text(State(st): State<AppState>, AxPath(pid): AxPath<String>, Json(body): Json<Value>) -> Response {
     let dir = match st.proj_dir(&pid) {
         Ok(d) => d,
@@ -2287,7 +2293,28 @@ async fn save_text(State(st): State<AppState>, AxPath(pid): AxPath<String>, Json
     let safe: String = name.chars().filter(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-')).collect();
     let safe = if safe.is_empty() { "transcript.txt".to_string() } else { safe };
     let text = body.get("text").and_then(|v| v.as_str()).unwrap_or("");
-    let f = dir.join(&safe);
+    
+    // Если передана директория для сохранения, пишем туда. Иначе — в папку проекта.
+    let f = if let Some(dest_dir) = body.get("dir").and_then(|v| v.as_str()) {
+        let base_path = std::path::Path::new(dest_dir);
+        let base = if base_path.is_relative() {
+            dir.join(base_path)
+        } else {
+            base_path.to_path_buf()
+        };
+        if !base.is_dir() {
+            if let Err(e) = std::fs::create_dir_all(&base) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("создание каталога {}: {e}", base.display()),
+                )
+                    .into_response();
+            }
+        }
+        base.join(&safe)
+    } else {
+        dir.join(&safe)
+    };
     if let Err(e) = std::fs::write(&f, text) {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("write failed: {e}")).into_response();
     }

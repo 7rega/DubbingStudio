@@ -5087,11 +5087,18 @@ function TranscriptView() {
     catch { /* ignore */ } finally { setBusy(null); }
   }
 
+  const getExportName = (ext: string) => {
+    const orig = useStore.getState().recent.find((x) => x.pid === pid)?.video || p.meta.video || pid;
+    const base = baseName(orig);
+    const stem = base.substring(0, base.lastIndexOf('.')) || base;
+    const cleanStem = stem.replace(/\.(mp4|mkv|avi|mov|mp3|wav)$/i, "");
+    return `${cleanStem}.${ext}`;
+  };
   async function dl(name: string, text: string) {
-    // В нативном Tauri-webview браузерный blob-download молча не срабатывает (баг «Экспорт SRT не работает»).
-    // Пишем файл на бэке в каталог проекта и открываем проводник с выделением. Фолбэк — blob (dev-браузер).
     try {
-      await api.saveText(pid, name, text);
+      const r = await api.pickFolder();
+      if (!r.dir) return; // пользователь отменил выбор
+      await api.saveText(pid, name, text, r.dir);
     } catch {
       const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
       const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click();
@@ -5102,8 +5109,8 @@ function TranscriptView() {
     const ms = Math.max(0, Math.round(s * 1000)), z = (n: number, w = 2) => String(n).padStart(w, "0");
     return `${z(Math.floor(ms / 3600000))}:${z(Math.floor((ms % 3600000) / 60000))}:${z(Math.floor((ms % 60000) / 1000))},${z(ms % 1000, 3)}`;
   };
-  const exportSrt = () => dl("transcript.srt", rows.map((s, i) => `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${(s.src_text || "").trim()}\n`).join("\n"));
-  const exportTxt = () => dl("transcript.txt", rows.map((s) => `[${t("transcribe.speaker")} ${s.speaker ?? "0"}] ${(s.src_text || "").trim()}`).join("\n"));
+  const exportSrt = () => dl(getExportName("srt"), rows.map((s, i) => `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${(s.src_text || "").trim()}\n`).join("\n"));
+  const exportTxt = () => dl(getExportName("txt"), rows.map((s) => `[${t("transcribe.speaker")} ${s.speaker ?? "0"}] ${(s.src_text || "").trim()}`).join("\n"));
   const exportAss = () => {
     const assTime = (s: number) => {
       const ms = Math.max(0, Math.round(s * 100));
@@ -5115,7 +5122,7 @@ function TranscriptView() {
       speakers.map(spk => `Style: Speaker_${spk},Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1`).join("\n") +
       `\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
     const events = rows.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Speaker_${s.speaker ?? "0"},,0,0,0,,${(s.src_text || "").trim().replace(/\n/g, "\\N")}`).join("\n");
-    dl("transcript.ass", header + events);
+    dl(getExportName("ass"), header + events);
   };
 
   return (
