@@ -279,6 +279,7 @@ pub struct AnalyzeArgs {
                               // рисованных лиц + CCIP). Пусто = "real". Аниме-путь ловит мульт/аниме лица.
     pub import_translated: bool, // импортированные субтитры УЖЕ на языке перевода -> MT/vision пропустить,
                                  // tgt = импортированный текст, Даб Студио только озвучивает. Работает лишь с import_subs.
+    pub num_speakers: usize,     // 0 = авто, 1..=8 = заданное число спикеров через WeSpeaker кластеризацию
 }
 
 /// Пути к моделям/входу для одной джобы analyze.
@@ -785,15 +786,13 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
         }
     }
 
-    // Голосовая переразметка спикеров (#115): при кастинге разворачиваем ≤4 Sortformer-спикеров в реальных
-    // персонажей по голосу и ПЕРЕРАЗМЕЧАЕМ сегменты (метки «v{k}») -> дубляж по N голосам + верный счётчик
-    // реплик у персонажей (0 реплик больше не бывает). Не для import_subs. Гейт по n_spk СНЯТ: Sortformer
-    // часто схлопывает многоголосый клип в 1 спикера (шум/моно) — именно этот случай фича и чинит;
-    // внутренний guard recluster (k<=1 || k<=orig) не трогает истинно-односпикерные.
-    if args.casting && paths.import_subs.is_none() {
-        let k = crate::casting::recluster_segments(paths, &mut segments, progress);
+    // Голосовая переразметка спикеров (#115 / WeSpeaker): при кастинге или при явном указании числа
+    // спикеров (num_speakers > 0) распределяем сегменты по голосам через WeSpeaker голосовые эмбеддинги.
+    if (args.casting || args.num_speakers > 0) && paths.import_subs.is_none() {
+        let k = crate::casting::recluster_segments(paths, &mut segments, args.num_speakers, progress);
         if k > 0 {
-            emit(progress, "asr", &format!("персонажей по голосу: {k}"));
+            n_spk = k;
+            emit(progress, "diarize", &format!("WeSpeaker: {k} спикер(ов) по голосу"));
         }
     }
 

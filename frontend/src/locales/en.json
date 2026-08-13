@@ -106,7 +106,13 @@
     "empty": "No lines in the transcript",
     "speakersN": "speakers",
     "transcribeVideo": "Transcribe Video",
-    "translateText": "Translate Text"
+    "translateText": "Translate Text",
+    "numSpeakers": "Number of speakers",
+    "numSpeakersHint": "Sortformer finds timings, while WeSpeaker cleanly groups turns by voice timbre",
+    "spkAuto": "Auto (detect)",
+    "spkSolo": "1 speaker (monologue)",
+    "spkDialog": "2 speakers (dialogue)",
+    "spkShort": "speakers"
   },
   "actions": {
     "translate": "Translate",

@@ -212,9 +212,19 @@ fn segments_fingerprint(segs: &[Segment]) -> u64 {
     h
 }
 
-pub fn recluster_segments(paths: &AnalyzePaths, segments: &mut [Segment], progress: &Progress) -> usize {
+pub fn recluster_segments(paths: &AnalyzePaths, segments: &mut [Segment], target_k: usize, progress: &Progress) -> usize {
     if std::env::var("DUB_VOICE_REDIARIZE").ok().as_deref() == Some("0") {
         return 0;
+    }
+    if segments.is_empty() {
+        return 0;
+    }
+    if target_k == 1 {
+        for s in segments.iter_mut() {
+            s.speaker = Some("0".to_string());
+        }
+        emit(progress, "diarize", "WeSpeaker: задан 1 спикер (монолог)");
+        return 1;
     }
     if segments.len() < 2 {
         return 0;
@@ -237,8 +247,6 @@ pub fn recluster_segments(paths: &AnalyzePaths, segments: &mut [Segment], progre
         return 0;
     }
     // Кэш эмбеддингов (тюнинг порога без пере-эмбеддинга): casting/vc_embs.json = {seg_count, fp, idxs, embs}.
-    // fp — отпечаток ГРАНИЦ сегментов: если константы merge_short_turns изменились между билдами и дали иную
-    // раскладку при СОВПАВШЕМ count, fp разойдётся -> кэш инвалидируется (idxs не мапятся на чужие сегменты).
     let cache = paths.work_dir.join("casting").join("vc_embs.json");
     let fp = segments_fingerprint(segments);
     let mut idxs: Vec<usize> = Vec::new();
@@ -255,7 +263,6 @@ pub fn recluster_segments(paths: &AnalyzePaths, segments: &mut [Segment], progre
         embs = serde_json::from_value(v.get("embs").cloned().unwrap_or_default()).unwrap_or_default();
     }
     if idxs.is_empty() || idxs.len() != embs.len() {
-        // Эмбеддим вокал каждого достаточно длинного сегмента.
         idxs.clear();
         embs.clear();
         let mut embedder = match dub_faces::VoiceEmbedder::load(&onnx) {
@@ -286,56 +293,73 @@ pub fn recluster_segments(paths: &AnalyzePaths, segments: &mut [Segment], progre
     if embs.len() < 2 {
         return 0;
     }
-    let max_chars: usize = std::env::var("DUB_VOICE_MAX_CHARS")
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .filter(|&n: &usize| n >= 2)
-        .unwrap_or(8);
-    let thr = voice_cluster_cos();
-    let mut labels = ahc_average(&embs, thr);
-    let mut k = labels.iter().copied().max().map(|m| m + 1).unwrap_or(0);
-    // Кап на число персонажей. ВАЖНО: понижать ПОРОГ AHC при переизбытке кластеров НЕЛЬЗЯ — на низком
-    // пороге центроидный average-linkage СХЛОПЫВАЕТСЯ в один гигантский кластер (замер: thr 0.30 -> k=22
-    // сбалансировано, но кап-петля гнала порог к 0.18 -> один блоб на 84 сегмента = v1). Вместо этого при
-    // k>cap ДОЛИВАЕМ самые МЕЛКИЕ кластеры (просодия-разброс одного голоса: крик/шёпот/шум) в БЛИЖАЙШИЙ по
-    // центроиду — главные голоса остаются раздельными (замер: 0.30 + доливка -> [20,14,12,10,10,8,4,4]).
-    if k > max_chars {
-        labels = merge_smallest_into_nearest(&embs, labels, max_chars);
+
+    let mut labels: Vec<usize>;
+    let mut k: usize;
+
+    if target_k >= 2 {
+        // Явно заданное число спикеров: target_k (2..8+)
+        let mut initial_labels = ahc_average(&embs, 0.50);
+        let cur_k = initial_labels.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+        if cur_k > target_k {
+            labels = merge_smallest_into_nearest(&embs, initial_labels, target_k);
+        } else if cur_k < target_k && embs.len() >= target_k {
+            let mut best_labels = initial_labels;
+            for test_thr in [0.42, 0.35, 0.30, 0.25, 0.20, 0.15] {
+                let test_l = ahc_average(&embs, test_thr);
+                let tk = test_l.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+                if tk >= target_k {
+                    best_labels = merge_smallest_into_nearest(&embs, test_l, target_k);
+                    break;
+                } else if tk > best_labels.iter().copied().max().map(|m| m + 1).unwrap_or(0) {
+                    best_labels = test_l;
+                }
+            }
+            labels = best_labels;
+        } else {
+            labels = initial_labels;
+        }
         k = labels.iter().copied().max().map(|m| m + 1).unwrap_or(0);
-    }
-    // Число исходных Sortformer-меток (борроу сразу отпускаем — ниже мутируем segments).
-    let orig_count = segments
-        .iter()
-        .filter_map(|s| s.speaker.as_ref())
-        .collect::<std::collections::HashSet<&String>>()
-        .len();
-    if k <= 1 || k <= orig_count {
-        // Кластеризация не дала БОЛЬШЕ персонажей, чем Sortformer -> не переразмечаем (не рискуем).
-        return 0;
-    }
-    // Sortformer УВЕРЕННО сказал один спикер (orig_count<=1): дробим ТОЛЬКО если новые кластеры реально
-    // населены. Настоящий второй голос имеет заметную долю реплик; горстка сегментов в отдельном кластере —
-    // это разброс просодии ОДНОГО человека (крик/шёпот), а не второй персонаж. Иначе монолог рвётся на
-    // v0/v1 и озвучивается двумя голосами (регресс снятия n_spk-гейта). Требуем 2-й кластер >=2 и >=15%.
-    if orig_count <= 1 {
-        let mut sizes = vec![0usize; k];
-        for &l in &labels {
-            sizes[l] += 1;
+    } else {
+        // Авто-режим
+        let max_chars: usize = std::env::var("DUB_VOICE_MAX_CHARS")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .filter(|&n: &usize| n >= 2)
+            .unwrap_or(8);
+        let thr = voice_cluster_cos();
+        labels = ahc_average(&embs, thr);
+        k = labels.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+        if k > max_chars {
+            labels = merge_smallest_into_nearest(&embs, labels, max_chars);
+            k = labels.iter().copied().max().map(|m| m + 1).unwrap_or(0);
         }
-        sizes.sort_unstable_by(|a, b| b.cmp(a));
-        let second = sizes.get(1).copied().unwrap_or(0);
-        let min_needed = 2.max((labels.len() as f64 * 0.15).ceil() as usize);
-        if second < min_needed {
-            return 0; // разброс просодии одного спикера, не второй голос
+        let orig_count = segments
+            .iter()
+            .filter_map(|s| s.speaker.as_ref())
+            .collect::<std::collections::HashSet<&String>>()
+            .len();
+        if k <= 1 || k <= orig_count {
+            return 0;
+        }
+        if orig_count <= 1 {
+            let mut sizes = vec![0usize; k];
+            for &l in &labels {
+                sizes[l] += 1;
+            }
+            sizes.sort_unstable_by(|a, b| b.cmp(a));
+            let second = sizes.get(1).copied().unwrap_or(0);
+            let min_needed = 2.max((labels.len() as f64 * 0.15).ceil() as usize);
+            if second < min_needed {
+                return 0;
+            }
         }
     }
-    // seg_idx -> голосовая метка (для эмбеддированных).
+
     let mut seg_label: HashMap<usize, usize> = HashMap::new();
     for (j, &i) in idxs.iter().enumerate() {
         seg_label.insert(i, labels[j]);
     }
-    // Короткие/невекторизованные сегменты -> метка ближайшего по времени эмбеддированного. Центры считаем
-    // заранее (иначе borrow segments и immut, и mut одновременно).
     let mids: Vec<f64> = segments.iter().map(|s| (s.start + s.end) / 2.0).collect();
     for i in 0..segments.len() {
         let lbl = seg_label.get(&i).copied().or_else(|| {
@@ -347,13 +371,13 @@ pub fn recluster_segments(paths: &AnalyzePaths, segments: &mut [Segment], progre
                 .and_then(|&j| seg_label.get(&j).copied())
         });
         if let Some(l) = lbl {
-            segments[i].speaker = Some(format!("v{l}"));
+            segments[i].speaker = Some(format!("{l}"));
         }
     }
     emit(
         progress,
-        "asr",
-        &format!("голосовая переразметка: {k} персонажей по голосу (Sortformer нашёл {orig_count})"),
+        "diarize",
+        &format!("WeSpeaker: {k} спикер(ов) по тембру голоса"),
     );
     k
 }

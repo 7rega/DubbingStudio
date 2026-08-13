@@ -106,7 +106,13 @@
     "empty": "Нет реплик в транскрипте",
     "speakersN": "спикеров",
     "transcribeVideo": "Транскрибировать видео",
-    "translateText": "Перевести текст"
+    "translateText": "Перевести текст",
+    "numSpeakers": "Количество спикеров",
+    "numSpeakersHint": "Sortformer находит тайминги, а WeSpeaker чисто группирует реплики по голосам",
+    "spkAuto": "Авто (определить)",
+    "spkSolo": "1 спикер (монолог)",
+    "spkDialog": "2 спикера (диалог)",
+    "spkShort": "спикера(-ов)"
   },
   "actions": {
     "translate": "Перевод",

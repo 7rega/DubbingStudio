@@ -1994,7 +1994,18 @@ function WaveformTimeline({ pid, duration, scrub, segments, onSeek, gainDb = 0 }
           return <rect key={i} x={(i / peaks.length) * w} y={(h - bh) / 2} width={Math.max(1, bw - 0.5)} height={bh}
                        fill={played ? "var(--color-accent)" : "#3a414c"} opacity={played ? 0.9 : 0.55} />;
         })}
-        {segments.map((s, i) => <rect key={"s" + i} x={(s.start / dur) * w} y={0} width={1} height={h} fill="var(--color-muted)" opacity={0.3} />)}
+        {segments.map((s, i) => {
+          const sx = (s.start / dur) * w;
+          const ex = (s.end / dur) * w;
+          const sw = Math.max(1, ex - sx);
+          return (
+            <g key={"s" + i}>
+              <rect x={sx} y={0} width={sw} height={h} fill="var(--color-accent)" opacity={0.06} />
+              <rect x={sx} y={0} width={1} height={h} fill="var(--color-muted)" opacity={0.45} />
+              <rect x={ex} y={0} width={1} height={h} fill="var(--color-muted)" opacity={0.3} />
+            </g>
+          );
+        })}
       </svg>
       <div className="absolute top-0 bottom-0 w-px bg-[var(--color-accent)] shadow-[0_0_6px_var(--color-accent)] pointer-events-none" style={{ left: `${(scrub / dur) * 100}%` }} />
     </div>
@@ -5279,6 +5290,7 @@ function TranscriptView() {
 
   const [trStyleChoice, setTrStyleChoice] = useState<string>("");
   const [customDraft, setCustomDraft] = useState<string>("");
+  const [transcribeSpeakers, setTranscribeSpeakers] = useState<number>(0);
 
   useEffect(() => {
     const raw = p?.audio?.translate_style || "";
@@ -5393,7 +5405,7 @@ function TranscriptView() {
     setProgress("", "", null);
     setStage("analyzing");
     try {
-      const { job_id } = await api.analyze(pid, tgt, "transcribe", "", "transcribe", "", false, false, false, "");
+      const { job_id } = await api.analyze(pid, tgt, "transcribe", "", "transcribe", "", false, false, false, "", false, "", "auto", transcribeSpeakers);
       await api.watchJob(job_id, (e) => {
         if (e.type === "progress") {
           if (e.msg) useStore.getState().pushActivity(e.msg, "work");
@@ -5606,6 +5618,37 @@ function TranscriptView() {
           {reanalyzing ? <Loader2 size={15} className="animate-spin" /> : <Languages size={15} />}
           <span>{t("transcribe.translateText")}</span>
         </button>
+
+        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2">
+          <div className="flex items-center justify-between text-[11px] text-[var(--color-muted)]">
+            <span className="font-semibold uppercase tracking-[0.06em] flex items-center gap-1.5">
+              <Users size={13} className="text-[var(--color-accent)]" />
+              {t("transcribe.numSpeakers")}
+            </span>
+            <span className="mono text-[10px] text-[var(--color-accent)] font-semibold">
+              {transcribeSpeakers === 0 ? t("transcribe.spkAuto") : `${transcribeSpeakers} ${t("transcribe.spkShort")}`}
+            </span>
+          </div>
+          <select
+            value={transcribeSpeakers}
+            onChange={(e) => setTranscribeSpeakers(parseInt(e.target.value) || 0)}
+            className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+          >
+            <option value={0}>{t("transcribe.spkAuto")}</option>
+            <option value={1}>{t("transcribe.spkSolo")}</option>
+            <option value={2}>{t("transcribe.spkDialog")}</option>
+            <option value={3}>3 {t("transcribe.spkShort")}</option>
+            <option value={4}>4 {t("transcribe.spkShort")}</option>
+            <option value={5}>5 {t("transcribe.spkShort")}</option>
+            <option value={6}>6 {t("transcribe.spkShort")}</option>
+            <option value={7}>7 {t("transcribe.spkShort")}</option>
+            <option value={8}>8 {t("transcribe.spkShort")}</option>
+          </select>
+          <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+            {t("transcribe.numSpeakersHint")}
+          </div>
+        </div>
+
         <button onClick={runTranscribe} disabled={reanalyzing || busy !== null}
           className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition shadow-sm">
           {reanalyzing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
