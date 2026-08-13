@@ -5619,6 +5619,12 @@ function TranscriptView() {
           <span>{t("transcribe.translateText")}</span>
         </button>
 
+        <button onClick={runTranscribe} disabled={reanalyzing || busy !== null}
+          className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition shadow-sm">
+          {reanalyzing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+          <span>{t("transcribe.transcribeVideo")}</span>
+        </button>
+
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2">
           <div className="flex items-center justify-between text-[11px] text-[var(--color-muted)]">
             <span className="font-semibold uppercase tracking-[0.06em] flex items-center gap-1.5">
@@ -5648,12 +5654,6 @@ function TranscriptView() {
             {t("transcribe.numSpeakersHint")}
           </div>
         </div>
-
-        <button onClick={runTranscribe} disabled={reanalyzing || busy !== null}
-          className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition shadow-sm">
-          {reanalyzing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
-          <span>{t("transcribe.transcribeVideo")}</span>
-        </button>
         <div className="flex gap-2">
           <button onClick={exportSrt} className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-[#37414d] text-[12px] hover:border-[var(--color-accent)]"><Download size={13} />{t("transcribe.exportSrt")}</button>
           <button onClick={exportAss} className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-[#37414d] text-[12px] hover:border-[var(--color-accent)]"><Download size={13} />ASS</button>
