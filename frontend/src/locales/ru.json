@@ -52,6 +52,8 @@
     "cancel": "Отмена"
   },
   "editor": {
+    "tabSubtitles": "Субтитры",
+    "tabGeneration": "Настройка генерации",
     "transcript": "Транскрипт",
     "style": "Стиль",
     "voice": "Голос",

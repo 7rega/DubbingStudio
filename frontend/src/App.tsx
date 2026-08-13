@@ -3009,6 +3009,7 @@ function Editor() {
   const [voGainDraft, setVoGainDraft] = useState<number | null>(null);   // черновик громкости оригинала (voiceover)
   const [blurSigmaDraft, setBlurSigmaDraft] = useState<number | null>(null); // черновик силы блюра
   const [showExportModal, setShowExportModal] = useState(false);
+  const [editorTab, setEditorTab] = useState<"subs" | "gen">("subs");
   const [duckOn, setDuckOn] = useState(false);
   useEffect(() => { api.capabilities().then((c) => setDuckOn(c.selection?.duck_on === "1")).catch(() => {}); }, []);
   const setDuckSaved = (v: boolean) => { setDuckOn(v); api.setSelection("duck_on", v ? "1" : "0").catch(() => {}); };
@@ -3511,347 +3512,9 @@ function Editor() {
   const activeRef = useRef<HTMLDivElement>(null);
   useEffect(() => { activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [activeId]);
   return (
-    <div className="flex-1 grid grid-cols-[420px_1fr_300px] min-h-0">
-      <aside className="border-r border-[var(--color-border)] flex flex-col min-h-0 overflow-hidden bg-[var(--color-surface)]">
-        {/* Фикс-шапка: вкладки лейнов всегда видны (не скроллятся). */}
-        <div className="shrink-0 px-4 pt-4 pb-2.5 border-b border-[var(--color-border)]">
-        <div className="inline-flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[12px]">
-          {([["subs", t("mode.subtitles")], ["blur", `${t("blur.title")} ${(p.captions.blur_boxes || []).length}`],
-            ["titles", `${t("titles.tab")} ${(p.captions.titles || []).length}`]] as const).map(([k, lbl]) => (
-            <button key={k} onClick={() => setLane(k as typeof lane)}
-              className={`px-2.5 py-1 rounded-md transition-colors ${lane === k ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
-              {lbl}
-            </button>
-          ))}
-          </div>
-        </div>
-        {/* Скролл-тело: скроллится только список, шапка выше зафиксирована. */}
-        <div data-kb-scroll className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-4">
-        {lane === "subs" && (
-        <div className="space-y-2">
-          {(() => {
-            const spks = [...new Set(p.segments.map((x) => x.speaker ?? "0"))].sort();
-            const idsOf = (spk: string | null) => p.segments.filter((x) => spk === null || (x.speaker ?? "0") === spk).map((x) => x.id);
-            const toggleMany = (ids: string[]) => setSelSegs((prev) => {
-              const next = new Set(prev), all = ids.length > 0 && ids.every((i) => next.has(i));
-              ids.forEach((i) => (all ? next.delete(i) : next.add(i)));
-              return next;
-            });
-            const chip = "px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors";
-            return (
-              <div className="sticky top-0 z-20 -mx-4 px-4 pt-1 pb-2 mb-1 space-y-1.5 bg-[var(--color-surface)] border-b border-[var(--color-border)]">
-                <div className="flex flex-wrap items-center gap-1">
-                  <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mr-0.5">{t("sel.pick")}</span>
-                  <button onClick={() => toggleMany(idsOf(null))} className={chip}>{t("sel.all")}</button>
-                  {spks.length > 1 && spks.map((spk) => <button key={spk} onClick={() => toggleMany(idsOf(spk))} className={chip}>SPK {spk}</button>)}
-
-                  <div className="ml-auto inline-flex items-center gap-1.5 shrink-0">
-                    <button onClick={handleSaveSubtitles} title="Сохранить субтитры в файл (.srt)"
-                      className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
-                      <Save size={13} />
-                      <span className="text-[10px] font-bold">SRT</span>
-                    </button>
-                    <button onClick={handleSaveAss} title="Сохранить субтитры в файл (.ass)"
-                      className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
-                      <Save size={13} />
-                      <span className="text-[10px] font-bold">ASS</span>
-                    </button>
-                    <label title="Импортировать файл субтитров (.srt, .ass, .vtt)" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold cursor-pointer hover:brightness-110 transition shrink-0">
-                      <Upload size={12} />
-                      <span>{t("import.importShort")}</span>
-                      <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
-                    </label>
-                  </div>
-                </div>
-                {selSegs.size > 0 && (
-                  <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-accent)]/50 bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)] px-2 py-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[12px] font-medium">{selSegs.size} {t("sel.count")}</span>
-                      <button onClick={() => setSelSegs(new Set())} className="text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><X size={14} /></button>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <select value="" onChange={(e) => { if (e.target.value) { doBulkSetSpeaker(e.target.value); e.target.value = ""; } }} disabled={regenId !== null}
-                        title={t("sel.spkHint")}
-                        className="bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[12px] rounded-md px-1.5 py-1 text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none transition-colors cursor-pointer disabled:opacity-40">
-                        <option value="">{t("sel.spkPlaceholder")}</option>
-                        {speakers.map((spk) => <option key={spk} value={spk}>SPK {spk}</option>)}
-                        <option value="__new__">{t("sel.spkNew")}</option>
-                      </select>
-                      <button onClick={() => bulkSeg("keep_segments", { keep: true })} disabled={regenId !== null}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><Music size={13} />{t("sel.keep")}</button>
-                      <button onClick={() => bulkSeg("hide_segments", { hidden: true })} disabled={regenId !== null}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><EyeOff size={13} />{t("sel.hide")}</button>
-                      <button onClick={doBulkRegen} disabled={regenId !== null} title={t("sel.regenHint")}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                        {regenId === "__bulk__" ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
-                        <span>{t("sel.regen")}</span>
-                      </button>
-                      <button onClick={() => bulkSeg("del_segments")} disabled={regenId !== null}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} />{t("sel.del")}</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-          {p.segments.map((seg, idx) => {
-            const on = isActive(seg);
-            return (
-              <div key={seg.id} ref={on ? activeRef : undefined}
-                onDragOver={(e) => { e.preventDefault(); }}
-                onDrop={(e) => { e.preventDefault(); dropSeg(seg.id); }}
-                onClick={() => { setRendered(false); setScrub(seg.start); }}   // click a phrase -> seek the playhead to it
-                className={`rounded-xl p-2 border-l-2 transition-colors cursor-pointer ${dragSegId === seg.id ? "opacity-30 border-dashed border-[var(--color-accent)]" : ""} ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${on ? "bg-[var(--color-surface-2)] border-[var(--color-accent)]" : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"}`}>
-                <div className="flex items-center justify-between gap-1">
-                  <div className="flex items-center gap-1 flex-1 min-w-0">
-                    <button type="button" draggable
-                      onDragStart={(e) => { e.dataTransfer.setData("text/plain", seg.id); setDragSegId(seg.id); }}
-                      onClick={(e) => e.stopPropagation()}
-                      title="Перетащить фразу (Drag & Drop)"
-                      className="cursor-grab active:cursor-grabbing text-[var(--color-muted)] hover:text-[var(--color-accent)] p-0.5 rounded shrink-0">
-                      <GripVertical size={13} />
-                    </button>
-                    <span className="mono px-1.5 py-0.5 rounded bg-[var(--color-surface)] text-[9px] font-bold text-[var(--color-muted)] border border-[var(--color-border)] shrink-0 opacity-70">#{idx + 1}</span>
-                    <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "up"); }} disabled={idx === 0} title="Переместить вверх"
-                      className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronUp size={13} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "down"); }} disabled={idx === p.segments.length - 1} title="Переместить вниз"
-                      className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronDown size={13} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; }); }}
-                      className={`grid place-items-center w-3.5 h-3.5 rounded shrink-0 border transition-colors ${selSegs.has(seg.id) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>
-                      {selSegs.has(seg.id) && <Check size={10} />}</button>
-                    {seg.speaker != null && <span className="mono px-1 py-0.5 rounded bg-[var(--color-overlay)] text-[9px] font-semibold text-[var(--color-muted)] shrink-0">SPK {seg.speaker}</span>}
-                    <span className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"}`}>{fmtT(seg.start)} → {fmtT(seg.end)}</span>
-                  </div>
-                  <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
-                    {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
-                    <button onClick={(e) => { e.stopPropagation(); playSeg(seg); }} title={t("seg.play")}
-                      className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><Play size={13} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); doRegen(seg.id); }} disabled={regenId !== null} title={t("seg.regen")}
-                      className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                      {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); doKeepSeg(seg.id); }} disabled={regenId !== null} title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
-                      className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}><Music size={13} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); doHideSeg(seg.id); }} disabled={regenId !== null} title={seg.hidden ? t("seg.show") : t("seg.hide")}
-                      className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                      {seg.hidden ? <EyeOff size={13} /> : <Eye size={13} />}</button>
-                    <button onClick={(e) => { e.stopPropagation(); doDelSeg(seg.id); }} disabled={regenId !== null} title={t("seg.del")}
-                      className="p-0.5 text-[var(--color-muted)] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
-                  </div>
-                </div>
-                <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
-                <AutoGrowTextarea value={seg.tgt_text} onChange={(e) => patchSeg(seg.id, e.target.value)}
-                  onClick={(e) => e.stopPropagation()}                       // editing text must not re-seek on every click
-                  onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}   // end the edit burst
-                  className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
-                {on && (
-                  <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
-                    <Clock size={11} className="text-[var(--color-muted)] shrink-0" />
-                    <input type="number" step={0.1} min={0} defaultValue={seg.start.toFixed(2)} key={`st${seg.id}-${seg.start}`}
-                      onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.start) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, start: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
-                      className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
-                    <ArrowRight size={11} className="text-[var(--color-muted)] shrink-0" />
-                    <input type="number" step={0.1} min={0} defaultValue={seg.end.toFixed(2)} key={`en${seg.id}-${seg.end}`}
-                      onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.end) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, end: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
-                      className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
-                    <span className="text-[10px] text-[var(--color-muted)]">{t("seg.seconds")}</span>
-                  </div>
-                )}
-                {(on || selSegs.has(seg.id)) && !seg.keep_original && (
-                  <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.speakerHint")}>
-                    <Users size={11} className="text-[var(--color-muted)] shrink-0" />
-                    <select value={seg.speaker ?? ""}
-                      onChange={async (e) => {
-                        let val = e.target.value;
-                        if (val === "__new__") {                          // добавить НОВОГО спикера (ASR нашёл меньше, чем есть): следующий свободный id
-                          const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
-                          val = String(nums.length ? Math.max(...nums) + 1 : 1);
-                        }
-                        setRendered(false);
-                        try { setProject(await api.patch(pid, { op: "segment", id: seg.id, speaker: val })); bump(); } catch (err) { await surfaceErr(err); }
-                      }}
-                      className="flex-1 min-w-0 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none transition-colors">
-                      {seg.speaker == null && <option value="">—</option>}
-                      {speakers.map((s) => <option key={s} value={s}>SPK {s}</option>)}
-                      <option value="__new__">＋ {t("seg.newSpeaker")}</option>
-                    </select>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          <button onClick={addSeg} disabled={regenId !== null} title={t("seg.addHint")}
-            className="w-full mt-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
-            <Plus size={14} />{t("seg.add")}
-          </button>
-          <label title="Загрузить готовые субтитры из файла (.srt, .ass)"
-            className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] cursor-pointer transition-colors">
-            <Upload size={14} /> Импортировать субтитры (.srt, .ass)
-            <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
-          </label>
-        </div>
-        )}
-        {lane === "blur" && (
-          <div className="space-y-2">
-            <Toggle label={t("blur.on")} on={p.render.blur} onClick={() => branch("blur_enable", { on: !p.render.blur })} />
-            {p.render.blur && (
-              <div className="py-1">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="mono text-[10px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
-                  <span className="mono text-[10px] text-[var(--color-text)] font-semibold">{blurSigmaDraft ?? p.render.blur_sigma ?? 60} σ</span>
-                </div>
-                <input
-                  type="range"
-                  min={5}
-                  max={150}
-                  step={5}
-                  value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
-                  onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
-                  onPointerUp={async () => {
-                    if (blurSigmaDraft != null) {
-                      await branch("blur_enable", { on: p.render.blur, sigma: blurSigmaDraft });
-                      setBlurSigmaDraft(null);
-                    }
-                  }}
-                  className="w-full accent-[var(--color-accent)] cursor-pointer"
-                />
-              </div>
-            )}
-            <div className={p.render.blur ? "" : "opacity-40 pointer-events-none"}>
-              <div className="flex items-center justify-between mt-2 mb-1.5">
-                <span className="mono text-[10px] text-[var(--color-muted)]">{blurAll ? `${t("blur.all")} · ${(p.captions.blur_boxes || []).length}` : t("blur.frame")}</span>
-                <button onClick={() => setBlurAll(!blurAll)} className="mono text-[10px] text-[var(--color-accent)] hover:underline">
-                  {blurAll ? t("blur.frame") : `${t("blur.all")} (${(p.captions.blur_boxes || []).length})`}
-                </button>
-              </div>
-              {(p.captions.blur_boxes || []).length > 0 && (
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <button onClick={() => setSelBlurs((prev) => prev.size === (p.captions.blur_boxes || []).length ? new Set() : new Set((p.captions.blur_boxes || []).map((_, i) => i)))}
-                    className="px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">{t("sel.all")}</button>
-                  {selBlurs.size > 0 && (<>
-                    <span className="text-[11px] text-[var(--color-muted)]">{selBlurs.size} {t("sel.count")}</span>
-                    <button onClick={() => bulkDelIdx("del_blurs", selBlurs, () => setSelBlurs(new Set()))}
-                      className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-surface-2)] hover:text-[#ef4444] transition-colors"><Trash2 size={12} />{t("sel.del")}</button>
-                  </>)}
-                </div>
-              )}
-              <div className="space-y-1 max-h-[46vh] overflow-y-auto pr-1">
-                {(p.captions.blur_boxes || []).map((b, i) => ({ b, i }))
-                  .filter(({ b }) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4))
-                  .map(({ b, i }) => (
-                    <div key={i} onClick={() => { setSelBlur(i); setRendered(false); setScrub(Math.max(b.t0, 0)); }}
-                      className={`flex items-center gap-2 mono text-[10px] rounded px-2 py-1 cursor-pointer transition-colors ${selBlur === i ? "bg-[color-mix(in_oklab,var(--color-accent)_18%,transparent)] text-[var(--color-text)] ring-1 ring-[var(--color-accent)]" : "text-[var(--color-muted)] bg-[var(--color-surface-2)]/40 hover:text-[var(--color-text)]"} ${b.hidden ? "opacity-50" : ""} ${selBlurs.has(i) ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
-                      <button onClick={(e) => { e.stopPropagation(); setSelBlurs((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; }); }}
-                        className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selBlurs.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selBlurs.has(i) && <Check size={9} />}</button>
-                      <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, hidden: !b.hidden }); }}
-                        title={b.hidden ? t("blur.show") : t("blur.hide")}
-                        className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.hidden ? <EyeOff size={12} /> : <Eye size={12} />}</button>
-                      <span className="flex-1 truncate">#{i + 1} · {b.w}×{b.h} · {fmtT(b.t0)}{b.hidden ? ` · ${t("blur.off")}` : ""}</span>
-                      {b.fill && (
-                        <input type="color" value={b.fill} onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: e.target.value }); }}
-                          title={t("blur.fillColor")} className="w-4 h-4 shrink-0 p-0 border-0 bg-transparent rounded cursor-pointer" />
-                      )}
-                      <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: b.fill ? null : "#000000" }); }}
-                        title={b.fill ? t("blur.modeFill") : t("blur.modeBlur")}
-                        className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.fill ? <Square size={12} /> : <Droplet size={12} />}</button>
-                      <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
-                        <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: Math.max(scrub, 0) }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
-                        <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
-                        <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
-                        <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
-                      </span>
-                      <button onClick={(e) => { e.stopPropagation(); branch("blur_del", { idx: i }); setSelBlur(null); }} className="shrink-0 hover:text-[var(--color-warn)] transition-colors"><Trash2 size={12} /></button>
-                    </div>
-                  ))}
-                {!(p.captions.blur_boxes || []).some((b) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4)) &&
-                  <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
-              </div>
-              <button onClick={async () => { const fresh = await branch("blur_add", { x: Math.round((p.meta.width || 0) * 0.25), y: Math.round((p.meta.height || 0) * 0.45), w: Math.round((p.meta.width || 0) * 0.5), h: Math.round((p.meta.height || 0) * 0.08), t0: Math.max(0, scrub - 1), t1: scrub + 2 }); if (fresh) setSelBlur((fresh.captions.blur_boxes || []).length - 1); }}
-                className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
-                <Plus size={13} /> {t("blur.add")}
-              </button>
-            </div>
-          </div>
-        )}
-        {lane === "titles" && (
-          <div className="space-y-2">
-            {!(p.captions.titles || []).length && <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
-            {(p.captions.titles || []).length > 0 && (
-              <div className="flex items-center gap-1.5 mb-1">
-                <button onClick={() => setSelTitles((prev) => prev.size === (p.captions.titles || []).length ? new Set() : new Set((p.captions.titles || []).map((_, i) => i)))}
-                  className="px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">{t("sel.all")}</button>
-                {selTitles.size > 0 && (<>
-                  <span className="text-[11px] text-[var(--color-muted)]">{selTitles.size} {t("sel.count")}</span>
-                  <button onClick={() => bulkDelIdx("del_titles", selTitles, () => setSelTitles(new Set()))}
-                    className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-surface-2)] hover:text-[#ef4444] transition-colors"><Trash2 size={12} />{t("sel.del")}</button>
-                </>)}
-              </div>
-            )}
-            {(p.captions.titles || []).map((ti, i) => (
-              <div key={`${ti.start}_${ti.end}_${i}`} onClick={() => { setSelTitle(i); setRendered(false); setScrub(Math.max(ti.start, 0)); }}
-                className={`rounded-xl p-2.5 bg-[var(--color-surface-2)]/50 cursor-pointer transition-shadow ${selTitle === i ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
-                <div className="flex items-center gap-2 mono text-[10px] text-[var(--color-muted)] mb-1.5">
-                  <button onClick={() => setSelTitles((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
-                    className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selTitles.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selTitles.has(i) && <Check size={9} />}</button>
-                  <span className="tabnum">{fmtT(ti.start)} → {fmtT(ti.end)}</span>
-                  <button onClick={(e) => { e.stopPropagation(); branch("title_del", { idx: i }); setSelTitle(null); }} className="ml-auto hover:text-[var(--color-warn)] transition-colors" title="delete"><Trash2 size={12} /></button>
-                </div>
-                <input value={ti.tgt || ti.text} onChange={(e) => titleText(i, e.target.value)} onClick={(e) => e.stopPropagation()}
-                  onBlur={async (e) => { burstRef.current = null; setRendered(false); try { setProject(await api.patch(pid, { op: "title", idx: i, text: e.target.value, tgt: e.target.value })); bump(); } catch (err) { await surfaceErr(err); } }}
-                  className="w-full bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded p-1.5 text-[13px] focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
-                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                  <button onClick={() => branch("title", { idx: i, bold: !ti.bold })}
-                    className={`text-[11px] font-bold px-2 py-0.5 rounded border transition-colors ${ti.bold ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.bold")}</button>
-                  <button onClick={() => branch("title", { idx: i, italic: !ti.italic })}
-                    className={`text-[11px] italic px-2 py-0.5 rounded border transition-colors ${ti.italic ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.italic")}</button>
-                  <button onClick={() => branch("title", { idx: i, uppercase: !ti.uppercase })} title={t("style.caps")}
-                    className={`text-[11px] font-semibold px-2 py-0.5 rounded border transition-colors ${ti.uppercase ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>AA</button>
-                  <input type="color" value={ti.color || "#FFFFFF"} onChange={(e) => branch("title", { idx: i, color: e.target.value })}
-                    title={t("style.color")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-[var(--color-border)]" />
-                  <input type="color" value={ti.outline || "#000000"} onChange={(e) => branch("title", { idx: i, outline: e.target.value })}
-                    title={t("style.outline")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-dashed border-[var(--color-border)]" />
-                  <input key={`ow${i}-${ti.outline_w ?? "a"}`} type="number" min={0} max={20} defaultValue={ti.outline_w ?? undefined} placeholder={t("style.outlineW")} title={t("style.outlineWFull")}
-                    onBlur={(e) => branch("title", { idx: i, outline_w: e.target.value === "" ? null : parseInt(e.target.value) })}
-                    className="w-12 bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
-                  <select value={ti.shadow_dir ?? ""} title={t("style.shadow")}
-                    onChange={(e) => branch("title", { idx: i, shadow_dir: e.target.value === "" ? null : parseInt(e.target.value) })}
-                    className="bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
-                    {SHADOW_DIRS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                  </select>
-                  <input key={`sz${i}-${ti.size_px ?? "a"}`} type="number" min={12} max={300} defaultValue={ti.size_px ?? undefined} placeholder="px" title={t("style.size")}
-                    onBlur={(e) => branch("title", { idx: i, size_px: e.target.value ? parseInt(e.target.value) : null })}
-                    className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
-                  <select value={ti.font || ""} onChange={(e) => branch("title", { idx: i, font: e.target.value })}
-                    className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
-                    <option value="">{t("style.font")}</option>
-                    {Object.keys(fonts).map((f) => <option key={f} value={f}>{f}</option>)}
-                  </select>
-                  <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden">
-                    {([["left", AlignLeft, "edit.alignLeft"], ["center", AlignCenter, "edit.alignCenter"], ["right", AlignRight, "edit.alignRight"]] as const).map(([a, Ic, k]) => (
-                      <button key={a} onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, align: a }); }} title={t(k)}
-                        className={`px-1.5 py-1 transition-colors ${(ti.align || "center") === a ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}><Ic size={12} /></button>
-                    ))}
-                  </span>
-                  <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
-                    <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: scrub }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
-                  </span>
-                </div>
-              </div>
-            ))}
-            <button onClick={async () => { const fresh = await branch("title_add", { text: "Title", x: Math.round((p.meta.width || 0) * 0.15), y: Math.round((p.meta.height || 0) * 0.4), w: Math.round((p.meta.width || 0) * 0.7), h: Math.round((p.meta.height || 0) * 0.1), t0: Math.max(0, scrub - 0.5), t1: scrub + 3 }); if (fresh) setSelTitle((fresh.captions.titles || []).length - 1); }}
-              className="w-full inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
-              <Plus size={13} /> {t("titles.add")}
-            </button>
-          </div>
-        )}
-        </div>
-      </aside>
-
-      <main className="flex flex-col min-w-0 min-h-0 overflow-hidden">
+    <div className="flex-1 grid grid-cols-[1fr_420px] min-h-0">
+      {/* Левая / Центральная секция: Видеопревью + Таймлайн на всю ширину */}
+      <main className="flex flex-col min-w-0 min-h-0 overflow-hidden border-r border-[var(--color-border)]">
         <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
           {(() => { const s = document.getElementById("editor-modes-slot"); return s ? createPortal(
           <div className="inline-flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] shrink-0">
@@ -3973,7 +3636,7 @@ function Editor() {
               Оба скрабят единый scrub. Время/транспорт — в баре ниже. */}
           {/* Интерактивный таймлайн снизу (в стиле ElevenLabs / NLE): визуализация плашек фраз + перетаскивание / растягивание */}
           {!audioOnly && (
-            <div className="shrink-0 px-4 pb-1.5 flex flex-col gap-1.5">
+            <div className="shrink-0 px-2 pb-1 flex flex-col gap-1.5">
               <input type="range" min={0} max={Math.max(0.1, p.meta.duration || 0)} step={0.05} value={Math.min(scrub, p.meta.duration || 0)}
                 onChange={(e) => onSeek(parseFloat(e.target.value))}
                 className="w-full h-1 accent-[var(--color-accent)] cursor-pointer" />
@@ -4004,319 +3667,700 @@ function Editor() {
         </div>
       </main>
 
-      <aside data-kb-scroll className="border-l border-[var(--color-border)] overflow-y-auto p-4 bg-[var(--color-surface)] text-sm">
-        <SectionLabel>{t("preset.title")}</SectionLabel>
-        <div className="grid grid-cols-2 gap-1.5 mb-5 max-h-52 overflow-y-auto pr-1">
-          <button onClick={() => branch("preset", { name: "" })}
-            className={`text-[11px] px-2 py-1.5 rounded-lg border transition-colors ${!p.captions.preset?.name ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
-            {t("preset.original")}
-          </button>
-          {Object.keys(presets).map((name) => (
-            <button key={name} onClick={() => branch("preset", { name })}
-              className={`text-[11px] px-2 py-1.5 rounded-lg border truncate transition-colors ${p.captions.preset?.name === name ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
-              {name}
+      {/* Правая панель: Вкладки «Субтитры» и «Настройка генерации» */}
+      <aside className="flex flex-col min-h-0 overflow-hidden bg-[var(--color-surface)]">
+        {/* Главный переключатель вкладок инспектора */}
+        <div className="shrink-0 px-3 pt-3 pb-2.5 border-b border-[var(--color-border)]">
+          <div className="flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[12px]">
+            <button
+              onClick={() => setEditorTab("subs")}
+              className={`flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md font-medium transition-colors ${
+                editorTab === "subs"
+                  ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold shadow-sm"
+                  : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+              }`}
+            >
+              <FileText size={14} />
+              <span>{t("editor.tabSubtitles")}</span>
             </button>
-          ))}
-        </div>
-        <SectionLabel>{t("editor.style")}</SectionLabel>
-        <div className="space-y-3.5">
-          {/* Шрифт */}
-          <Row label={t("style.font")}>
-            <select value={ss.font || "Montserrat"} onChange={(e) => branch("caption", { font: e.target.value })}
-              className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[12px] max-w-[160px] focus:border-[var(--color-accent)] focus:outline-none transition-colors"
-              title={fonts[ss.font || "Montserrat"] || ""}>
-              {Object.keys(fonts).length ? Object.keys(fonts).map((f) => <option key={f} value={f}>{f}</option>)
-                                         : <option value={ss.font || "Montserrat"}>{ss.font || "Montserrat"}</option>}
-            </select>
-          </Row>
-
-          {/* Жирный, Курсив, CAPS, Выравнивание */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <button onClick={() => branch("caption", { bold: !ss.bold })}
-              className={`px-2 py-1 rounded-md text-[11px] font-bold border transition-colors ${ss.bold ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_10%,transparent)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
-              {t("style.bold")}
+            <button
+              onClick={() => setEditorTab("gen")}
+              className={`flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 rounded-md font-medium transition-colors ${
+                editorTab === "gen"
+                  ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold shadow-sm"
+                  : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+              }`}
+            >
+              <Sliders size={14} />
+              <span>{t("editor.tabGeneration")}</span>
             </button>
-            <button onClick={() => branch("caption", { italic: !ss.italic })}
-              className={`px-2 py-1 rounded-md text-[11px] italic border transition-colors ${ss.italic ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_10%,transparent)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
-              {t("style.italic")}
-            </button>
-            <button onClick={() => branch("caption", { uppercase: !ss.uppercase })}
-              className={`px-2 py-1 rounded-md text-[11px] font-semibold border transition-colors ${ss.uppercase ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_10%,transparent)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
-              AA
-            </button>
-            <span className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden shrink-0 ml-auto">
-              {([["left", AlignLeft, "edit.alignLeft"], ["center", AlignCenter, "edit.alignCenter"], ["right", AlignRight, "edit.alignRight"]] as const).map(([a, Ic, k]) => (
-                <button key={a} onClick={() => branch("caption", { align: a })} title={t(k)}
-                  className={`px-1.5 py-1 transition-colors ${(ss.align || "center") === a ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}><Ic size={12} /></button>
-              ))}
-            </span>
           </div>
+        </div>
 
-          {/* Цвет текста */}
-          <Row label={t("style.color")}>
-            <div className="flex items-center gap-2">
-              <input type="color" value={ss.color || "#FFFFFF"} onChange={(e) => branch("caption", { color: e.target.value })}
-                className="bg-transparent w-8 h-6 rounded cursor-pointer border border-[var(--color-border)]" />
-              <span className="mono text-[11px] text-[var(--color-muted)]">{ss.color || "#FFFFFF"}</span>
-            </div>
-          </Row>
-
-          {/* Обводка и тень */}
-          <Row label={t("style.outline")}>
-            <div className="flex items-center gap-1.5">
-              <input type="color" value={ss.outline || "#000000"} onChange={(e) => branch("caption", { outline: e.target.value })}
-                title={t("style.outline")} className="bg-transparent w-8 h-6 rounded cursor-pointer border border-dashed border-[var(--color-border)]" />
-              <input key={`sow-${ss.outline_w ?? "a"}`} type="number" min={0} max={20} defaultValue={ss.outline_w ?? 2}
-                placeholder={t("style.outlineW")} title={t("style.outlineWFull")}
-                onBlur={(e) => branch("caption", { outline_w: e.target.value === "" ? null : parseInt(e.target.value) })}
-                className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
-              <select value={ss.shadow_dir ?? ""} title={t("style.shadow")}
-                onChange={(e) => branch("caption", { shadow_dir: e.target.value === "" ? null : parseInt(e.target.value) })}
-                className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
-                {SHADOW_DIRS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
-            </div>
-          </Row>
-
-          {/* Подложка (плашка) */}
-          <Row label="Подложка">
-            <div className="flex items-center gap-2">
-              <Toggle label="" on={!!ss.plate} onClick={() => branch("caption", { plate: !ss.plate })} />
-              {ss.plate && (
-                <input type="color" value={ss.plate_color || "#000000"} onChange={(e) => branch("caption", { plate_color: e.target.value })}
-                  title="Цвет подложки" className="bg-transparent w-7 h-5 rounded cursor-pointer border border-[var(--color-border)]" />
-              )}
-            </div>
-          </Row>
-
-          {/* Размер шрифта */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[var(--color-muted)]">{t("style.size")}</span>
-              <div className="flex items-center gap-1">
-                <input type="number" min={12} max={300}
-                  value={sizeDraft ?? ss.size_px ?? Math.round((p.meta.height || 1280) / 14)}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    if (!isNaN(val)) setSizeDraft(val);
-                  }}
-                  onBlur={async () => {
-                    if (sizeDraft != null) { await branch("caption", { size_px: sizeDraft }); setSizeDraft(null); }
-                  }}
-                  className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] text-right font-mono focus:border-[var(--color-accent)] focus:outline-none" />
-                <span className="mono text-[11px] text-[var(--color-muted)]">px</span>
+        {editorTab === "subs" ? (
+          <>
+            {/* Подвкладки: Субтитры | Маска | Тайтлы */}
+            <div className="shrink-0 px-3 pt-2 pb-2 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
+              <div className="inline-flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[11px] w-full">
+                {([["subs", t("mode.subtitles")], ["blur", `${t("blur.title")} ${(p.captions.blur_boxes || []).length}`],
+                  ["titles", `${t("titles.tab")} ${(p.captions.titles || []).length}`]] as const).map(([k, lbl]) => (
+                  <button key={k} onClick={() => setLane(k as typeof lane)}
+                    className={`flex-1 px-2 py-1 rounded-md transition-colors text-center truncate ${lane === k ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
+                    {lbl}
+                  </button>
+                ))}
               </div>
             </div>
-            <input type="range" min={16} max={Math.round((p.meta.height || 1280) / 5)}
-              value={sizeDraft ?? ss.size_px ?? Math.round((p.meta.height || 1280) / 14)}
-              onChange={(e) => setSizeDraft(parseInt(e.target.value))}
-              onPointerUp={async () => { if (sizeDraft != null) { await branch("caption", { size_px: sizeDraft }); setSizeDraft(null); } }}
-              className="w-full accent-[var(--color-accent)] cursor-pointer" />
-          </div>
 
-          {/* Размытие оригинальных субтитров (блюр-подложка) */}
-          {!audioOnly && (
-            <div className="pt-3 border-t border-[var(--color-border)]/50 space-y-2">
-              <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none" title={t("editor.subBlurHint")}>
-                <input
-                  type="checkbox"
-                  checked={p.render.blur}
-                  onChange={(e) => branch("sub_blur", { on: e.target.checked })}
-                  className="accent-[var(--color-accent)] w-3.5 h-3.5"
-                />
-                <span className="font-medium text-[var(--color-text)]">{t("editor.subBlur")}</span>
-              </label>
-              {p.render.blur && (
-                <div className="pl-5 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
-                    <div className="flex items-center gap-1">
+            {/* Скролл-тело списка субтитров */}
+            <div data-kb-scroll className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4">
+              {lane === "subs" && (
+                <div className="space-y-2">
+                  {(() => {
+                    const spks = [...new Set(p.segments.map((x) => x.speaker ?? "0"))].sort();
+                    const idsOf = (spk: string | null) => p.segments.filter((x) => spk === null || (x.speaker ?? "0") === spk).map((x) => x.id);
+                    const toggleMany = (ids: string[]) => setSelSegs((prev) => {
+                      const next = new Set(prev), all = ids.length > 0 && ids.every((i) => next.has(i));
+                      ids.forEach((i) => (all ? next.delete(i) : next.add(i)));
+                      return next;
+                    });
+                    const chip = "px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors";
+                    return (
+                      <div className="sticky top-0 z-20 -mx-3 px-3 pt-1 pb-2 mb-1 space-y-1.5 bg-[var(--color-surface)] border-b border-[var(--color-border)]">
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mr-0.5">{t("sel.pick")}</span>
+                          <button onClick={() => toggleMany(idsOf(null))} className={chip}>{t("sel.all")}</button>
+                          {spks.length > 1 && spks.map((spk) => <button key={spk} onClick={() => toggleMany(idsOf(spk))} className={chip}>SPK {spk}</button>)}
+
+                          <div className="ml-auto inline-flex items-center gap-1.5 shrink-0">
+                            <button onClick={handleSaveSubtitles} title="Сохранить субтитры в файл (.srt)"
+                              className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
+                              <Save size={13} />
+                              <span className="text-[10px] font-bold">SRT</span>
+                            </button>
+                            <button onClick={handleSaveAss} title="Сохранить субтитры в файл (.ass)"
+                              className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
+                              <Save size={13} />
+                              <span className="text-[10px] font-bold">ASS</span>
+                            </button>
+                            <label title="Импортировать файл субтитров (.srt, .ass, .vtt)" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold cursor-pointer hover:brightness-110 transition shrink-0">
+                              <Upload size={12} />
+                              <span>{t("import.importShort")}</span>
+                              <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
+                            </label>
+                          </div>
+                        </div>
+                        {selSegs.size > 0 && (
+                          <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-accent)]/50 bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)] px-2 py-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[12px] font-medium">{selSegs.size} {t("sel.count")}</span>
+                              <button onClick={() => setSelSegs(new Set())} className="text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><X size={14} /></button>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <select value="" onChange={(e) => { if (e.target.value) { doBulkSetSpeaker(e.target.value); e.target.value = ""; } }} disabled={regenId !== null}
+                                title={t("sel.spkHint")}
+                                className="bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[12px] rounded-md px-1.5 py-1 text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none transition-colors cursor-pointer disabled:opacity-40">
+                                <option value="">{t("sel.spkPlaceholder")}</option>
+                                {speakers.map((spk) => <option key={spk} value={spk}>SPK {spk}</option>)}
+                                <option value="__new__">{t("sel.spkNew")}</option>
+                              </select>
+                              <button onClick={() => bulkSeg("keep_segments", { keep: true })} disabled={regenId !== null}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><Music size={13} />{t("sel.keep")}</button>
+                              <button onClick={() => bulkSeg("hide_segments", { hidden: true })} disabled={regenId !== null}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><EyeOff size={13} />{t("sel.hide")}</button>
+                              <button onClick={doBulkRegen} disabled={regenId !== null} title={t("sel.regenHint")}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
+                                {regenId === "__bulk__" ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
+                                <span>{t("sel.regen")}</span>
+                              </button>
+                              <button onClick={() => bulkSeg("del_segments")} disabled={regenId !== null}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {p.segments.map((seg, idx) => {
+                    const on = isActive(seg);
+                    return (
+                      <div key={seg.id} ref={on ? activeRef : undefined}
+                        onDragOver={(e) => { e.preventDefault(); }}
+                        onDrop={(e) => { e.preventDefault(); dropSeg(seg.id); }}
+                        onClick={() => { setRendered(false); setScrub(seg.start); }}
+                        className={`rounded-xl p-2 border-l-2 transition-colors cursor-pointer ${dragSegId === seg.id ? "opacity-30 border-dashed border-[var(--color-accent)]" : ""} ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${on ? "bg-[var(--color-surface-2)] border-[var(--color-accent)]" : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"}`}>
+                        <div className="flex items-center justify-between gap-1">
+                          <div className="flex items-center gap-1 flex-1 min-w-0">
+                            <button type="button" draggable
+                              onDragStart={(e) => { e.dataTransfer.setData("text/plain", seg.id); setDragSegId(seg.id); }}
+                              onClick={(e) => e.stopPropagation()}
+                              title="Перетащить фразу (Drag & Drop)"
+                              className="cursor-grab active:cursor-grabbing text-[var(--color-muted)] hover:text-[var(--color-accent)] p-0.5 rounded shrink-0">
+                              <GripVertical size={13} />
+                            </button>
+                            <span className="mono px-1.5 py-0.5 rounded bg-[var(--color-surface)] text-[9px] font-bold text-[var(--color-muted)] border border-[var(--color-border)] shrink-0 opacity-70">#{idx + 1}</span>
+                            <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "up"); }} disabled={idx === 0} title="Переместить вверх"
+                              className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronUp size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "down"); }} disabled={idx === p.segments.length - 1} title="Переместить вниз"
+                              className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronDown size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; }); }}
+                              className={`grid place-items-center w-3.5 h-3.5 rounded shrink-0 border transition-colors ${selSegs.has(seg.id) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>
+                              {selSegs.has(seg.id) && <Check size={10} />}</button>
+                            {seg.speaker != null && <span className="mono px-1 py-0.5 rounded bg-[var(--color-overlay)] text-[9px] font-semibold text-[var(--color-muted)] shrink-0">SPK {seg.speaker}</span>}
+                            <span className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"}`}>{fmtT(seg.start)} → {fmtT(seg.end)}</span>
+                          </div>
+                          <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
+                            {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
+                            <button onClick={(e) => { e.stopPropagation(); playSeg(seg); }} title={t("seg.play")}
+                              className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><Play size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); doRegen(seg.id); }} disabled={regenId !== null} title={t("seg.regen")}
+                              className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
+                              {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); doKeepSeg(seg.id); }} disabled={regenId !== null} title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
+                              className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}><Music size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); doHideSeg(seg.id); }} disabled={regenId !== null} title={seg.hidden ? t("seg.show") : t("seg.hide")}
+                              className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
+                              {seg.hidden ? <EyeOff size={13} /> : <Eye size={13} />}</button>
+                            <button onClick={(e) => { e.stopPropagation(); doDelSeg(seg.id); }} disabled={regenId !== null} title={t("seg.del")}
+                              className="p-0.5 text-[var(--color-muted)] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
+                          </div>
+                        </div>
+                        <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
+                        <AutoGrowTextarea value={seg.tgt_text} onChange={(e) => patchSeg(seg.id, e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
+                          className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
+                        {on && (
+                          <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
+                            <Clock size={11} className="text-[var(--color-muted)] shrink-0" />
+                            <input type="number" step={0.1} min={0} defaultValue={seg.start.toFixed(2)} key={`st${seg.id}-${seg.start}`}
+                              onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.start) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, start: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
+                              className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
+                            <ArrowRight size={11} className="text-[var(--color-muted)] shrink-0" />
+                            <input type="number" step={0.1} min={0} defaultValue={seg.end.toFixed(2)} key={`en${seg.id}-${seg.end}`}
+                              onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.end) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, end: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
+                              className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
+                            <span className="text-[10px] text-[var(--color-muted)]">{t("seg.seconds")}</span>
+                          </div>
+                        )}
+                        {(on || selSegs.has(seg.id)) && !seg.keep_original && (
+                          <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.speakerHint")}>
+                            <Users size={11} className="text-[var(--color-muted)] shrink-0" />
+                            <select value={seg.speaker ?? ""}
+                              onChange={async (e) => {
+                                let val = e.target.value;
+                                if (val === "__new__") {
+                                  const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
+                                  val = String(nums.length ? Math.max(...nums) + 1 : 1);
+                                }
+                                setRendered(false);
+                                try { setProject(await api.patch(pid, { op: "segment", id: seg.id, speaker: val })); bump(); } catch (err) { await surfaceErr(err); }
+                              }}
+                              className="flex-1 min-w-0 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none transition-colors">
+                              {seg.speaker == null && <option value="">—</option>}
+                              {speakers.map((s) => <option key={s} value={s}>SPK {s}</option>)}
+                              <option value="__new__">＋ {t("seg.newSpeaker")}</option>
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <button onClick={addSeg} disabled={regenId !== null} title={t("seg.addHint")}
+                    className="w-full mt-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
+                    <Plus size={14} />{t("seg.add")}
+                  </button>
+                  <label title="Загрузить готовые субтитры из файла (.srt, .ass)"
+                    className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] cursor-pointer transition-colors">
+                    <Upload size={14} /> Импортировать субтитры (.srt, .ass)
+                    <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
+                  </label>
+                </div>
+              )}
+              {lane === "blur" && (
+                <div className="space-y-2">
+                  <Toggle label={t("blur.on")} on={p.render.blur} onClick={() => branch("blur_enable", { on: !p.render.blur })} />
+                  {p.render.blur && (
+                    <div className="py-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="mono text-[10px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
+                        <span className="mono text-[10px] text-[var(--color-text)] font-semibold">{blurSigmaDraft ?? p.render.blur_sigma ?? 60} σ</span>
+                      </div>
                       <input
-                        type="number"
+                        type="range"
                         min={5}
                         max={150}
+                        step={5}
                         value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value);
-                          if (!isNaN(val)) setBlurSigmaDraft(val);
-                        }}
-                        onBlur={async () => {
+                        onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
+                        onPointerUp={async () => {
                           if (blurSigmaDraft != null) {
-                            await branch("sub_blur", { on: p.render.blur, sigma: blurSigmaDraft });
+                            await branch("blur_enable", { on: p.render.blur, sigma: blurSigmaDraft });
                             setBlurSigmaDraft(null);
                           }
                         }}
-                        className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] text-right font-mono focus:border-[var(--color-accent)] focus:outline-none"
+                        className="w-full accent-[var(--color-accent)] cursor-pointer"
                       />
-                      <span className="mono text-[11px] text-[var(--color-muted)]">σ</span>
                     </div>
+                  )}
+                  <div className={p.render.blur ? "" : "opacity-40 pointer-events-none"}>
+                    <div className="flex items-center justify-between mt-2 mb-1.5">
+                      <span className="mono text-[10px] text-[var(--color-muted)]">{blurAll ? `${t("blur.all")} · ${(p.captions.blur_boxes || []).length}` : t("blur.frame")}</span>
+                      <button onClick={() => setBlurAll(!blurAll)} className="mono text-[10px] text-[var(--color-accent)] hover:underline">
+                        {blurAll ? t("blur.frame") : `${t("blur.all")} (${(p.captions.blur_boxes || []).length})`}
+                      </button>
+                    </div>
+                    {(p.captions.blur_boxes || []).length > 0 && (
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <button onClick={() => setSelBlurs((prev) => prev.size === (p.captions.blur_boxes || []).length ? new Set() : new Set((p.captions.blur_boxes || []).map((_, i) => i)))}
+                          className="px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">{t("sel.all")}</button>
+                        {selBlurs.size > 0 && (<>
+                          <span className="text-[11px] text-[var(--color-muted)]">{selBlurs.size} {t("sel.count")}</span>
+                          <button onClick={() => bulkDelIdx("del_blurs", selBlurs, () => setSelBlurs(new Set()))}
+                            className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-surface-2)] hover:text-[#ef4444] transition-colors"><Trash2 size={12} /></button>
+                        </>)}
+                      </div>
+                    )}
+                    <div className="space-y-1 max-h-[46vh] overflow-y-auto pr-1">
+                      {(p.captions.blur_boxes || []).map((b, i) => ({ b, i }))
+                        .filter(({ b }) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4))
+                        .map(({ b, i }) => (
+                          <div key={i} onClick={() => { setSelBlur(i); setRendered(false); setScrub(Math.max(b.t0, 0)); }}
+                            className={`flex items-center gap-2 mono text-[10px] rounded px-2 py-1 cursor-pointer transition-colors ${selBlur === i ? "bg-[color-mix(in_oklab,var(--color-accent)_18%,transparent)] text-[var(--color-text)] ring-1 ring-[var(--color-accent)]" : "text-[var(--color-muted)] bg-[var(--color-surface-2)]/40 hover:text-[var(--color-text)]"} ${b.hidden ? "opacity-50" : ""} ${selBlurs.has(i) ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
+                            <button onClick={(e) => { e.stopPropagation(); setSelBlurs((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; }); }}
+                              className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selBlurs.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selBlurs.has(i) && <Check size={9} />}</button>
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, hidden: !b.hidden }); }}
+                              title={b.hidden ? t("blur.show") : t("blur.hide")}
+                              className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.hidden ? <EyeOff size={12} /> : <Eye size={12} />}</button>
+                            <span className="flex-1 truncate">#{i + 1} · {b.w}×{b.h} · {fmtT(b.t0)}{b.hidden ? ` · ${t("blur.off")}` : ""}</span>
+                            {b.fill && (
+                              <input type="color" value={b.fill} onClick={(e) => e.stopPropagation()}
+                                onChange={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: e.target.value }); }}
+                                title={t("blur.fillColor")} className="w-4 h-4 shrink-0 p-0 border-0 bg-transparent rounded cursor-pointer" />
+                            )}
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: b.fill ? null : "#000000" }); }}
+                              title={b.fill ? t("blur.modeFill") : t("blur.modeBlur")}
+                              className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.fill ? <Square size={12} /> : <Droplet size={12} />}</button>
+                            <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
+                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: Math.max(scrub, 0) }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
+                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
+                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
+                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
+                            </span>
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur_del", { idx: i }); setSelBlur(null); }} className="shrink-0 hover:text-[var(--color-warn)] transition-colors"><Trash2 size={12} /></button>
+                          </div>
+                        ))}
+                      {!(p.captions.blur_boxes || []).some((b) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4)) &&
+                        <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
+                    </div>
+                    <button onClick={async () => { const fresh = await branch("blur_add", { x: Math.round((p.meta.width || 0) * 0.25), y: Math.round((p.meta.height || 0) * 0.45), w: Math.round((p.meta.width || 0) * 0.5), h: Math.round((p.meta.height || 0) * 0.08), t0: Math.max(0, scrub - 1), t1: scrub + 2 }); if (fresh) setSelBlur((fresh.captions.blur_boxes || []).length - 1); }}
+                      className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
+                      <Plus size={13} /> {t("blur.add")}
+                    </button>
                   </div>
-                  <input
-                    type="range"
-                    min={5}
-                    max={150}
-                    step={5}
-                    value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
-                    onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
-                    onPointerUp={async () => {
-                      if (blurSigmaDraft != null) {
-                        await branch("sub_blur", { on: p.render.blur, sigma: blurSigmaDraft });
-                        setBlurSigmaDraft(null);
-                      }
-                    }}
-                    className="w-full accent-[var(--color-accent)] cursor-pointer"
-                  />
+                </div>
+              )}
+              {lane === "titles" && (
+                <div className="space-y-2">
+                  {!(p.captions.titles || []).length && <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
+                  {(p.captions.titles || []).length > 0 && (
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <button onClick={() => setSelTitles((prev) => prev.size === (p.captions.titles || []).length ? new Set() : new Set((p.captions.titles || []).map((_, i) => i)))}
+                        className="px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">{t("sel.all")}</button>
+                      {selTitles.size > 0 && (<>
+                        <span className="text-[11px] text-[var(--color-muted)]">{selTitles.size} {t("sel.count")}</span>
+                        <button onClick={() => bulkDelIdx("del_titles", selTitles, () => setSelTitles(new Set()))}
+                          className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-surface-2)] hover:text-[#ef4444] transition-colors"><Trash2 size={12} /></button>
+                      </>)}
+                    </div>
+                  )}
+                  {(p.captions.titles || []).map((ti, i) => (
+                    <div key={`${ti.start}_${ti.end}_${i}`} onClick={() => { setSelTitle(i); setRendered(false); setScrub(Math.max(ti.start, 0)); }}
+                      className={`rounded-xl p-2.5 bg-[var(--color-surface-2)]/50 cursor-pointer transition-shadow ${selTitle === i ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
+                      <div className="flex items-center gap-2 mono text-[10px] text-[var(--color-muted)] mb-1.5">
+                        <button onClick={() => setSelTitles((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
+                          className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selTitles.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selTitles.has(i) && <Check size={9} />}</button>
+                        <span className="tabnum">{fmtT(ti.start)} → {fmtT(ti.end)}</span>
+                        <button onClick={(e) => { e.stopPropagation(); branch("title_del", { idx: i }); setSelTitle(null); }} className="ml-auto hover:text-[var(--color-warn)] transition-colors" title="delete"><Trash2 size={12} /></button>
+                      </div>
+                      <input value={ti.tgt || ti.text} onChange={(e) => titleText(i, e.target.value)} onClick={(e) => e.stopPropagation()}
+                        onBlur={async (e) => { burstRef.current = null; setRendered(false); try { setProject(await api.patch(pid, { op: "title", idx: i, text: e.target.value, tgt: e.target.value })); bump(); } catch (err) { await surfaceErr(err); } }}
+                        className="w-full bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded p-1.5 text-[13px] focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
+                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                        <button onClick={() => branch("title", { idx: i, bold: !ti.bold })}
+                          className={`text-[11px] font-bold px-2 py-0.5 rounded border transition-colors ${ti.bold ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.bold")}</button>
+                        <button onClick={() => branch("title", { idx: i, italic: !ti.italic })}
+                          className={`text-[11px] italic px-2 py-0.5 rounded border transition-colors ${ti.italic ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.italic")}</button>
+                        <button onClick={() => branch("title", { idx: i, uppercase: !ti.uppercase })} title={t("style.caps")}
+                          className={`text-[11px] font-semibold px-2 py-0.5 rounded border transition-colors ${ti.uppercase ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>AA</button>
+                        <input type="color" value={ti.color || "#FFFFFF"} onChange={(e) => branch("title", { idx: i, color: e.target.value })}
+                          title={t("style.color")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-[var(--color-border)]" />
+                        <input type="color" value={ti.outline || "#000000"} onChange={(e) => branch("title", { idx: i, outline: e.target.value })}
+                          title={t("style.outline")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-dashed border-[var(--color-border)]" />
+                        <input key={`ow${i}-${ti.outline_w ?? "a"}`} type="number" min={0} max={20} defaultValue={ti.outline_w ?? undefined} placeholder={t("style.outlineW")} title={t("style.outlineWFull")}
+                          onBlur={(e) => branch("title", { idx: i, outline_w: e.target.value === "" ? null : parseInt(e.target.value) })}
+                          className="w-12 bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
+                        <select value={ti.shadow_dir ?? ""} title={t("style.shadow")}
+                          onChange={(e) => branch("title", { idx: i, shadow_dir: e.target.value === "" ? null : parseInt(e.target.value) })}
+                          className="bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
+                          {SHADOW_DIRS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                        </select>
+                        <input key={`sz${i}-${ti.size_px ?? "a"}`} type="number" min={12} max={300} defaultValue={ti.size_px ?? undefined} placeholder="px" title={t("style.size")}
+                          onBlur={(e) => branch("title", { idx: i, size_px: e.target.value ? parseInt(e.target.value) : null })}
+                          className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
+                        <select value={ti.font || ""} onChange={(e) => branch("title", { idx: i, font: e.target.value })}
+                          className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
+                          <option value="">{t("style.font")}</option>
+                          {Object.keys(fonts).map((f) => <option key={f} value={f}>{f}</option>)}
+                        </select>
+                        <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden">
+                          {([["left", AlignLeft, "edit.alignLeft"], ["center", AlignCenter, "edit.alignCenter"], ["right", AlignRight, "edit.alignRight"]] as const).map(([a, Ic, k]) => (
+                            <button key={a} onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, align: a }); }} title={t(k)}
+                              className={`px-1.5 py-1 transition-colors ${(ti.align || "center") === a ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}><Ic size={12} /></button>
+                          ))}
+                        </span>
+                        <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
+                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: scrub }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
+                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
+                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
+                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={async () => { const fresh = await branch("title_add", { text: "Title", x: Math.round((p.meta.width || 0) * 0.15), y: Math.round((p.meta.height || 0) * 0.4), w: Math.round((p.meta.width || 0) * 0.7), h: Math.round((p.meta.height || 0) * 0.1), t0: Math.max(0, scrub - 0.5), t1: scrub + 3 }); if (fresh) setSelTitle((fresh.captions.titles || []).length - 1); }}
+                    className="w-full inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
+                    <Plus size={13} /> {t("titles.add")}
+                  </button>
                 </div>
               )}
             </div>
-          )}
+          </>
+        ) : (
+          /* Контент вкладки «Настройка генерации» */
+          <div data-kb-scroll className="flex-1 min-h-0 overflow-y-auto p-4 bg-[var(--color-surface)] text-sm space-y-5">
+            <div>
+              <SectionLabel>{t("preset.title")}</SectionLabel>
+              <div className="grid grid-cols-2 gap-1.5 mb-2 max-h-44 overflow-y-auto pr-1">
+                <button onClick={() => branch("preset", { name: "" })}
+                  className={`text-[11px] px-2 py-1.5 rounded-lg border transition-colors ${!p.captions.preset?.name ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
+                  {t("preset.original")}
+                </button>
+                {Object.keys(presets).map((name) => (
+                  <button key={name} onClick={() => branch("preset", { name })}
+                    className={`text-[11px] px-2 py-1.5 rounded-lg border truncate transition-colors ${p.captions.preset?.name === name ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
+                    {name}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-        </div>
-        {mode === "funny" && (
-          <div className="mt-6">
-            <SectionLabel>{t("remix.title")}</SectionLabel>
-            <textarea value={remixText} onChange={(e) => setRemixText(e.target.value)} rows={2}
-              placeholder={t("remix.placeholder")}
-              className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-2 text-[13px] resize-none focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
-            <button onClick={doRemix} disabled={remixing || !remixText.trim()}
-              className="mt-2 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">
-              {remixing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}{t("remix.apply")}
-            </button>
-            <div className="mt-1.5 text-[11px] text-[var(--color-muted)] leading-snug">{t("remix.hint")}</div>
+            <div>
+              <SectionLabel>{t("editor.style")}</SectionLabel>
+              <div className="space-y-3.5">
+                {/* Шрифт */}
+                <Row label={t("style.font")}>
+                  <select value={ss.font || "Montserrat"} onChange={(e) => branch("caption", { font: e.target.value })}
+                    className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[12px] max-w-[160px] focus:border-[var(--color-accent)] focus:outline-none transition-colors"
+                    title={fonts[ss.font || "Montserrat"] || ""}>
+                    {Object.keys(fonts).length ? Object.keys(fonts).map((f) => <option key={f} value={f}>{f}</option>)
+                                               : <option value={ss.font || "Montserrat"}>{ss.font || "Montserrat"}</option>}
+                  </select>
+                </Row>
+
+                {/* Жирный, Курсив, CAPS, Выравнивание */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button onClick={() => branch("caption", { bold: !ss.bold })}
+                    className={`px-2 py-1 rounded-md text-[11px] font-bold border transition-colors ${ss.bold ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_10%,transparent)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
+                    {t("style.bold")}
+                  </button>
+                  <button onClick={() => branch("caption", { italic: !ss.italic })}
+                    className={`px-2 py-1 rounded-md text-[11px] italic border transition-colors ${ss.italic ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_10%,transparent)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
+                    {t("style.italic")}
+                  </button>
+                  <button onClick={() => branch("caption", { uppercase: !ss.uppercase })}
+                    className={`px-2 py-1 rounded-md text-[11px] font-semibold border transition-colors ${ss.uppercase ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_10%,transparent)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
+                    AA
+                  </button>
+                  <span className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden shrink-0 ml-auto">
+                    {([["left", AlignLeft, "edit.alignLeft"], ["center", AlignCenter, "edit.alignCenter"], ["right", AlignRight, "edit.alignRight"]] as const).map(([a, Ic, k]) => (
+                      <button key={a} onClick={() => branch("caption", { align: a })} title={t(k)}
+                        className={`px-1.5 py-1 transition-colors ${(ss.align || "center") === a ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}><Ic size={12} /></button>
+                    ))}
+                  </span>
+                </div>
+
+                {/* Цвет текста */}
+                <Row label={t("style.color")}>
+                  <div className="flex items-center gap-2">
+                    <input type="color" value={ss.color || "#FFFFFF"} onChange={(e) => branch("caption", { color: e.target.value })}
+                      className="bg-transparent w-8 h-6 rounded cursor-pointer border border-[var(--color-border)]" />
+                    <span className="mono text-[11px] text-[var(--color-muted)]">{ss.color || "#FFFFFF"}</span>
+                  </div>
+                </Row>
+
+                {/* Обводка и тень */}
+                <Row label={t("style.outline")}>
+                  <div className="flex items-center gap-1.5">
+                    <input type="color" value={ss.outline || "#000000"} onChange={(e) => branch("caption", { outline: e.target.value })}
+                      title={t("style.outline")} className="bg-transparent w-8 h-6 rounded cursor-pointer border border-dashed border-[var(--color-border)]" />
+                    <input key={`sow-${ss.outline_w ?? "a"}`} type="number" min={0} max={20} defaultValue={ss.outline_w ?? 2}
+                      placeholder={t("style.outlineW")} title={t("style.outlineWFull")}
+                      onBlur={(e) => branch("caption", { outline_w: e.target.value === "" ? null : parseInt(e.target.value) })}
+                      className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
+                    <select value={ss.shadow_dir ?? ""} title={t("style.shadow")}
+                      onChange={(e) => branch("caption", { shadow_dir: e.target.value === "" ? null : parseInt(e.target.value) })}
+                      className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
+                      {SHADOW_DIRS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                  </div>
+                </Row>
+
+                {/* Подложка (плашка) */}
+                <Row label="Подложка">
+                  <div className="flex items-center gap-2">
+                    <Toggle label="" on={!!ss.plate} onClick={() => branch("caption", { plate: !ss.plate })} />
+                    {ss.plate && (
+                      <input type="color" value={ss.plate_color || "#000000"} onChange={(e) => branch("caption", { plate_color: e.target.value })}
+                        title="Цвет подложки" className="bg-transparent w-7 h-5 rounded cursor-pointer border border-[var(--color-border)]" />
+                    )}
+                  </div>
+                </Row>
+
+                {/* Размер шрифта */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[var(--color-muted)]">{t("style.size")}</span>
+                    <div className="flex items-center gap-1">
+                      <input type="number" min={12} max={300}
+                        value={sizeDraft ?? ss.size_px ?? Math.round((p.meta.height || 1280) / 14)}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          if (!isNaN(val)) setSizeDraft(val);
+                        }}
+                        onBlur={async () => {
+                          if (sizeDraft != null) { await branch("caption", { size_px: sizeDraft }); setSizeDraft(null); }
+                        }}
+                        className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] text-right font-mono focus:border-[var(--color-accent)] focus:outline-none" />
+                      <span className="mono text-[11px] text-[var(--color-muted)]">px</span>
+                    </div>
+                  </div>
+                  <input type="range" min={16} max={Math.round((p.meta.height || 1280) / 5)}
+                    value={sizeDraft ?? ss.size_px ?? Math.round((p.meta.height || 1280) / 14)}
+                    onChange={(e) => setSizeDraft(parseInt(e.target.value))}
+                    onPointerUp={async () => { if (sizeDraft != null) { await branch("caption", { size_px: sizeDraft }); setSizeDraft(null); } }}
+                    className="w-full accent-[var(--color-accent)] cursor-pointer" />
+                </div>
+
+                {/* Размытие оригинальных субтитров (блюр-подложка) */}
+                {!audioOnly && (
+                  <div className="pt-3 border-t border-[var(--color-border)]/50 space-y-2">
+                    <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none" title={t("editor.subBlurHint")}>
+                      <input
+                        type="checkbox"
+                        checked={p.render.blur}
+                        onChange={(e) => branch("sub_blur", { on: e.target.checked })}
+                        className="accent-[var(--color-accent)] w-3.5 h-3.5"
+                      />
+                      <span className="font-medium text-[var(--color-text)]">{t("editor.subBlur")}</span>
+                    </label>
+                    {p.render.blur && (
+                      <div className="pl-5 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min={5}
+                              max={150}
+                              value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!isNaN(val)) setBlurSigmaDraft(val);
+                              }}
+                              onBlur={async () => {
+                                if (blurSigmaDraft != null) {
+                                  await branch("sub_blur", { on: p.render.blur, sigma: blurSigmaDraft });
+                                  setBlurSigmaDraft(null);
+                                }
+                              }}
+                              className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] text-right font-mono focus:border-[var(--color-accent)] focus:outline-none"
+                            />
+                            <span className="mono text-[11px] text-[var(--color-muted)]">σ</span>
+                          </div>
+                        </div>
+                        <input
+                          type="range"
+                          min={5}
+                          max={150}
+                          step={5}
+                          value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
+                          onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
+                          onPointerUp={async () => {
+                            if (blurSigmaDraft != null) {
+                              await branch("sub_blur", { on: p.render.blur, sigma: blurSigmaDraft });
+                              setBlurSigmaDraft(null);
+                            }
+                          }}
+                          className="w-full accent-[var(--color-accent)] cursor-pointer"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {mode === "funny" && (
+              <div className="pt-3 border-t border-[var(--color-border)]/50">
+                <SectionLabel>{t("remix.title")}</SectionLabel>
+                <textarea value={remixText} onChange={(e) => setRemixText(e.target.value)} rows={2}
+                  placeholder={t("remix.placeholder")}
+                  className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-2 text-[13px] resize-none focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
+                <button onClick={doRemix} disabled={remixing || !remixText.trim()}
+                  className="mt-2 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">
+                  {remixing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}{t("remix.apply")}
+                </button>
+                <div className="mt-1.5 text-[11px] text-[var(--color-muted)] leading-snug">{t("remix.hint")}</div>
+              </div>
+            )}
+
+            {mode !== "subtitles" && (
+              <div className="pt-3 border-t border-[var(--color-border)]/50 space-y-3">
+                <SectionLabel>{t("editor.voice")}</SectionLabel>
+                <select value={p.audio.voice.mode} onChange={(e) => branch("recast", { voice_mode: e.target.value, voice_name: p.audio.voice.name })}
+                  className="w-[200px] max-w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-2 focus:border-[var(--color-accent)] focus:outline-none transition-colors">
+                  <option value="clone">{t("voice.clone")}</option>
+                  <option value="autocast">{t("voice.autocast")}</option>
+                  <option value="voice">{t("voice.pack")}</option>
+                </select>
+                <VoiceRecorder voiceList={voiceList} onVoices={setVoiceList}
+                  onDone={(nm) => branch("recast", { voice_mode: "voice", voice_name: nm })} />
+                {(() => {
+                  const spks = [...new Set(p.segments.map((s) => s.speaker ?? "0"))].sort();
+                  if (spks.length === 0) return null;
+                  return (
+                    <div className="mt-2">
+                      <div className="text-[10px] text-[var(--color-muted)] mb-1">{t("voice.fromSpeakers")}</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {spks.map((spk) => (
+                          <button key={spk} disabled={spkVoiceBusy !== null}
+                            onClick={async () => {
+                              setSpkVoiceBusy(spk);
+                              try { const r = await api.speakerVoice(pid!, spk, `Спикер ${spk}`); if (r.ok) { setVoiceList(r.voices); branch("recast", { voice_mode: "voice", voice_name: r.name }); } } catch { /* ignore */ } finally { setSpkVoiceBusy(null); }
+                            }}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[var(--color-border)] text-[12px] hover:border-[var(--color-accent)] disabled:opacity-40">
+                            {spkVoiceBusy === spk ? <Loader2 size={12} className="animate-spin" /> : <AudioLines size={12} className="text-[var(--color-accent)]" />}SPK {spk}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <button onClick={async () => {
+                  const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
+                  const nid = String(nums.length ? Math.max(...nums) + 1 : 1);
+                  const targets = selSegs.size ? [...selSegs] : (() => { const act = p.segments.find((s) => scrub >= s.start && scrub <= s.end); return act ? [act.id] : []; })();
+                  if (!targets.length) { pushActivity(t("voice.addSpeakerPick"), "work"); return; }
+                  setRendered(false);
+                  try {
+                    let fresh = p;
+                    for (const id of targets) fresh = await api.patch(pid, { op: "segment", id, speaker: nid });
+                    setProject(fresh); bump(); setSelSegs(new Set());
+                    pushActivity(t("voice.addSpeakerDone", { spk: nid, n: targets.length }), "work");
+                  } catch (err) { await surfaceErr(err); }
+                }}
+                  title={t("voice.addSpeakerHint")}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] transition-colors">
+                  <Plus size={13} />{t("voice.addSpeaker")}
+                </button>
+
+                {p.audio.voice.mode !== "voice" && (
+                  <div className="text-[10px] text-[var(--color-muted)] leading-snug">{t("voice.recordHint")}</div>
+                )}
+                {p.audio.voice.mode === "voice" && (() => {
+                  const spks = [...new Set(p.segments.map((s) => s.speaker ?? "0"))].sort();
+                  const names = (p.audio.voice.name || "").split(",").map((s) => s.trim());
+                  const pick = (cur: string, on: (v: string) => void) => (
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                      <Combobox value={cur} onChange={on}
+                        options={voiceList.map((v) => ({ value: v, label: v }))}
+                        placeholder={voiceList.length ? t("voice.search") : "(пак не найден)"}
+                        noResults={t("voice.noMatch")} allowClear className="flex-1 min-w-0" />
+                      <button type="button" disabled={!cur} onClick={() => toggleVoicePreview(cur)} title={t("voice.preview")}
+                        className="shrink-0 w-8 h-8 inline-flex items-center justify-center rounded-lg border border-[var(--color-border)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                        {voicePreview === cur && cur ? <Pause size={14} className="text-[var(--color-accent)]" /> : <Play size={14} />}
+                      </button>
+                    </div>
+                  );
+                  if (spks.length <= 1)
+                    return <div className="mt-2 flex w-full min-w-0">{pick(names[0] || "", (v) => branch("recast", { voice_mode: "voice", voice_name: v }))}</div>;
+                  return (
+                    <div className="mt-2 space-y-1.5 w-full min-w-0">
+                      {spks.map((spk, i) => (
+                        <div key={spk} className="flex items-center gap-2 w-full min-w-0">
+                          <span className="mono text-[10px] text-[var(--color-muted)] w-12 shrink-0">SPK {spk}</span>
+                          {pick(names[i] || "", (v) => branch("recast", {
+                            voice_mode: "voice",
+                            voice_name: spks.map((_, j) => (j === i ? v : names[j] || "")).join(","),
+                          }))}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                <div className="pt-2">
+                  <div className="flex items-center justify-between text-[11px] mb-1">
+                    <span className="text-[var(--color-muted)]">{t("voice.gain")}</span>
+                    <span className="mono text-[11px] text-[var(--color-text)]">{(gainDraft ?? p.audio.gain_db ?? 0) > 0 ? "+" : ""}{(gainDraft ?? p.audio.gain_db ?? 0).toFixed(1)} dB</span>
+                  </div>
+                  <input type="range" min={-12} max={12} step={0.5} value={gainDraft ?? p.audio.gain_db ?? 0}
+                    onChange={(e) => setGainDraft(parseFloat(e.target.value))}
+                    onPointerUp={async () => { if (gainDraft != null) { await doGain(gainDraft); setGainDraft(null); } }}
+                    className="w-full accent-[var(--color-accent)]" />
+                  <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.gainHint")}</div>
+                </div>
+
+                {p.mode === "voiceover" && (
+                  <div className="pt-2">
+                    <div className="flex items-center justify-between text-[11px] mb-1">
+                      <span className="text-[var(--color-muted)]">{t("voice.origGain")}</span>
+                      <span className="mono text-[11px] text-[var(--color-text)]">{(voGainDraft ?? p.audio.voiceover_gain_db ?? -12).toFixed(1)} dB</span>
+                    </div>
+                    <input type="range" min={-24} max={0} step={0.5} value={voGainDraft ?? p.audio.voiceover_gain_db ?? -12}
+                      onChange={(e) => setVoGainDraft(parseFloat(e.target.value))}
+                      onPointerUp={async () => { if (voGainDraft != null) { await doVoiceoverGain(voGainDraft); setVoGainDraft(null); } }}
+                      className="w-full accent-[var(--color-accent)]" />
+                    <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.origGainHint")}</div>
+                  </div>
+                )}
+
+                {mode === "dub" && (
+                  <div className="pt-2">
+                    <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none" title={t("editor.duckHint")}>
+                      <input
+                        type="checkbox"
+                        checked={duckOn}
+                        onChange={(e) => setDuckSaved(e.target.checked)}
+                        className="accent-[var(--color-accent)] w-3.5 h-3.5"
+                      />
+                      <span className="text-[var(--color-text)] font-medium">{t("editor.duckMusic")}</span>
+                    </label>
+                    <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("editor.duckHint")}</div>
+                  </div>
+                )}
+
+                <button onClick={doRegenAll} disabled={regenId !== null} title={t("voice.regenAll")}
+                  className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">
+                  {regenId === "__all__" ? <Loader2 size={15} className="animate-spin" /> : <RotateCw size={15} />}{t("voice.regenAll")}
+                </button>
+              </div>
+            )}
           </div>
         )}
-        {mode !== "subtitles" && (
-          <>
-            <div className="mt-6"><SectionLabel>{t("editor.voice")}</SectionLabel></div>
-            <select value={p.audio.voice.mode} onChange={(e) => branch("recast", { voice_mode: e.target.value, voice_name: p.audio.voice.name })}
-              className="w-[200px] max-w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-2 focus:border-[var(--color-accent)] focus:outline-none transition-colors">
-              <option value="clone">{t("voice.clone")}</option>
-              <option value="autocast">{t("voice.autocast")}</option>
-              <option value="voice">{t("voice.pack")}</option>
-            </select>
-            <VoiceRecorder voiceList={voiceList} onVoices={setVoiceList}
-              onDone={(nm) => branch("recast", { voice_mode: "voice", voice_name: nm })} />
-            {(() => {
-              const spks = [...new Set(p.segments.map((s) => s.speaker ?? "0"))].sort();
-              if (spks.length === 0) return null;
-              return (
-                <div className="mt-2">
-                  <div className="text-[10px] text-[var(--color-muted)] mb-1">{t("voice.fromSpeakers")}</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {spks.map((spk) => (
-                      <button key={spk} disabled={spkVoiceBusy !== null}
-                        onClick={async () => {
-                          setSpkVoiceBusy(spk);
-                          try { const r = await api.speakerVoice(pid!, spk, `Спикер ${spk}`); if (r.ok) { setVoiceList(r.voices); branch("recast", { voice_mode: "voice", voice_name: r.name }); } } catch { /* ignore */ } finally { setSpkVoiceBusy(null); }
-                        }}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[var(--color-border)] text-[12px] hover:border-[var(--color-accent)] disabled:opacity-40">
-                        {spkVoiceBusy === spk ? <Loader2 size={12} className="animate-spin" /> : <AudioLines size={12} className="text-[var(--color-accent)]" />}SPK {spk}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-            {/* Добавить спикера: если ASR нашёл меньше спикеров, чем есть. Выделенные галочками фразы (или
-                текущую под плейхедом) назначаем новому SPK N — дальше ему можно задать свой голос выше. */}
-            <button onClick={async () => {
-              const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
-              const nid = String(nums.length ? Math.max(...nums) + 1 : 1);
-              const targets = selSegs.size ? [...selSegs] : (() => { const act = p.segments.find((s) => scrub >= s.start && scrub <= s.end); return act ? [act.id] : []; })();
-              if (!targets.length) { pushActivity(t("voice.addSpeakerPick"), "work"); return; }
-              setRendered(false);
-              try {
-                let fresh = p;
-                for (const id of targets) fresh = await api.patch(pid, { op: "segment", id, speaker: nid });
-                setProject(fresh); bump(); setSelSegs(new Set());
-                pushActivity(t("voice.addSpeakerDone", { spk: nid, n: targets.length }), "work");
-              } catch (err) { await surfaceErr(err); }
-            }}
-              title={t("voice.addSpeakerHint")}
-              className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] transition-colors">
-              <Plus size={13} />{t("voice.addSpeaker")}
-            </button>
-            {p.audio.voice.mode !== "voice" && (
-              <div className="mt-1 text-[10px] text-[var(--color-muted)] leading-snug">{t("voice.recordHint")}</div>
-            )}
-            {p.audio.voice.mode === "voice" && (() => {
-              // per-speaker pack voices: engine maps a comma-list to sorted speakers (cycling), so each
-              // diarized speaker can get a DISTINCT/funny voice. 1 speaker -> a single picker.
-              const spks = [...new Set(p.segments.map((s) => s.speaker ?? "0"))].sort();   // lexical — matches engine sorted()
-              const names = (p.audio.voice.name || "").split(",").map((s) => s.trim());
-              const pick = (cur: string, on: (v: string) => void) => (
-                <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                  <Combobox value={cur} onChange={on}
-                    options={voiceList.map((v) => ({ value: v, label: v }))}
-                    placeholder={voiceList.length ? t("voice.search") : "(пак не найден)"}
-                    noResults={t("voice.noMatch")} allowClear className="flex-1 min-w-0" />
-                  <button type="button" disabled={!cur} onClick={() => toggleVoicePreview(cur)} title={t("voice.preview")}
-                    className="shrink-0 w-8 h-8 inline-flex items-center justify-center rounded-lg border border-[var(--color-border)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-                    {voicePreview === cur && cur ? <Pause size={14} className="text-[var(--color-accent)]" /> : <Play size={14} />}
-                  </button>
-                </div>
-              );
-              if (spks.length <= 1)
-                return <div className="mt-2 flex w-full min-w-0">{pick(names[0] || "", (v) => branch("recast", { voice_mode: "voice", voice_name: v }))}</div>;
-              return (
-                <div className="mt-2 space-y-1.5 w-full min-w-0">
-                  {spks.map((spk, i) => (
-                    <div key={spk} className="flex items-center gap-2 w-full min-w-0">
-                      <span className="mono text-[10px] text-[var(--color-muted)] w-12 shrink-0">SPK {spk}</span>
-                      {pick(names[i] || "", (v) => branch("recast", {
-                        voice_mode: "voice",
-                        voice_name: spks.map((_, j) => (j === i ? v : names[j] || "")).join(","),
-                      }))}
-                    </div>
-                  ))}
-                </div>
-              );
-            })()}
-            <div className="mt-3">
-              <div className="flex items-center justify-between text-[11px] mb-1">
-                <span className="text-[var(--color-muted)]">{t("voice.gain")}</span>
-                <span className="mono text-[11px] text-[var(--color-text)]">{(gainDraft ?? p.audio.gain_db ?? 0) > 0 ? "+" : ""}{(gainDraft ?? p.audio.gain_db ?? 0).toFixed(1)} dB</span>
-              </div>
-              <input type="range" min={-12} max={12} step={0.5} value={gainDraft ?? p.audio.gain_db ?? 0}
-                onChange={(e) => setGainDraft(parseFloat(e.target.value))}
-                onPointerUp={async () => { if (gainDraft != null) { await doGain(gainDraft); setGainDraft(null); } }}
-                className="w-full accent-[var(--color-accent)]" />
-              <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.gainHint")}</div>
-            </div>
-            {p.mode === "voiceover" && (   // закадровый: громкость ОРИГИНАЛЬНОЙ дорожки под переводом (0 = в полную силу, ниже = тише)
-              <div className="mt-3">
-                <div className="flex items-center justify-between text-[11px] mb-1">
-                  <span className="text-[var(--color-muted)]">{t("voice.origGain")}</span>
-                  <span className="mono text-[11px] text-[var(--color-text)]">{(voGainDraft ?? p.audio.voiceover_gain_db ?? -12).toFixed(1)} dB</span>
-                </div>
-                <input type="range" min={-24} max={0} step={0.5} value={voGainDraft ?? p.audio.voiceover_gain_db ?? -12}
-                  onChange={(e) => setVoGainDraft(parseFloat(e.target.value))}
-                  onPointerUp={async () => { if (voGainDraft != null) { await doVoiceoverGain(voGainDraft); setVoGainDraft(null); } }}
-                  className="w-full accent-[var(--color-accent)]" />
-                <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.origGainHint")}</div>
-              </div>
-            )}
-            {mode === "dub" && (
-              <div className="mt-3">
-                <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none" title={t("editor.duckHint")}>
-                  <input
-                    type="checkbox"
-                    checked={duckOn}
-                    onChange={(e) => setDuckSaved(e.target.checked)}
-                    className="accent-[var(--color-accent)] w-3.5 h-3.5"
-                  />
-                  <span className="text-[var(--color-text)] font-medium">{t("editor.duckMusic")}</span>
-                </label>
-                <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("editor.duckHint")}</div>
-              </div>
-            )}
-            <button onClick={doRegenAll} disabled={regenId !== null} title={t("voice.regenAll")}
-              className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">
-              {regenId === "__all__" ? <Loader2 size={15} className="animate-spin" /> : <RotateCw size={15} />}{t("voice.regenAll")}
-            </button>
-          </>
-        )}
-
       </aside>
       <CommandPalette commands={cmds} />
       {showHelp && <ShortcutsHelp onClose={() => setShowHelp(false)} />}

@@ -52,6 +52,8 @@
     "cancel": "Cancel"
   },
   "editor": {
+    "tabSubtitles": "Subtitles",
+    "tabGeneration": "Generation Settings",
     "transcript": "Transcript",
     "style": "Style",
     "voice": "Voice",
