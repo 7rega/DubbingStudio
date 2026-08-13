@@ -4,7 +4,7 @@ import { motion } from "motion/react";
 import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Columns2, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
-import { api, type Project, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
+import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
 import { LANGS, DUB_LANGS, setLang, type Lang } from "./lib/i18n";
 import { useStore } from "./store";
 import PreviewCanvas from "./components/PreviewCanvas";
@@ -3676,8 +3676,27 @@ function Editor() {
               <ComparePane label={t("compare.result")} src={api.previewUrl(pid, scrub, rev)} />
             </div>
           ) : (
-            <PreviewCanvas pid={pid} project={p} scrub={scrub} rendered={rendered} lane={lane} playing={play}
-              onChanged={(fresh) => setProject(fresh)} />
+            <PreviewCanvas
+              pid={pid}
+              project={
+                sizeDraft != null
+                  ? {
+                      ...p,
+                      captions: {
+                        ...p.captions,
+                        sub_style: p.captions.sub_style
+                          ? { ...p.captions.sub_style, size_px: sizeDraft }
+                          : ({ ...defaultSubStyle, size_px: sizeDraft } as SubStyle),
+                      },
+                    }
+                  : p
+              }
+              scrub={scrub}
+              rendered={rendered}
+              lane={lane}
+              playing={play}
+              onChanged={(fresh) => setProject(fresh)}
+            />
           )}
           </div>
           </div>

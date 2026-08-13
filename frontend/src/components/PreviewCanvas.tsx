@@ -244,13 +244,21 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
   const plateColor = preset?.plate_c || ss.plate_color || "rgba(0,0,0,0.75)";
   const plateType = preset?.plate || (ss.plate ? "box" : "none");
 
-  const subFontSize = Math.max(10, (ss.size_px ?? Math.round((vh || 1080) / 14)) * sy);
+  // Точный расчет размера шрифта, 1-в-1 синхронизированный с libass (dub_captions)
+  const explicitSize = ss.size_px && ss.size_px > 0 ? ss.size_px : null;
+  const h5 = Math.round(vh / 5);
+  const h10 = Math.round(vh / 10);
+  const baseSubFs = explicitSize
+    ? Math.max(20, Math.min(explicitSize, h5))
+    : Math.min(h10, Math.max(44, Math.round(vh / 16)));
+  const subFontSize = Math.max(10, baseSubFs * sy * 0.72);
+
   const textShadowCSS = (() => {
     const parts: string[] = [];
     if (preset?.plate === "glow" && preset.accent) {
       parts.push(`0 0 10px ${preset.accent}`, `0 0 20px ${preset.accent}`, `0 0 35px ${preset.accent}`);
     } else {
-      const ow = Math.max(1, (ss.outline_w ?? 2) * sy);
+      const ow = Math.max(1, (ss.outline_w ?? 2) * sy * 0.72);
       const oc = ss.outline || "#000000";
       if (ow > 0) {
         parts.push(
@@ -265,7 +273,7 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
         );
       }
       if (ss.shadow_dir != null) {
-        const sd = Math.max(2, 3 * sy);
+        const sd = Math.max(2, 2.5 * sy);
         parts.push(`${sd}px ${sd}px 3px rgba(0,0,0,0.85)`);
       }
     }
@@ -274,9 +282,9 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
 
   const plateBorderRadius = (() => {
     if (plateType === "pill") return "9999px";
-    if (plateType === "rounded" || plateType === "card" || plateType === "blob") return `${8 * sy}px`;
-    if (plateType === "box") return `${4 * sy}px`;
-    return `${4 * sy}px`;
+    if (plateType === "rounded" || plateType === "card" || plateType === "blob") return `${6 * sy}px`;
+    if (plateType === "box") return `${3 * sy}px`;
+    return `${3 * sy}px`;
   })();
 
   return (
@@ -386,7 +394,7 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
                       style={{
                         position: "absolute",
                         left: 0,
-                        top: `${Math.max(0, Math.min(disp.h - subFontSize - 14, subY * sy - subFontSize * 0.6))}px`,
+                        top: `${Math.max(0, Math.min(disp.h - subFontSize * 1.5, subY * sy - subFontSize * 0.65))}px`,
                         width: `${disp.w}px`,
                         textAlign: (ss.align || "center") as React.CSSProperties["textAlign"],
                         fontSize: `${subFontSize}px`,
@@ -396,14 +404,14 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
                         textTransform: effectiveUppercase ? "uppercase" : "none",
                         color: effectiveColor,
                         textShadow: textShadowCSS,
-                        lineHeight: 1.25,
+                        lineHeight: 1.12,
                         padding: `0 ${16 * sx}px`,
                       }}
                     >
                       <span
                         style={{
                           backgroundColor: hasPlate ? plateColor : undefined,
-                          padding: hasPlate ? `${5 * sy}px ${14 * sx}px` : undefined,
+                          padding: hasPlate ? `${Math.max(2, Math.round(3 * sy))}px ${Math.max(5, Math.round(10 * sx))}px` : undefined,
                           borderRadius: hasPlate ? plateBorderRadius : undefined,
                           boxDecorationBreak: "clone",
                           WebkitBoxDecorationBreak: "clone",
@@ -413,7 +421,7 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
                           alignItems: "center",
                           maxWidth: "92%",
                           backdropFilter: hasPlate && plateType === "soft" ? "blur(8px)" : undefined,
-                          boxShadow: hasPlate && plateColor !== "transparent" ? "0 4px 16px rgba(0,0,0,0.4)" : undefined,
+                          boxShadow: hasPlate && plateColor !== "transparent" ? "0 2px 10px rgba(0,0,0,0.35)" : undefined,
                         }}
                       >
                         {words.map((w, idx) => {
