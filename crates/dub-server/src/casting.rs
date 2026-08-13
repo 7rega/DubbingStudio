@@ -299,7 +299,7 @@ pub fn recluster_segments(paths: &AnalyzePaths, segments: &mut [Segment], target
 
     if target_k >= 2 {
         // Явно заданное число спикеров: target_k (2..8+)
-        let mut initial_labels = ahc_average(&embs, 0.50);
+        let initial_labels = ahc_average(&embs, 0.50);
         let cur_k = initial_labels.iter().copied().max().map(|m| m + 1).unwrap_or(0);
         if cur_k > target_k {
             labels = merge_smallest_into_nearest(&embs, initial_labels, target_k);

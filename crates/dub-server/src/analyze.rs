@@ -662,7 +662,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
 
     // 4) сегменты: из импортированных субтитров (точный текст+тайминг, ASR пропущен) ЛИБО через ASR.
     //    Импорт: спикеров всё равно раздаём — по максимальному перекрытию реплики с диаризацией.
-    let (mut segments, n_spk): (Vec<Segment>, usize) = if let Some(subs_path) = &paths.import_subs {
+    let (mut segments, mut n_spk): (Vec<Segment>, usize) = if let Some(subs_path) = &paths.import_subs {
         let content = std::fs::read_to_string(subs_path)
             .map_err(|e| format!("чтение субтитров {}: {e}", subs_path.display()))?;
         let ext = subs_path.extension().and_then(|s| s.to_str()).unwrap_or("srt");
