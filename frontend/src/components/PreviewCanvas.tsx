@@ -1,6 +1,7 @@
-// PreviewCanvas — the editing heart with Hybrid Playback / WYSIWYG Editing:
+// PreviewCanvas — the editing heart with Hybrid 60 FPS HTML5 Playback & WYSIWYG Subtitle Presets:
 // 1. При воспроизведении (playing === true) играет нативное аппаратное видео (<video>) с 60 FPS
-//    и нулевыми задержками, поверх которого в реальном времени отрисовываются пресеты, стилизованные субтитры, титры и блюр.
+//    и нулевыми задержками, поверх которого в реальном времени отрисовываются пословные караоке-анимации
+//    (Hormozi, MrBeast, Karaoke, Pop, Neon) и блюр оригинальных субтитров.
 // 2. При паузе/скраббинге (playing === false) отображается попиксельный серверный кадр с наложением Konva
 //    (перетаскивание/ресайз рамок блюра, титров и полосы субтитров).
 import { useEffect, useRef, useState } from "react";
@@ -31,34 +32,69 @@ const PRESET_LOOKS: Record<
     accent?: string;
     bold?: boolean;
     uppercase?: boolean;
+    reveal?: "highlight" | "pop" | "karaoke" | "word" | "whole";
   }
 > = {
-  clean: { font: "Montserrat", color: "#FFFFFF", plate: "pill", plate_c: "#1A1A1A" },
-  minimal: { font: "Roboto", color: "#FFFFFF", plate: "rounded", plate_c: "#181818" },
-  boxed: { font: "Montserrat", color: "#FFFFFF", plate: "box", plate_c: "#101010" },
-  headline: { font: "Oswald", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", uppercase: true },
-  serif: { font: "Playfair Display", color: "#FFFFFF", plate: "card", plate_c: "#16110D" },
-  card: { font: "Montserrat", color: "#FFFFFF", plate: "card", plate_c: "#16110D" },
-  hormozi: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#FFD400", bold: true, uppercase: true },
-  hormozi_green: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#28E0A8", bold: true, uppercase: true },
-  mrbeast: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#FFE000", bold: true, uppercase: true },
-  impact: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#101010", accent: "#FF3B30", bold: true, uppercase: true },
-  pop: { font: "Oswald", color: "#FFFFFF", plate: "pill", plate_c: "#141414", bold: true, uppercase: true },
-  karaoke: { font: "Oswald", color: "#FFFFFF", plate: "pill", plate_c: "#181818", accent: "#28E0A8", bold: true },
-  karaoke_gold: { font: "Montserrat", color: "#FFFFFF", plate: "box", plate_c: "#101010", accent: "#FFD400", bold: true },
-  karaoke_neon: { font: "Montserrat", color: "#FFFFFF", plate: "glow", plate_c: "#0A0A14", accent: "#00E5FF", bold: true },
-  bubble: { font: "Caveat", color: "#201018", plate: "blob", plate_c: "#FF5DA2", bold: true },
-  bubble_pop: { font: "Pacifico", color: "#201018", plate: "blob", plate_c: "#FFC857" },
-  candy: { font: "Pacifico", color: "#2A0E1E", plate: "pill", plate_c: "#FF6FB5" },
-  neon: { font: "Montserrat", color: "#00E5FF", plate: "glow", plate_c: "#0A0A14", accent: "#00E5FF", bold: true },
-  neon_pink: { font: "Oswald", color: "#FF54C8", plate: "glow", plate_c: "#100A14", accent: "#FF54C8", bold: true },
-  cyber: { font: "Oswald", color: "#7DF9FF", plate: "glow", plate_c: "#07101A", accent: "#00E5FF", bold: true },
-  fresh: { font: "Montserrat", color: "#FFFFFF", plate: "none", plate_c: "transparent" },
-  fresh_bold: { font: "Russo One", color: "#FFFFFF", plate: "none", plate_c: "transparent", bold: true },
-  fresh_pop: { font: "Montserrat", color: "#FFFFFF", plate: "none", plate_c: "transparent", bold: true },
-  fresh_karaoke: { font: "Oswald", color: "#FFFFFF", plate: "none", plate_c: "transparent", accent: "#FFD400", bold: true },
-  fresh_hormozi: { font: "Russo One", color: "#FFFFFF", plate: "none", plate_c: "transparent", accent: "#FFD400", bold: true, uppercase: true },
-  fresh_soft: { font: "Montserrat", color: "#FFFFFF", plate: "soft", plate_c: "transparent" },
+  clean: { font: "Montserrat", color: "#FFFFFF", plate: "pill", plate_c: "#1A1A1A", reveal: "whole" },
+  minimal: { font: "Roboto", color: "#FFFFFF", plate: "rounded", plate_c: "#181818", reveal: "whole" },
+  boxed: { font: "Montserrat", color: "#FFFFFF", plate: "box", plate_c: "#101010", reveal: "whole" },
+  headline: { font: "Oswald", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", uppercase: true, reveal: "whole" },
+  serif: { font: "Playfair Display", color: "#FFFFFF", plate: "card", plate_c: "#16110D", reveal: "whole" },
+  card: { font: "Montserrat", color: "#FFFFFF", plate: "card", plate_c: "#16110D", reveal: "whole" },
+  hormozi: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#FFD400", bold: true, uppercase: true, reveal: "highlight" },
+  hormozi_green: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#28E0A8", bold: true, uppercase: true, reveal: "highlight" },
+  mrbeast: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#FFE000", bold: true, uppercase: true, reveal: "pop" },
+  impact: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#101010", accent: "#FF3B30", bold: true, uppercase: true, reveal: "highlight" },
+  pop: { font: "Oswald", color: "#FFFFFF", plate: "pill", plate_c: "#141414", bold: true, uppercase: true, reveal: "pop" },
+  karaoke: { font: "Oswald", color: "#FFFFFF", plate: "pill", plate_c: "#181818", accent: "#28E0A8", bold: true, reveal: "karaoke" },
+  karaoke_gold: { font: "Montserrat", color: "#FFFFFF", plate: "box", plate_c: "#101010", accent: "#FFD400", bold: true, reveal: "karaoke" },
+  karaoke_neon: { font: "Montserrat", color: "#FFFFFF", plate: "glow", plate_c: "#0A0A14", accent: "#00E5FF", bold: true, reveal: "karaoke" },
+  bubble: { font: "Caveat", color: "#201018", plate: "blob", plate_c: "#FF5DA2", bold: true, reveal: "whole" },
+  bubble_pop: { font: "Pacifico", color: "#201018", plate: "blob", plate_c: "#FFC857", reveal: "pop" },
+  candy: { font: "Pacifico", color: "#2A0E1E", plate: "pill", plate_c: "#FF6FB5", reveal: "word" },
+  neon: { font: "Montserrat", color: "#00E5FF", plate: "glow", plate_c: "#0A0A14", accent: "#00E5FF", bold: true, reveal: "whole" },
+  neon_pink: { font: "Oswald", color: "#FF54C8", plate: "glow", plate_c: "#100A14", accent: "#FF54C8", bold: true, reveal: "whole" },
+  cyber: { font: "Oswald", color: "#7DF9FF", plate: "glow", plate_c: "#07101A", accent: "#00E5FF", bold: true, reveal: "word" },
+  fresh: { font: "Montserrat", color: "#FFFFFF", plate: "none", plate_c: "transparent", reveal: "whole" },
+  fresh_bold: { font: "Russo One", color: "#FFFFFF", plate: "none", plate_c: "transparent", bold: true, reveal: "pop" },
+  fresh_pop: { font: "Montserrat", color: "#FFFFFF", plate: "none", plate_c: "transparent", bold: true, reveal: "pop" },
+  fresh_karaoke: { font: "Oswald", color: "#FFFFFF", plate: "none", plate_c: "transparent", accent: "#FFD400", bold: true, reveal: "karaoke" },
+  fresh_hormozi: { font: "Russo One", color: "#FFFFFF", plate: "none", plate_c: "transparent", accent: "#FFD400", bold: true, uppercase: true, reveal: "highlight" },
+  fresh_soft: { font: "Montserrat", color: "#FFFFFF", plate: "soft", plate_c: "transparent", reveal: "whole" },
+};
+
+interface WordTiming {
+  word: string;
+  start: number;
+  end: number;
+}
+
+const getWordsWithTimings = (seg: Project["segments"][number]): WordTiming[] => {
+  const rawText = (seg.tgt_text || seg.src_text || "").trim();
+  if (!rawText) return [];
+  const tokens = rawText.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [];
+
+  const extraWords = (seg as unknown as { extra?: { words?: Array<{ word: string; start: number; end: number }> } }).extra?.words;
+  if (extraWords && extraWords.length === tokens.length) {
+    return tokens.map((w, i) => ({
+      word: w,
+      start: extraWords[i].start,
+      end: extraWords[i].end,
+    }));
+  }
+
+  // Пропорциональный расчет времени слов внутри фразы
+  const segDur = Math.max(0.1, seg.end - seg.start);
+  const totalChars = tokens.reduce((sum, t) => sum + t.length, 0) || 1;
+  let curTime = seg.start;
+  return tokens.map((w) => {
+    const wDur = (w.length / totalChars) * segDur;
+    const st = curTime;
+    const en = curTime + wDur;
+    curTime = en;
+    return { word: w, start: st, end: en };
+  });
 };
 
 export default function PreviewCanvas({ pid, project, scrub, rendered, lane, playing = false, onChanged }: Props) {
@@ -275,18 +311,19 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
             {/* Живой оверлей субтитров/титров/блюра во время воспроизведения */}
             {playing && disp.w > 0 && (
               <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                {/* Размытие оригинальных субтитров (авто-блюр подложка) */}
+                {/* Автоматическое размытие оригинальных субтитров при p.render.blur */}
                 {project.render.blur && (
                   <div
                     style={{
                       position: "absolute",
-                      left: `${disp.w * 0.08}px`,
-                      top: `${Math.max(0, subY * sy - subFontSize * 0.7)}px`,
-                      width: `${disp.w * 0.84}px`,
-                      height: `${subFontSize * 1.65}px`,
-                      backdropFilter: `blur(${Math.max(6, (project.render.blur_sigma || 60) * 0.25)}px)`,
-                      backgroundColor: "rgba(0, 0, 0, 0.45)",
-                      borderRadius: `${8 * sy}px`,
+                      left: `${disp.w * 0.06}px`,
+                      top: `${Math.max(0, subY * sy - subFontSize * 0.8)}px`,
+                      width: `${disp.w * 0.88}px`,
+                      height: `${subFontSize * 1.85}px`,
+                      backdropFilter: `blur(${Math.max(8, (project.render.blur_sigma || 60) * 0.35)}px) brightness(0.75)`,
+                      backgroundColor: "rgba(0, 0, 0, 0.55)",
+                      borderRadius: `${10 * sy}px`,
+                      boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
                     }}
                   />
                 )}
@@ -339,48 +376,99 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
                   );
                 })}
 
-                {/* Основные субтитры */}
-                {activeSeg && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      left: 0,
-                      top: `${Math.max(0, Math.min(disp.h - subFontSize - 10, subY * sy - subFontSize * 0.6))}px`,
-                      width: `${disp.w}px`,
-                      textAlign: (ss.align || "center") as React.CSSProperties["textAlign"],
-                      fontSize: `${subFontSize}px`,
-                      fontFamily: effectiveFont,
-                      fontWeight: effectiveBold ? "bold" : "normal",
-                      fontStyle: ss.italic ? "italic" : "normal",
-                      textTransform: effectiveUppercase ? "uppercase" : "none",
-                      color: effectiveColor,
-                      textShadow: textShadowCSS,
-                      lineHeight: 1.15,
-                      padding: `0 ${16 * sx}px`,
-                    }}
-                  >
-                    {hasPlate ? (
+                {/* Основные субтитры с пословной караоке-анимацией */}
+                {activeSeg && (() => {
+                  const words = getWordsWithTimings(activeSeg);
+                  const revealType = preset?.reveal || "whole";
+
+                  return (
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        top: `${Math.max(0, Math.min(disp.h - subFontSize - 14, subY * sy - subFontSize * 0.6))}px`,
+                        width: `${disp.w}px`,
+                        textAlign: (ss.align || "center") as React.CSSProperties["textAlign"],
+                        fontSize: `${subFontSize}px`,
+                        fontFamily: effectiveFont,
+                        fontWeight: effectiveBold ? "bold" : "normal",
+                        fontStyle: ss.italic ? "italic" : "normal",
+                        textTransform: effectiveUppercase ? "uppercase" : "none",
+                        color: effectiveColor,
+                        textShadow: textShadowCSS,
+                        lineHeight: 1.25,
+                        padding: `0 ${16 * sx}px`,
+                      }}
+                    >
                       <span
                         style={{
-                          backgroundColor: plateColor,
-                          padding: `${4 * sy}px ${12 * sx}px`,
-                          borderRadius: plateBorderRadius,
+                          backgroundColor: hasPlate ? plateColor : undefined,
+                          padding: hasPlate ? `${5 * sy}px ${14 * sx}px` : undefined,
+                          borderRadius: hasPlate ? plateBorderRadius : undefined,
                           boxDecorationBreak: "clone",
                           WebkitBoxDecorationBreak: "clone",
                           display: "inline-block",
+                          maxWidth: "92%",
+                          backdropFilter: hasPlate && plateType === "soft" ? "blur(8px)" : undefined,
+                          boxShadow: hasPlate && plateColor !== "transparent" ? "0 4px 16px rgba(0,0,0,0.4)" : undefined,
                         }}
                       >
-                        {preset?.accent ? (
-                          <span style={{ color: preset.accent }}>{activeSeg.tgt_text || activeSeg.src_text}</span>
-                        ) : (
-                          activeSeg.tgt_text || activeSeg.src_text
-                        )}
+                        {words.map((w, idx) => {
+                          const isCurrent = scrub >= w.start && scrub < w.end;
+                          const isPast = scrub >= w.end;
+                          const isFuture = scrub < w.start;
+
+                          let wordColor = effectiveColor;
+                          let wordTransform = "none";
+                          let wordOpacity = 1;
+                          let wordTextShadow = textShadowCSS;
+
+                          if (revealType === "highlight") {
+                            if (isCurrent) {
+                              wordColor = preset?.accent || "#FFD400";
+                              wordTransform = "scale(1.08)";
+                              wordTextShadow = `0 0 14px ${preset?.accent || "#FFD400"}, ${textShadowCSS}`;
+                            }
+                          } else if (revealType === "pop") {
+                            if (isCurrent) {
+                              wordColor = preset?.accent || "#FFE000";
+                              wordTransform = "scale(1.15) translateY(-2px)";
+                            }
+                          } else if (revealType === "karaoke") {
+                            if (isCurrent || isPast) {
+                              wordColor = preset?.accent || "#28E0A8";
+                            } else {
+                              wordOpacity = 0.6;
+                            }
+                          } else if (revealType === "word") {
+                            if (isFuture) {
+                              wordOpacity = 0;
+                            } else if (isCurrent) {
+                              wordColor = preset?.accent || "#00E5FF";
+                            }
+                          }
+
+                          return (
+                            <span
+                              key={idx}
+                              style={{
+                                display: "inline-block",
+                                color: wordColor,
+                                transform: wordTransform,
+                                opacity: wordOpacity,
+                                textShadow: wordTextShadow,
+                                transition: "transform 0.08s ease-out, color 0.08s ease-out, opacity 0.08s ease-out",
+                                marginRight: `${4 * sx}px`,
+                              }}
+                            >
+                              {w.word}
+                            </span>
+                          );
+                        })}
                       </span>
-                    ) : (
-                      activeSeg.tgt_text || activeSeg.src_text
-                    )}
-                  </div>
-                )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
