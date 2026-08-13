@@ -357,11 +357,14 @@ fn op_voiceover_gain(p: &mut Project, edit: &Value) -> PatchResult {
     Ok(())
 }
 
-/// sub_blur — блюр-подложка ПОД сожжёнными субтитрами {on: bool}. Опция (не всем нужна): выкл -> текст без
-/// размытой подложки. Дефолт вкл. Только рендер-настройка (dirty не ставим — вжигание на экспорте).
+/// sub_blur — блюр-подложка ПОД сожжёнными субтитрами {on: bool, sigma?: i64}. Опция (не всем нужна): выкл -> текст без
+/// размытой подложки. Дефолт вкл, sigma дефолт 60. Только рендер-настройка (dirty не ставим — вжигание на экспорте).
 fn op_sub_blur(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(on) = edit.get("on").and_then(|v| v.as_bool()) {
         p.render.blur = on;
+    }
+    if let Some(sigma) = edit.get("sigma").and_then(|v| v.as_i64()) {
+        p.render.blur_sigma = sigma.clamp(1, 200);
     }
     Ok(())
 }
@@ -610,9 +613,14 @@ fn op_blur_del(p: &mut Project, edit: &Value) -> PatchResult {
     del_one(&mut p.captions.blur_boxes, edit, "blur")
 }
 
-/// blur_enable — глобальный тоггл блюра (render.blur). Порт app.py op=="blur_enable".
+/// blur_enable — глобальный тоггл блюра (render.blur) + опционально сила размытия (render.blur_sigma).
 fn op_blur_enable(p: &mut Project, edit: &Value) -> PatchResult {
-    p.render.blur = b(edit, "on").unwrap_or(true);
+    if let Some(on) = b(edit, "on") {
+        p.render.blur = on;
+    }
+    if let Some(sigma) = i(edit, "sigma") {
+        p.render.blur_sigma = sigma.clamp(1, 200);
+    }
     Ok(())
 }
 
@@ -949,8 +957,12 @@ mod tests {
         // "match"/пусто хранится как есть в питоне (None only когда name отсутствует/пусто); тут name="match".
         apply(&mut p, &json!({"op":"preset"})).unwrap();
         assert!(p.captions.preset.name.is_none());
-        apply(&mut p, &json!({"op":"blur_enable","on":false})).unwrap();
+        apply(&mut p, &json!({"op":"blur_enable","on":false,"sigma":45})).unwrap();
         assert!(!p.render.blur);
+        assert_eq!(p.render.blur_sigma, 45);
+        apply(&mut p, &json!({"op":"sub_blur","on":true,"sigma":80})).unwrap();
+        assert!(p.render.blur);
+        assert_eq!(p.render.blur_sigma, 80);
     }
 
     #[test]

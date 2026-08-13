@@ -56,7 +56,13 @@
     "style": "Style",
     "voice": "Voice",
     "preview": "Preview",
-    "timeline": "Timeline"
+    "timeline": "Timeline",
+    "duckMusic": "Duck background music under speech",
+    "duckHint": "Attenuate background music (-3 dB) during dubbing speech. Off — music plays at 100% volume.",
+    "subBlur": "Blur original text (blur mask)",
+    "subBlurHint": "Blur original burned-in subtitles and place new translated text on top",
+    "blurStrength": "Blur strength (sigma)",
+    "blurStrengthHint": "Blur intensity for subtitles mask (sigma)"
   },
   "mode": {
     "subtitles": "Subtitles",
@@ -169,7 +175,13 @@
     "summary": "{{segments}} segments · {{speakers}} speakers · {{lang}} captions",
     "proceed": "Export",
     "tweak": "Keep editing",
-    "beforeAfter": "Original ↔ Dubbed"
+    "beforeAfter": "Original ↔ Dubbed",
+    "modalTitle": "Export Video",
+    "keepOrigCheck": "Export original audio track (2nd track)",
+    "keepOrigDesc": "1st track will be dubbing/voiceover, 2nd track will be original speech. Switchable in media players.",
+    "containerFormat": "Container format",
+    "startExport": "Export",
+    "cancel": "Cancel"
   },
   "blur": {
     "title": "Mask",

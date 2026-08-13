@@ -2962,6 +2962,11 @@ function Editor() {
   };
   const [gainDraft, setGainDraft] = useState<number | null>(null);
   const [voGainDraft, setVoGainDraft] = useState<number | null>(null);   // черновик громкости оригинала (voiceover)
+  const [blurSigmaDraft, setBlurSigmaDraft] = useState<number | null>(null); // черновик силы блюра
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [duckOn, setDuckOn] = useState(false);
+  useEffect(() => { api.capabilities().then((c) => setDuckOn(c.selection?.duck_on === "1")).catch(() => {}); }, []);
+  const setDuckSaved = (v: boolean) => { setDuckOn(v); api.setSelection("duck_on", v ? "1" : "0").catch(() => {}); };
   const [presets, setPresets] = useState<Record<string, Record<string, unknown>>>({});
   useEffect(() => { api.fonts().then((r) => setFonts(r.fonts)).catch(() => {}); }, []);   // bundled caption fonts
   // голоса из каталога; если пусто и ещё не пробовали — тихо тянем дефолтный пак (VibeVoice, ~100МБ) в фоне
@@ -3412,6 +3417,18 @@ function Editor() {
     } finally { setRendering(false); }
   }
 
+  const handleConfirmExport = async (keepOrig: boolean, container: "mp4" | "mkv") => {
+    if (p.audio.keep_original_track !== keepOrig || p.audio.container !== container) {
+      try {
+        const fresh = await api.patch(pid, { op: "keep_original", keep: keepOrig, container });
+        setProject(fresh);
+      } catch (err) {
+        console.error("Failed to patch keep_original:", err);
+      }
+    }
+    await doExport();
+  };
+
   async function doRemix() {                                            // Gemma rewrites the WHOLE script on a theme
     if (!remixText.trim() || remixing) return;
     setRemixing(true); pushActivity(t("remix.apply"));
@@ -3438,7 +3455,7 @@ function Editor() {
     { label: t("mode.voiceover"), run: () => branch("mode", { value: "voiceover" }) },
     { label: t("mode.funny"), run: () => branch("mode", { value: "funny" }) },
     { label: t("mode.transcribe"), run: () => branch("mode", { value: "transcribe" }) },
-    { label: t("export.proceed"), run: () => doExport() },
+    { label: t("export.proceed"), run: () => setShowExportModal(true) },
     { label: t("common.undo"), run: () => doUndo() },
     { label: t("common.redo"), run: () => doRedo() },
     { label: t("compare.toggle"), run: () => setCompare((c) => !c) },
@@ -3631,6 +3648,29 @@ function Editor() {
         {lane === "blur" && (
           <div className="space-y-2">
             <Toggle label={t("blur.on")} on={p.render.blur} onClick={() => branch("blur_enable", { on: !p.render.blur })} />
+            {p.render.blur && (
+              <div className="py-1">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="mono text-[10px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
+                  <span className="mono text-[10px] text-[var(--color-text)] font-semibold">{blurSigmaDraft ?? p.render.blur_sigma ?? 60} σ</span>
+                </div>
+                <input
+                  type="range"
+                  min={5}
+                  max={150}
+                  step={5}
+                  value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
+                  onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
+                  onPointerUp={async () => {
+                    if (blurSigmaDraft != null) {
+                      await branch("blur_enable", { on: p.render.blur, sigma: blurSigmaDraft });
+                      setBlurSigmaDraft(null);
+                    }
+                  }}
+                  className="w-full accent-[var(--color-accent)] cursor-pointer"
+                />
+              </div>
+            )}
             <div className={p.render.blur ? "" : "opacity-40 pointer-events-none"}>
               <div className="flex items-center justify-between mt-2 mb-1.5">
                 <span className="mono text-[10px] text-[var(--color-muted)]">{blurAll ? `${t("blur.all")} · ${(p.captions.blur_boxes || []).length}` : t("blur.frame")}</span>
@@ -3813,7 +3853,7 @@ function Editor() {
           {/* Экспорт-сплит: телепорт в TopBar (#editor-actions-slot). Основная кнопка — экспорт текущего; ▾ — «ещё языки». */}
           {(() => { const s = document.getElementById("editor-actions-slot"); return s ? createPortal(
           <div className="relative shrink-0 flex items-stretch">
-            <button onClick={doExport} disabled={rendering}
+            <button onClick={() => setShowExportModal(true)} disabled={rendering}
               className={`inline-flex items-center gap-2 px-4 py-1.5 ${audioOnly ? "rounded-lg" : "rounded-l-lg"} bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-70 hover:brightness-105 transition`}>
               {rendering ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}{t("export.proceed")}
             </button>
@@ -4028,6 +4068,63 @@ function Editor() {
               className="w-full accent-[var(--color-accent)] cursor-pointer" />
           </div>
 
+          {/* Размытие оригинальных субтитров (блюр-подложка) */}
+          {!audioOnly && (
+            <div className="pt-3 border-t border-[var(--color-border)]/50 space-y-2">
+              <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none" title={t("editor.subBlurHint")}>
+                <input
+                  type="checkbox"
+                  checked={p.render.blur}
+                  onChange={(e) => branch("sub_blur", { on: e.target.checked })}
+                  className="accent-[var(--color-accent)] w-3.5 h-3.5"
+                />
+                <span className="font-medium text-[var(--color-text)]">{t("editor.subBlur")}</span>
+              </label>
+              {p.render.blur && (
+                <div className="pl-5 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={5}
+                        max={150}
+                        value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          if (!isNaN(val)) setBlurSigmaDraft(val);
+                        }}
+                        onBlur={async () => {
+                          if (blurSigmaDraft != null) {
+                            await branch("sub_blur", { on: p.render.blur, sigma: blurSigmaDraft });
+                            setBlurSigmaDraft(null);
+                          }
+                        }}
+                        className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] text-right font-mono focus:border-[var(--color-accent)] focus:outline-none"
+                      />
+                      <span className="mono text-[11px] text-[var(--color-muted)]">σ</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min={5}
+                    max={150}
+                    step={5}
+                    value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
+                    onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
+                    onPointerUp={async () => {
+                      if (blurSigmaDraft != null) {
+                        await branch("sub_blur", { on: p.render.blur, sigma: blurSigmaDraft });
+                        setBlurSigmaDraft(null);
+                      }
+                    }}
+                    className="w-full accent-[var(--color-accent)] cursor-pointer"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
         </div>
         {mode === "funny" && (
           <div className="mt-6">
@@ -4153,6 +4250,20 @@ function Editor() {
                 <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.origGainHint")}</div>
               </div>
             )}
+            {mode === "dub" && (
+              <div className="mt-3">
+                <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none" title={t("editor.duckHint")}>
+                  <input
+                    type="checkbox"
+                    checked={duckOn}
+                    onChange={(e) => setDuckSaved(e.target.checked)}
+                    className="accent-[var(--color-accent)] w-3.5 h-3.5"
+                  />
+                  <span className="text-[var(--color-text)] font-medium">{t("editor.duckMusic")}</span>
+                </label>
+                <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("editor.duckHint")}</div>
+              </div>
+            )}
             <button onClick={doRegenAll} disabled={regenId !== null} title={t("voice.regenAll")}
               className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">
               {regenId === "__all__" ? <Loader2 size={15} className="animate-spin" /> : <RotateCw size={15} />}{t("voice.regenAll")}
@@ -4163,6 +4274,160 @@ function Editor() {
       </aside>
       <CommandPalette commands={cmds} />
       {showHelp && <ShortcutsHelp onClose={() => setShowHelp(false)} />}
+      {showExportModal && (
+        <ExportModal
+          p={p}
+          rendering={rendering}
+          onClose={() => setShowExportModal(false)}
+          onExport={handleConfirmExport}
+        />
+      )}
+    </div>
+  );
+}
+
+// Модальное окно экспорта готового видео (настройки контейнера и 2-й дорожки оригинала)
+function ExportModal({
+  p,
+  rendering,
+  onClose,
+  onExport,
+}: {
+  p: Project;
+  rendering: boolean;
+  onClose: () => void;
+  onExport: (keepOrig: boolean, container: "mp4" | "mkv") => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const audioOnly = !((p.meta.width || 0) > 0 && (p.meta.height || 0) > 0);
+  const isVoiced = p.mode === "dub" || p.mode === "voiceover" || p.audio?.rewrite != null;
+  const showKeepOrig = isVoiced && !audioOnly;
+
+  const [keepOrig, setKeepOrig] = useState<boolean>(p.audio.keep_original_track ?? false);
+  const [container, setContainer] = useState<"mp4" | "mkv">(p.audio.container === "mkv" ? "mkv" : "mp4");
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleStart = async () => {
+    setSubmitting(true);
+    try {
+      await onExport(keepOrig, container);
+      onClose();
+    } catch {
+      setSubmitting(false);
+    }
+  };
+
+  const modeName = p.mode === "voiceover" ? "voiceover" : p.mode === "transcribe" ? "transcribe" : p.audio.rewrite ? "funny" : (p.mode === "nodub" ? "subtitles" : "dub");
+
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center glass-scrim anim-fade" onClick={onClose}>
+      <div className="w-[min(94vw,480px)] flex flex-col rounded-xl glass-panel anim-pop p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between pb-2 border-b border-[var(--color-border)]">
+          <div className="flex items-center gap-2">
+            <Download size={18} className="text-[var(--color-accent)]" />
+            <span className="font-semibold text-sm">{t("export.modalTitle")}</span>
+          </div>
+          <button onClick={onClose} className="text-[var(--color-muted)] hover:text-[var(--color-text)] transition"><X size={16} /></button>
+        </div>
+
+        <div className="space-y-3">
+          {/* Инфо о проекте */}
+          <div className="rounded-lg bg-[var(--color-surface-2)] p-3 border border-[var(--color-border)] text-[12px] space-y-1.5">
+            <div className="flex justify-between">
+              <span className="text-[var(--color-muted)]">{t("mode.subtitles").split(" ")[0]}:</span>
+              <span className="font-medium text-[var(--color-text)]">{t(`mode.${modeName}`)}</span>
+            </div>
+            {!audioOnly && (
+              <div className="flex justify-between">
+                <span className="text-[var(--color-muted)]">Разрешение:</span>
+                <span className="mono text-[var(--color-text)]">{p.meta.width || 0} × {p.meta.height || 0}</span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-[var(--color-muted)]">Длительность:</span>
+              <span className="mono text-[var(--color-text)]">{fmtT(p.meta.duration || 0)}</span>
+            </div>
+          </div>
+
+          {/* Сохранение оригинальной звуковой дорожки */}
+          {showKeepOrig && (
+            <div className="rounded-lg bg-[var(--color-surface-2)] p-3 border border-[var(--color-border)] space-y-2.5">
+              <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={keepOrig}
+                  onChange={(e) => setKeepOrig(e.target.checked)}
+                  className="accent-[var(--color-accent)] w-4 h-4 mt-0.5"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-medium text-[var(--color-text)]">
+                    {t("export.keepOrigCheck")}
+                  </div>
+                  <div className="text-[11px] text-[var(--color-muted)] leading-tight mt-0.5">
+                    {t("export.keepOrigDesc")}
+                  </div>
+                </div>
+              </label>
+
+              {keepOrig && (
+                <div className="pt-2 border-t border-[var(--color-border)]/50">
+                  <div className="text-[11px] text-[var(--color-muted)] mb-1.5">{t("export.containerFormat")}:</div>
+                  <div className="grid grid-cols-2 gap-2 text-[12px]">
+                    <button
+                      type="button"
+                      onClick={() => setContainer("mkv")}
+                      className={`p-2.5 rounded-lg border text-left transition-colors ${
+                        container === "mkv"
+                          ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_10%,transparent)] text-[var(--color-accent)] font-semibold"
+                          : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                      }`}
+                    >
+                      <div className="font-semibold flex items-center justify-between">
+                        <span>MKV</span>
+                        <span className="text-[9px] px-1.5 py-0.2 bg-[var(--color-accent)] text-[var(--color-on-accent)] rounded">Реком.</span>
+                      </div>
+                      <div className="text-[10px] opacity-80 mt-1">Все плееры видят 2 дорожки</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setContainer("mp4")}
+                      className={`p-2.5 rounded-lg border text-left transition-colors ${
+                        container === "mp4"
+                          ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_10%,transparent)] text-[var(--color-accent)] font-semibold"
+                          : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                      }`}
+                    >
+                      <div className="font-semibold">MP4</div>
+                      <div className="text-[10px] opacity-80 mt-1">Широкая совместимость</div>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Кнопки */}
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting || rendering}
+            className="px-3.5 py-1.5 rounded-lg border border-[var(--color-border)] text-[12px] font-medium text-[var(--color-muted)] hover:text-[var(--color-text)] transition"
+          >
+            {t("export.cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={handleStart}
+            disabled={submitting || rendering}
+            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-[12px] font-semibold hover:brightness-105 disabled:opacity-50 transition"
+          >
+            {submitting || rendering ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            {t("export.startExport")}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
