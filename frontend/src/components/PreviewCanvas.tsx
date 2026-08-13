@@ -390,8 +390,8 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
                         width: `${disp.w}px`,
                         textAlign: (ss.align || "center") as React.CSSProperties["textAlign"],
                         fontSize: `${subFontSize}px`,
-                        fontFamily: effectiveFont,
-                        fontWeight: effectiveBold ? "bold" : "normal",
+                        fontFamily: `"${effectiveFont}", "Montserrat", sans-serif`,
+                        fontWeight: effectiveBold ? 800 : 600,
                         fontStyle: ss.italic ? "italic" : "normal",
                         textTransform: effectiveUppercase ? "uppercase" : "none",
                         color: effectiveColor,
@@ -407,7 +407,10 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
                           borderRadius: hasPlate ? plateBorderRadius : undefined,
                           boxDecorationBreak: "clone",
                           WebkitBoxDecorationBreak: "clone",
-                          display: "inline-block",
+                          display: "inline-flex",
+                          flexWrap: "wrap",
+                          justifyContent: "center",
+                          alignItems: "center",
                           maxWidth: "92%",
                           backdropFilter: hasPlate && plateType === "soft" ? "blur(8px)" : undefined,
                           boxShadow: hasPlate && plateColor !== "transparent" ? "0 4px 16px rgba(0,0,0,0.4)" : undefined,
@@ -458,7 +461,7 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
                                 opacity: wordOpacity,
                                 textShadow: wordTextShadow,
                                 transition: "transform 0.08s ease-out, color 0.08s ease-out, opacity 0.08s ease-out",
-                                marginRight: `${4 * sx}px`,
+                                marginRight: idx < words.length - 1 ? "0.28em" : 0,
                               }}
                             >
                               {w.word}
