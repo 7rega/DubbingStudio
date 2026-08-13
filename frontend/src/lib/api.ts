@@ -7,6 +7,7 @@ export type SubStyle = {
   color: string; outline: string; italic: boolean; bold: boolean; uppercase: boolean;
   font?: string | null; scene_color?: string | null; scene_flat: boolean;
   n_lines?: number | null; align: string; size_px?: number | null; outline_w?: number | null; shadow_dir?: number | null;
+  plate?: boolean; plate_color?: string | null;
 };
 export type Segment = {
   id: string; start: number; end: number; speaker?: string | null;
@@ -179,6 +180,7 @@ export const api = {
     fetch(`${BASE}/projects/${pid}/remix?instruction=${encodeURIComponent(instruction)}`, { method: "POST" }).then(j<{ job_id: string }>),
   previewUrl: (pid: string, t: number, rev = 0, lowres = false) => `${BASE}/projects/${pid}/preview?t=${t}&rev=${rev}${lowres ? "&lr=1" : ""}`,   // lr=1 при плее -> низкое разрешение на больших видео (быстрее)
   originalUrl: (pid: string, t: number) => `${BASE}/projects/${pid}/original?t=${t}`,
+  sourceVideoUrl: (pid: string) => `${BASE}/projects/${pid}/source-video`,
   waveform: (pid: string) => getJson<{ peaks: number[] }>(`/projects/${pid}/waveform`),
   outputUrl: (pid: string) => `${BASE}/projects/${pid}/output`,
   openOutput: (pid: string) => fetch(`${BASE}/projects/${pid}/open`, { method: "POST" }).then(j<{ ok: boolean }>),   // открыть output.mp4 в системном плеере (нативный webview не открывает target=_blank)

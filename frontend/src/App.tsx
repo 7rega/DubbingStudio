@@ -3066,7 +3066,7 @@ function Editor() {
     const id = window.setInterval(() => {
       if (a.currentTime >= playEndRef.current) { a.pause(); setPlay(false); }   // single phrase -> stop at its end
       else setScrub(a.currentTime);
-    }, 150);
+    }, 50);
     return () => window.clearInterval(id);
   }, [play]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [regenId, setRegenId] = useState<string | null>(null);        // segment whose TTS is being re-generated

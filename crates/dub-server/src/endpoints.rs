@@ -355,7 +355,7 @@ pub async fn remix_project(
 }
 
 // ─── GET /projects/{pid}/preview?t=&rev= ────────────────────────────────────
-// ОДИН превью-кадр (PNG) через GPU-воркер (сериализовано). Порт app.py.preview (таймаут 300с).
+// ОДИН превью-кадр (JPEG) через быстрый spawn_blocking (не блокирует JobQueue).
 pub async fn preview(
     State(st): State<AppState>,
     AxPath(pid): AxPath<String>,
@@ -378,16 +378,20 @@ pub async fn preview(
     let lowres = q.get("lr").map(|v| v == "1" || v == "true").unwrap_or(false);
     let fonts_dir = st.fonts_dir.clone();
     let work_dir = dir.clone();
-    frame_job(&st, 300, "image/jpeg", move |_p| {
+
+    match tokio::task::spawn_blocking(move || {
         crate::frame::preview_frame(&proj, &input, &work_dir, &fonts_dir, t, lowres)
     })
     .await
+    {
+        Ok(Ok(bytes)) => ([("content-type", "image/jpeg")], bytes).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 // ─── GET /projects/{pid}/original?t= ────────────────────────────────────────
-// Сырой кадр ОРИГИНАЛА (PNG) на t — для before/after. Порт app.py.original (source_frame, таймаут 60с).
-// ВНИМАНИЕ: возвращает ОДИН PNG-кадр (как источник истины app.py), а не всё видео — фронт (ComparePane)
-// использует это как <img src>.
+// Сырой кадр ОРИГИНАЛА (PNG) на t — для before/after.
 pub async fn original_frame(
     State(st): State<AppState>,
     AxPath(pid): AxPath<String>,
@@ -406,42 +410,12 @@ pub async fn original_frame(
     }
     let t: f64 = q.get("t").and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let work_dir = dir.clone();
-    frame_job(&st, 60, "image/png", move |_p| crate::frame::source_frame(&input, &work_dir, t)).await
-}
 
-/// Общий помощник: поставить синхронную кадр-джобу в GPU-воркер, ждать с таймаутом, вернуть
-/// байты с заданным content-type (`mime`) или 504. Порт паттерна app.py.preview/original.
-async fn frame_job<F>(st: &AppState, timeout_s: u64, mime: &'static str, f: F) -> Response
-where
-    F: FnOnce(jobs::ProgressFn) -> Result<Vec<u8>, String> + Send + 'static,
-{
-    let job: jobs::JobFn = Box::new(move |progress| {
-        let png = f(progress)?;
-        // Возвращаем байты как base64 в JSON-результат нельзя эффективно; вместо этого прокидываем через
-        // канал: сериализуем как массив байт в Value (voркер отдаёт oneshot Result<Value>). Читаем ниже.
-        Ok(Value::Array(png.into_iter().map(|b| Value::from(b as u64)).collect()))
-    });
-    let (job_id, rx) = st.jobs.enqueue_awaitable(job).await;
-    match tokio::time::timeout(std::time::Duration::from_secs(timeout_s), rx).await {
-        Ok(Ok(Ok(v))) => {
-            st.jobs.remove(&job_id).await;
-            let bytes: Vec<u8> = v
-                .as_array()
-                .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u8)).collect())
-                .unwrap_or_default();
-            ([("content-type", mime)], bytes).into_response()
-        }
-        Ok(Ok(Err(e))) => {
-            st.jobs.remove(&job_id).await;
-            (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
-        }
-        Ok(Err(_)) => {
-            st.jobs.remove(&job_id).await;
-            (StatusCode::INTERNAL_SERVER_ERROR, "job canceled").into_response()
-        }
-        Err(_) => {
-            st.jobs.mark_abandoned(&job_id).await;
-            (StatusCode::GATEWAY_TIMEOUT, "frame render timed out").into_response()
-        }
+    match tokio::task::spawn_blocking(move || crate::frame::source_frame(&input, &work_dir, t))
+        .await
+    {
+        Ok(Ok(bytes)) => ([("content-type", "image/png")], bytes).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

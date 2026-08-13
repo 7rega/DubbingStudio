@@ -1,27 +1,34 @@
-// PreviewCanvas — the editing heart. Shows the engine's REAL rendered frame (WYSIWYG) with a react-konva
-// overlay: drag/resize the blur boxes, drag/resize the titles, and drag the subtitle band directly on the
-// frame -> PATCH the Project -> re-render the frame. Which objects are interactive follows the LEFT lane
-// (subs | blur | titles): on the titles tab you edit titles, on the mask tab you edit blur zones — они не
-// перехватывают клики друг друга. (A 60fps JASSUB live layer over HTML5 <video> is the M2 upgrade.)
+// PreviewCanvas — the editing heart with Hybrid Playback / WYSIWYG Editing:
+// 1. При воспроизведении (playing === true) играет нативное аппаратное видео (<video>) с 60 FPS
+//    и нулевыми задержками, поверх которого в реальном времени отрисовываются стилизованные субтитры, титры и блюр.
+// 2. При паузе/скраббинге (playing === false) отображается попиксельный серверный кадр с наложением Konva
+//    (перетаскивание/ресайз рамок блюра, титров и полосы субтитров).
 import { useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
 import { Stage, Layer, Rect, Line, Transformer } from "react-konva";
 import type Konva from "konva";
-import { api, type Project } from "../lib/api";
+import { api, type Project, type SubStyle } from "../lib/api";
 import { useStore } from "../store";
 
 type Lane = "subs" | "blur" | "titles";
-type Props = { pid: string; project: Project; scrub: number; rendered: boolean; lane: Lane; playing?: boolean; onChanged: (fresh: Project) => void };
+type Props = {
+  pid: string;
+  project: Project;
+  scrub: number;
+  rendered: boolean;
+  lane: Lane;
+  playing?: boolean;
+  onChanged: (fresh: Project) => void;
+};
 
 export default function PreviewCanvas({ pid, project, scrub, rendered, lane, playing = false, onChanged }: Props) {
-  const { t } = useTranslation();
   const rev = useStore((s) => s.rev);
   const bump = useStore((s) => s.bump);
-  const sel = useStore((s) => s.selBlur);        // SHARED with the left blur list (click list <-> click canvas)
+  const sel = useStore((s) => s.selBlur);        // SHARED with the left blur list
   const setSel = useStore((s) => s.setSelBlur);
   const selT = useStore((s) => s.selTitle);      // SHARED with the left titles list
   const setSelT = useStore((s) => s.setSelTitle);
   const wrap = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const trRef = useRef<Konva.Transformer>(null);
   const boxRefs = useRef<Record<number, Konva.Rect>>({});
   const titleRefs = useRef<Record<number, Konva.Rect>>({});
@@ -33,77 +40,104 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
   const sx = disp.w / vw, sy = disp.h / vh;
   const previewSrc = rendered ? api.outputUrl(pid) : api.previewUrl(pid, scrub, rev);
 
-  // Backpressure превью-кадра: <img> тянет СЛЕДУЮЩИЙ кадр только когда загрузился предыдущий (onLoad),
-  // и всегда самый свежий scrub — промежуточные пропускаем. Без этого плей тикает быстрее серверного
-  // рендера (~150мс/кадр, сериализовано) → очередь растёт, кадр отстаёт от звука → «фриз/слайдшоу».
-  // Теперь превью едет на реальной скорости сервера (свежий кадр под звук, с потерей промежуточных —
-  // ровно «пусть с потерей кадров, но видно»). В rendered-режиме (<video>) не нужно.
+  // Кадр для режима паузы
   const [imgSrc, setImgSrc] = useState(() => api.previewUrl(pid, scrub, rev));
   const loadingRef = useRef(false);
   const pendingRef = useRef<string | null>(null);
-  // Сброс backpressure-латча при смене rendered/pid: когда rendered флипается в true, <img> размонтируется
-  // и его onLoad уже НЕ придёт -> loadingRef остался бы навсегда true, и при возврате в preview кадр замер бы.
+
   useEffect(() => { loadingRef.current = false; pendingRef.current = null; }, [rendered, pid]);
+
+  // Запрос превью-кадра только при паузе или скраббинге (не спамит сервер во время гладкого плеера)
   useEffect(() => {
-    if (rendered) return;
-    const want = api.previewUrl(pid, scrub, rev, playing);   // при плее -> lr=1 (низкое разрешение на больших видео)
-    if (want === imgSrc) return;                                    // этот кадр уже показан/грузится
-    if (loadingRef.current) { pendingRef.current = want; return; }  // сервер занят — запомнить самый свежий
-    loadingRef.current = true; setImgSrc(want);
+    if (rendered || playing) return;
+    const want = api.previewUrl(pid, scrub, rev, false);
+    if (want === imgSrc) return;
+    if (loadingRef.current) { pendingRef.current = want; return; }
+    loadingRef.current = true;
+    setImgSrc(want);
   }, [pid, scrub, rev, rendered, playing, imgSrc]);
+
   const onFrameSettled = () => {
     const next = pendingRef.current;
     pendingRef.current = null;
-    if (next && next !== imgSrc) setImgSrc(next);   // грузим самый свежий из отложенных (loadingRef остаётся true)
-    else loadingRef.current = false;                // очередь пуста — свободны
+    if (next && next !== imgSrc) {
+      setImgSrc(next);
+    } else {
+      loadingRef.current = false;
+    }
   };
 
-  // fit the overlay to the displayed media (preserve aspect)
+  // Синхронизация нативного видеоплеера при плее/паузе/перемотке
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (playing) {
+      if (Math.abs(v.currentTime - scrub) > 0.12) {
+        v.currentTime = scrub;
+      }
+      v.muted = project.mode !== "subtitles";
+      v.play().catch(() => {});
+    } else {
+      v.pause();
+      if (Math.abs(v.currentTime - scrub) > 0.05) {
+        v.currentTime = scrub;
+      }
+    }
+  }, [playing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (!playing && Math.abs(v.currentTime - scrub) > 0.05) {
+      v.currentTime = scrub;
+    } else if (playing && Math.abs(v.currentTime - scrub) > 0.25) {
+      v.currentTime = scrub;
+    }
+  }, [scrub, playing]);
+
+  // Масштабирование холста под контейнер с сохранением соотношения сторон
   useEffect(() => {
     const el = wrap.current; if (!el) return;
     const measure = () => {
       const cw = el.clientWidth, ch = el.clientHeight;
-      if (cw <= 0 || ch <= 0) return;                 // container momentarily 0 -> don't collapse the overlay to 0x0
+      if (cw <= 0 || ch <= 0) return;
       const scale = Math.min(cw / vw, ch / vh);
       setDisp({ w: Math.round(vw * scale), h: Math.round(vh * scale) });
     };
     const ro = new ResizeObserver(measure);
-    ro.observe(el); measure();                        // measure immediately + on every resize
+    ro.observe(el); measure();
     return () => ro.disconnect();
   }, [vw, vh]);
 
-  // attach the resize transformer to the selected object of the ACTIVE lane (blur box or title)
+  // Присоединение трансформера Konva к активному объекту
   useEffect(() => {
     let node: Konva.Rect | null = null;
     if (lane === "blur" && sel != null) {
-      const hidden = (project.captions.blur_boxes || [])[sel]?.hidden;   // no resize handles on a disabled zone
+      const hidden = (project.captions.blur_boxes || [])[sel]?.hidden;
       if (!hidden) node = boxRefs.current[sel] ?? null;
     } else if (lane === "titles" && selT != null) {
       node = titleRefs.current[selT] ?? null;
     }
-    if (node && node.getLayer() && trRef.current) {   // getLayer() != null -> узел ещё смонтирован (не устаревший реф)
+    if (node && node.getLayer() && trRef.current) {
       trRef.current.nodes([node]); trRef.current.getLayer()?.batchDraw();
     } else trRef.current?.nodes([]);
   }, [sel, selT, lane, disp, project]);
 
-  // гасим зависшую центральную направляющую при перемотке/смене вкладки (onDragEnd мог не прийти, если Rect размонтировался в процессе drag)
   useEffect(() => { setGuide(null); }, [scrub, lane]);
 
   async function patch(edit: Record<string, unknown>) {
     setBusy(true);
-    // api.patch returns the authoritative merged Project -> hand it to the parent. A 2nd GET would clobber an
-    // un-persisted tgt_text edit still sitting dirty in the store (textarea not yet blurred).
-    try { const fresh = await api.patch(pid, edit); onChanged(fresh); bump(); } finally { setBusy(false); }  // bump -> frame refetches
+    try { const fresh = await api.patch(pid, edit); onChanged(fresh); bump(); } finally { setBusy(false); }
   }
 
   const blurs = project.captions.blur_boxes || [];
   const titles = project.captions.titles || [];
   const subY = project.captions.sub_y ?? Math.round(vh * 0.82);
+  const ss: Partial<SubStyle> = project.captions.sub_style || {};
 
-  // Центральная направляющая: подсветить, если центр объекта в пределах 8px от центра кадра.
   const centerGuide = (nx: number, wPx: number) =>
     setGuide(Math.abs(nx + wPx / 2 - disp.w / 2) < 8 ? disp.w / 2 : null);
-  // Нормализованный прямоугольник в видео-пикселях после transform (сбрасывает scale); null при нулевом масштабе.
+
   const readRect = (n: Konva.Node): { x: number; y: number; w: number; h: number } | null => {
     if (!sx || !sy) { n.scaleX(1); n.scaleY(1); return null; }
     const w = Math.round((n.width() * n.scaleX()) / sx);
@@ -112,76 +146,292 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
     return { x: Math.round(n.x() / sx), y: Math.round(n.y() / sy), w, h };
   };
 
+  // Живые субтитры для гибридного плеера
+  const activeSeg = project.subs.burn !== false
+    ? (project.segments || []).find((s) => !s.hidden && scrub >= s.start && scrub <= s.end)
+    : null;
+  const activeTitles = (project.captions.titles || []).filter((ti) => scrub >= ti.start && scrub <= ti.end);
+  const activeBlurs = project.render.blur
+    ? (project.captions.blur_boxes || []).filter((b) => !b.hidden && scrub >= b.t0 && scrub <= b.t1)
+    : [];
+
+  const subFontSize = Math.max(10, (ss.size_px ?? Math.round((vh || 1080) / 14)) * sy);
+  const textShadowCSS = (() => {
+    const parts: string[] = [];
+    const ow = Math.max(1, (ss.outline_w ?? 2) * sy);
+    const oc = ss.outline || "#000000";
+    if (ow > 0) {
+      parts.push(
+        `-${ow}px -${ow}px 0 ${oc}`,
+        `${ow}px -${ow}px 0 ${oc}`,
+        `-${ow}px ${ow}px 0 ${oc}`,
+        `${ow}px ${ow}px 0 ${oc}`,
+        `0px -${ow}px 0 ${oc}`,
+        `0px ${ow}px 0 ${oc}`,
+        `-${ow}px 0px 0 ${oc}`,
+        `${ow}px 0px 0 ${oc}`
+      );
+    }
+    if (ss.shadow_dir != null) {
+      const sd = Math.max(2, 3 * sy);
+      parts.push(`${sd}px ${sd}px 3px rgba(0,0,0,0.85)`);
+    }
+    return parts.join(", ");
+  })();
+
   return (
     <div ref={wrap} className="relative w-full h-full min-h-0 overflow-hidden grid place-items-center bg-black/40 rounded-xl">
-      <div className="relative" style={{ width: disp.w, height: disp.h }}>
-        {rendered
-          ? <video src={previewSrc} controls className="absolute inset-0 w-full h-full rounded-lg" />
-          : <img src={imgSrc} alt="frame" onLoad={onFrameSettled} onError={onFrameSettled}
-                 className="absolute inset-0 w-full h-full rounded-lg" />}
-        {!rendered && disp.w > 0 && (
-          <Stage width={disp.w} height={disp.h} className="absolute inset-0"
-                 onMouseDown={(e) => { if (e.target === e.target.getStage()) { setSel(null); setSelT(null); } }}>
-            <Layer>
-              {/* subtitle band — draggable vertically; drop -> PATCH sub_y. Only on the subtitles lane. */}
-              {lane === "subs" && (
-                <Rect x={0} y={subY * sy - 14} width={disp.w} height={28} fill="rgba(198,242,78,0.05)"
-                      stroke="rgba(198,242,78,0.32)" dash={[6, 4]} draggable
-                      dragBoundFunc={(p) => ({ x: 0, y: p.y })}
-                      onDragEnd={(e) => { if (!sy) return; patch({ op: "subpos", sub_y: Math.round((e.target.y() + 14) / sy) }); }} />
-              )}
-              {/* cover zones — ONLY on the mask lane. Selected zone outlined (cyan); rest invisible but clickable
-                  (select via canvas-click or the left list). Active on THIS frame; draggable unless hidden. */}
-              {lane === "blur" && blurs.map((b, i) => {
-                  if (!(scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4)) return null; // не на этом кадре
-                  const on = sel === i, hid = !!b.hidden;
+      <div className="relative overflow-hidden rounded-lg" style={{ width: disp.w, height: disp.h }}>
+        {rendered ? (
+          <video src={previewSrc} controls className="absolute inset-0 w-full h-full rounded-lg" />
+        ) : (
+          <>
+            {/* Аппаратный видеоплеер (плавное 60 FPS воспроизведение) */}
+            <video
+              ref={videoRef}
+              src={api.sourceVideoUrl(pid)}
+              playsInline
+              preload="auto"
+              className={`absolute inset-0 w-full h-full rounded-lg object-contain bg-black ${
+                playing ? "opacity-100" : "opacity-0 pointer-events-none"
+              }`}
+            />
+
+            {/* Стоп-кадр с сервера для точного редактирования на паузе */}
+            <img
+              src={imgSrc}
+              alt="frame"
+              onLoad={onFrameSettled}
+              onError={onFrameSettled}
+              className={`absolute inset-0 w-full h-full rounded-lg object-contain ${
+                playing ? "opacity-0 pointer-events-none" : "opacity-100"
+              }`}
+            />
+
+            {/* Живой оверлей субтитров/титров/блюра во время воспроизведения */}
+            {playing && disp.w > 0 && (
+              <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                {/* Размытия (блюр-боксы) */}
+                {activeBlurs.map((b, i) => (
+                  <div
+                    key={`live-blur-${i}`}
+                    style={{
+                      position: "absolute",
+                      left: `${b.x * sx}px`,
+                      top: `${b.y * sy}px`,
+                      width: `${b.w * sx}px`,
+                      height: `${b.h * sy}px`,
+                      backgroundColor: b.fill || "rgba(0,0,0,0.45)",
+                      backdropFilter: b.fill ? undefined : `blur(${Math.max(4, (project.render.blur_sigma || 60) * 0.15)}px)`,
+                      borderRadius: `${2 * sx}px`,
+                    }}
+                  />
+                ))}
+
+                {/* Титры */}
+                {activeTitles.map((ti, i) => {
+                  const [bx, by, bw, bh] = (ti.bbox || [0, 0, vw, 60]) as number[];
+                  const tSize = (ti.size_px || Math.round(vh / 18)) * sy;
                   return (
-                    <Rect key={`b${i}`} ref={(n) => { if (n) boxRefs.current[i] = n; else delete boxRefs.current[i]; }}
-                          x={b.x * sx} y={b.y * sy} width={b.w * sx} height={b.h * sy}
+                    <div
+                      key={`live-title-${i}`}
+                      style={{
+                        position: "absolute",
+                        left: `${bx * sx}px`,
+                        top: `${by * sy}px`,
+                        width: `${bw * sx}px`,
+                        height: `${bh * sy}px`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: ti.align === "left" ? "flex-start" : ti.align === "right" ? "flex-end" : "center",
+                        textAlign: (ti.align || "center") as React.CSSProperties["textAlign"],
+                        fontSize: `${tSize}px`,
+                        fontFamily: ti.font || ss.font || "Montserrat",
+                        fontWeight: ti.bold ? "bold" : "normal",
+                        fontStyle: ti.italic ? "italic" : "normal",
+                        textTransform: ti.uppercase ? "uppercase" : "none",
+                        color: ti.color || "#FFFFFF",
+                        textShadow: ti.outline ? `0 0 ${ti.outline_w || 2}px ${ti.outline}` : undefined,
+                      }}
+                    >
+                      {ti.tgt || ti.text}
+                    </div>
+                  );
+                })}
+
+                {/* Основные субтитры */}
+                {activeSeg && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: `${Math.max(0, Math.min(disp.h - subFontSize - 10, subY * sy - subFontSize * 0.6))}px`,
+                      width: `${disp.w}px`,
+                      textAlign: (ss.align || "center") as React.CSSProperties["textAlign"],
+                      fontSize: `${subFontSize}px`,
+                      fontFamily: ss.font || "Montserrat",
+                      fontWeight: ss.bold ? "bold" : "normal",
+                      fontStyle: ss.italic ? "italic" : "normal",
+                      textTransform: ss.uppercase ? "uppercase" : "none",
+                      color: ss.color || "#FFFFFF",
+                      textShadow: textShadowCSS,
+                      lineHeight: 1.15,
+                      padding: `0 ${16 * sx}px`,
+                    }}
+                  >
+                    {ss.plate ? (
+                      <span
+                        style={{
+                          backgroundColor: ss.plate_color || "rgba(0,0,0,0.7)",
+                          padding: `${3 * sy}px ${10 * sx}px`,
+                          borderRadius: `${4 * sy}px`,
+                          boxDecorationBreak: "clone",
+                          WebkitBoxDecorationBreak: "clone",
+                        }}
+                      >
+                        {activeSeg.tgt_text || activeSeg.src_text}
+                      </span>
+                    ) : (
+                      activeSeg.tgt_text || activeSeg.src_text
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Интерактивный редакторский холст Konva (активен на паузе) */}
+            {!playing && disp.w > 0 && (
+              <Stage
+                width={disp.w}
+                height={disp.h}
+                className="absolute inset-0"
+                onMouseDown={(e) => {
+                  if (e.target === e.target.getStage()) {
+                    setSel(null);
+                    setSelT(null);
+                  }
+                }}
+              >
+                <Layer>
+                  {/* Полоса субтитров (перетаскивание по высоте) */}
+                  {lane === "subs" && (
+                    <Rect
+                      x={0}
+                      y={subY * sy - 14}
+                      width={disp.w}
+                      height={28}
+                      fill="rgba(198,242,78,0.05)"
+                      stroke="rgba(198,242,78,0.32)"
+                      dash={[6, 4]}
+                      draggable
+                      dragBoundFunc={(p) => ({ x: 0, y: p.y })}
+                      onDragEnd={(e) => {
+                        if (!sy) return;
+                        patch({ op: "subpos", sub_y: Math.round((e.target.y() + 14) / sy) });
+                      }}
+                    />
+                  )}
+
+                  {/* Рамки размытия (маска) */}
+                  {lane === "blur" &&
+                    blurs.map((b, i) => {
+                      if (!(scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4)) return null;
+                      const on = sel === i,
+                        hid = !!b.hidden;
+                      return (
+                        <Rect
+                          key={`b${i}`}
+                          ref={(n) => {
+                            if (n) boxRefs.current[i] = n;
+                            else delete boxRefs.current[i];
+                          }}
+                          x={b.x * sx}
+                          y={b.y * sy}
+                          width={b.w * sx}
+                          height={b.h * sy}
                           fill={on ? (hid ? "rgba(255,255,255,0.06)" : "rgba(91,224,200,0.18)") : "rgba(255,255,255,0.001)"}
-                          stroke={on ? "#5be0c8" : undefined} strokeWidth={on ? 2.5 : 0}
-                          dash={on && hid ? [6, 4] : undefined} draggable={!hid}
-                          onClick={() => setSel(i)} onTap={() => setSel(i)}
+                          stroke={on ? "#5be0c8" : undefined}
+                          strokeWidth={on ? 2.5 : 0}
+                          dash={on && hid ? [6, 4] : undefined}
+                          draggable={!hid}
+                          onClick={() => setSel(i)}
+                          onTap={() => setSel(i)}
                           onDragMove={(e) => centerGuide(e.target.x(), b.w * sx)}
-                          onDragEnd={(e) => { setGuide(null); if (!sx || !sy) return; patch({ op: "blur", idx: i, x: Math.round(e.target.x() / sx), y: Math.round(e.target.y() / sy) }); }}
+                          onDragEnd={(e) => {
+                            setGuide(null);
+                            if (!sx || !sy) return;
+                            patch({
+                              op: "blur",
+                              idx: i,
+                              x: Math.round(e.target.x() / sx),
+                              y: Math.round(e.target.y() / sy),
+                            });
+                          }}
                           onTransformEnd={(e) => {
                             const r = readRect(e.target);
                             if (r) patch({ op: "blur", idx: i, x: r.x, y: r.y, w: r.w, h: r.h });
-                          }} />
-                  );
-                })}
-              {/* titles — ONLY on the titles lane. bbox=[x,y,w,h] в видео-пикселях (совпадает с ass::emit_title).
-                  Все титры на этом кадре обведены пунктиром (видно, что кликабельны); выбранный — сплошной.
-                  Drag/resize -> PATCH op:"title" bbox. */}
-              {lane === "titles" && titles.map((ti, i) => {
-                  if ((ti.bbox?.length ?? 0) < 4 || !(scrub >= ti.start - 0.1 && scrub <= ti.end + 0.1)) return null;
-                  const [bx, by, bw, bh] = ti.bbox as number[];
-                  const on = selT === i;
-                  return (
-                    <Rect key={`t${i}`} ref={(n) => { if (n) titleRefs.current[i] = n; else delete titleRefs.current[i]; }}
-                          x={bx * sx} y={by * sy} width={bw * sx} height={bh * sy}
+                          }}
+                        />
+                      );
+                    })}
+
+                  {/* Титры */}
+                  {lane === "titles" &&
+                    titles.map((ti, i) => {
+                      if ((ti.bbox?.length ?? 0) < 4 || !(scrub >= ti.start - 0.1 && scrub <= ti.end + 0.1)) return null;
+                      const [bx, by, bw, bh] = ti.bbox as number[];
+                      const on = selT === i;
+                      return (
+                        <Rect
+                          key={`t${i}`}
+                          ref={(n) => {
+                            if (n) titleRefs.current[i] = n;
+                            else delete titleRefs.current[i];
+                          }}
+                          x={bx * sx}
+                          y={by * sy}
+                          width={bw * sx}
+                          height={bh * sy}
                           fill={on ? "rgba(198,242,78,0.16)" : "rgba(198,242,78,0.001)"}
-                          stroke={on ? "#c6f24e" : "rgba(198,242,78,0.55)"} strokeWidth={on ? 2.5 : 1}
-                          dash={on ? undefined : [5, 4]} draggable
-                          onClick={() => setSelT(i)} onTap={() => setSelT(i)}
+                          stroke={on ? "#c6f24e" : "rgba(198,242,78,0.55)"}
+                          strokeWidth={on ? 2.5 : 1}
+                          dash={on ? undefined : [5, 4]}
+                          draggable
+                          onClick={() => setSelT(i)}
+                          onTap={() => setSelT(i)}
                           onDragMove={(e) => centerGuide(e.target.x(), bw * sx)}
-                          onDragEnd={(e) => { setGuide(null); if (!sx || !sy) return; patch({ op: "title", idx: i, bbox: [Math.round(e.target.x() / sx), Math.round(e.target.y() / sy), bw, bh] }); }}
+                          onDragEnd={(e) => {
+                            setGuide(null);
+                            if (!sx || !sy) return;
+                            patch({
+                              op: "title",
+                              idx: i,
+                              bbox: [Math.round(e.target.x() / sx), Math.round(e.target.y() / sy), bw, bh],
+                            });
+                          }}
                           onTransformEnd={(e) => {
                             const r = readRect(e.target);
                             if (r) patch({ op: "title", idx: i, bbox: [r.x, r.y, r.w, r.h] });
-                          }} />
-                  );
-                })}
-              {guide != null && <Line points={[guide, 0, guide, disp.h]} stroke="#5be0c8" dash={[4, 4]} />}
-              <Transformer ref={trRef} rotateEnabled={false} ignoreStroke
-                           boundBoxFunc={(_, b) => ({ ...b, width: Math.max(20, b.width), height: Math.max(12, b.height) })} />
-            </Layer>
-          </Stage>
+                          }}
+                        />
+                      );
+                    })}
+
+                  {guide != null && <Line points={[guide, 0, guide, disp.h]} stroke="#5be0c8" dash={[4, 4]} />}
+                  <Transformer
+                    ref={trRef}
+                    rotateEnabled={false}
+                    ignoreStroke
+                    boundBoxFunc={(_, b) => ({ ...b, width: Math.max(20, b.width), height: Math.max(12, b.height) })}
+                  />
+                </Layer>
+              </Stage>
+            )}
+          </>
         )}
-        {busy && <div className="absolute top-2 right-2 text-[11px] text-[var(--color-accent-2)] bg-black/60 px-2 py-0.5 rounded">updating…</div>}
-        {playing && !rendered && (
-          <div className="absolute top-2 left-1/2 -translate-x-1/2 max-w-[92%] text-center text-[10.5px] leading-tight text-white/90 bg-black/60 backdrop-blur-sm px-2.5 py-1 rounded-full pointer-events-none">
-            {t("play.lagNotice")}
+        {busy && (
+          <div className="absolute top-2 right-2 text-[11px] text-[var(--color-accent-2)] bg-black/60 px-2 py-0.5 rounded">
+            updating…
           </div>
         )}
       </div>

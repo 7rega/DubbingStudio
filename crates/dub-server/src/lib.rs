@@ -385,9 +385,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/projects/{pid}/save-text", post(save_text))
         .route("/projects/{pid}/save-output", post(save_output))
         .route("/projects/{pid}/dub-audio", post(dub_audio_project))
-        // /original?t= отдаёт ОДИН PNG-кадр оригинала (порт app.py.original -> source_frame),
-        // фронт (ComparePane) вставляет его как <img src>. Range-раздача сырого видео — /dub.
         .route("/projects/{pid}/original", get(endpoints::original_frame))
+        .route("/projects/{pid}/source-video", get(source_video))
         .route("/projects/{pid}/dub", get(dub_video))
         .route("/jobs/{job_id}/events", get(job_events))
         // SPA fallback — монтируется последним, чтобы не затенять API.
@@ -2351,6 +2350,40 @@ async fn save_text(State(st): State<AppState>, AxPath(pid): AxPath<String>, Json
         reveal_in_explorer(f.to_string_lossy().to_string());
     }
     Json(json!({ "ok": true, "path": f.to_string_lossy() })).into_response()
+}
+
+/// GET /projects/{pid}/source-video — отдать исходное видео для плавного аппаратного плеера.
+async fn source_video(
+    State(st): State<AppState>,
+    AxPath(pid): AxPath<String>,
+    req: axum::http::Request<axum::body::Body>,
+) -> Response {
+    let dir = match st.proj_dir(&pid) {
+        Ok(d) => d,
+        Err(resp) => return resp,
+    };
+    let mut f = PathBuf::new();
+    if let Ok(p) = std::fs::read_to_string(dir.join("source.txt")) {
+        let sp = PathBuf::from(p.trim());
+        if sp.is_file() {
+            f = sp;
+        }
+    }
+    if !f.is_file() {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.file_stem().and_then(|s| s.to_str()) == Some("source") && p.is_file() {
+                    f = p;
+                    break;
+                }
+            }
+        }
+    }
+    if !f.is_file() {
+        return (StatusCode::NOT_FOUND, "no source video found").into_response();
+    }
+    serve_file_range(&f, req, None).await
 }
 
 async fn dub_video(
