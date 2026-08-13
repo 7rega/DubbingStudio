@@ -2857,13 +2857,14 @@ function parseSrtAssText(content: string): { start: number; end: number; speaker
   const isAss = lines.some((l) => l.trim().startsWith("[Events]") || l.trim().startsWith("Dialogue:"));
 
   if (isAss) {
-    let startIdx = 1, endIdx = 2, nameIdx = 4, textIdx = 9;
+    let startIdx = 1, endIdx = 2, styleIdx = 3, nameIdx = 4, textIdx = 9;
     for (const line of lines) {
       const trimmed = line.trim();
       if (trimmed.startsWith("Format:")) {
         const fields = trimmed.substring(7).split(",").map((f) => f.trim().toLowerCase());
         const s = fields.indexOf("start"); if (s !== -1) startIdx = s;
         const e = fields.indexOf("end"); if (e !== -1) endIdx = e;
+        const st = fields.indexOf("style"); if (st !== -1) styleIdx = st;
         const n = fields.indexOf("name"); if (n !== -1) nameIdx = n;
         const t = fields.indexOf("text"); if (t !== -1) textIdx = t;
       } else if (trimmed.startsWith("Dialogue:")) {
@@ -2871,13 +2872,38 @@ function parseSrtAssText(content: string): { start: number; end: number; speaker
         if (parts.length > textIdx) {
           const startStr = parts[startIdx]?.trim() || "0";
           const endStr = parts[endIdx]?.trim() || "0";
-          const speaker = parts[nameIdx]?.trim() || "0";
+          const styleStr = styleIdx !== -1 ? (parts[styleIdx]?.trim() || "") : "";
+          const nameStr = nameIdx !== -1 ? (parts[nameIdx]?.trim() || "") : "";
           const textRaw = parts.slice(textIdx).join(",");
-          const textClean = textRaw.replace(/\\N/gi, " ").replace(/\{[^}]+\}/g, "").trim();
+          let textClean = textRaw.replace(/\\N/gi, " ").replace(/\{[^}]+\}/g, "").trim();
+
+          // Извлекаем спикера: Name -> Style -> префикс в тексте
+          let spk = "";
+          if (nameStr && nameStr !== "Default" && nameStr !== "*Default") {
+            const m = nameStr.match(/^(?:speaker|spk|спикер|actor)[_\s-]*([a-zA-Z0-9_-]+)$/i);
+            spk = m ? m[1] : nameStr;
+          }
+          if (!spk && styleStr && styleStr !== "Default" && styleStr !== "*Default") {
+            const m = styleStr.match(/^(?:speaker|spk|спикер|actor)[_\s-]*([a-zA-Z0-9_-]+)$/i);
+            if (m) {
+              spk = m[1];
+            } else if (/^\d+$/.test(styleStr)) {
+              spk = styleStr;
+            }
+          }
+          if (!spk) {
+            const tm = textClean.match(/^\[(?:speaker|spk|спикер|actor)?\s*([a-zA-Z0-9_-]+)\]\s*(.*)$/i) ||
+                       textClean.match(/^(?:speaker|spk|спикер|actor)\s*([a-zA-Z0-9_-]+):\s*(.*)$/i);
+            if (tm) {
+              spk = tm[1];
+              textClean = tm[2].trim();
+            }
+          }
+
           const start = parseSrtTime(startStr);
           const end = parseSrtTime(endStr);
           if (end > start) {
-            results.push({ start, end, speaker: speaker || "0", text: textClean });
+            results.push({ start, end, speaker: spk || "0", text: textClean });
           }
         }
       }
@@ -2898,10 +2924,18 @@ function parseSrtAssText(content: string): { start: number; end: number; speaker
       const end = parseSrtTime(timeParts[1]);
 
       const rawText = bLines.slice(timeLineIdx + 1).join(" ");
-      const textClean = rawText.replace(/<[^>]+>/g, "").trim();
+      let textClean = rawText.replace(/<[^>]+>/g, "").trim();
+
+      let spk = "";
+      const tm = textClean.match(/^\[(?:speaker|spk|спикер|actor)?\s*([a-zA-Z0-9_-]+)\]\s*(.*)$/i) ||
+                 textClean.match(/^(?:speaker|spk|спикер|actor)\s*([a-zA-Z0-9_-]+):\s*(.*)$/i);
+      if (tm) {
+        spk = tm[1];
+        textClean = tm[2].trim();
+      }
 
       if (end > start && textClean) {
-        results.push({ start, end, speaker: "0", text: textClean });
+        results.push({ start, end, speaker: spk || "0", text: textClean });
       }
     }
   }
@@ -3091,7 +3125,7 @@ function Editor() {
         speakers.map(spk => `Style: Speaker_${spk},Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1`).join("\n") +
         `\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
 
-      const content = header + p.segments.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Speaker_${s.speaker ?? "0"},,0,0,0,,${(s.tgt_text || s.src_text || "").trim().replace(/\n/g, "\\N")}`).join("\n");
+      const content = header + p.segments.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Speaker_${s.speaker ?? "0"},${s.speaker ?? "0"},0,0,0,,${(s.tgt_text || s.src_text || "").trim().replace(/\n/g, "\\N")}`).join("\n");
       await api.putProject(pid, p);
 
       if ("showSaveFilePicker" in window) {
@@ -3148,14 +3182,15 @@ function Editor() {
             }
           }
         }
+        const itemSpk = (item.speaker && item.speaker.trim() !== "") ? item.speaker.trim() : null;
         return {
           id: `s${idx + 1}`,
           start: Math.max(0, item.start),
           end: Math.max(item.start + 0.1, item.end),
-          speaker: match?.speaker || item.speaker || "0",
+          speaker: itemSpk ?? match?.speaker ?? "0",
           src_text: match?.src_text || "",
           tgt_text: item.text,
-          voice: match?.voice || null,
+          voice: (itemSpk && match && itemSpk !== match.speaker) ? null : (match?.voice || null),
           dirty: true,
         };
       });
