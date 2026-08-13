@@ -1,6 +1,6 @@
 // PreviewCanvas — the editing heart with Hybrid Playback / WYSIWYG Editing:
 // 1. При воспроизведении (playing === true) играет нативное аппаратное видео (<video>) с 60 FPS
-//    и нулевыми задержками, поверх которого в реальном времени отрисовываются стилизованные субтитры, титры и блюр.
+//    и нулевыми задержками, поверх которого в реальном времени отрисовываются пресеты, стилизованные субтитры, титры и блюр.
 // 2. При паузе/скраббинге (playing === false) отображается попиксельный серверный кадр с наложением Konva
 //    (перетаскивание/ресайз рамок блюра, титров и полосы субтитров).
 import { useEffect, useRef, useState } from "react";
@@ -18,6 +18,47 @@ type Props = {
   lane: Lane;
   playing?: boolean;
   onChanged: (fresh: Project) => void;
+};
+
+// Каталог 26 пресетов субтитров (синхронизирован с backend dub-captions / look.rs)
+const PRESET_LOOKS: Record<
+  string,
+  {
+    font: string;
+    color: string;
+    plate: "box" | "pill" | "rounded" | "card" | "glow" | "blob" | "soft" | "none";
+    plate_c: string;
+    accent?: string;
+    bold?: boolean;
+    uppercase?: boolean;
+  }
+> = {
+  clean: { font: "Montserrat", color: "#FFFFFF", plate: "pill", plate_c: "#1A1A1A" },
+  minimal: { font: "Roboto", color: "#FFFFFF", plate: "rounded", plate_c: "#181818" },
+  boxed: { font: "Montserrat", color: "#FFFFFF", plate: "box", plate_c: "#101010" },
+  headline: { font: "Oswald", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", uppercase: true },
+  serif: { font: "Playfair Display", color: "#FFFFFF", plate: "card", plate_c: "#16110D" },
+  card: { font: "Montserrat", color: "#FFFFFF", plate: "card", plate_c: "#16110D" },
+  hormozi: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#FFD400", bold: true, uppercase: true },
+  hormozi_green: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#28E0A8", bold: true, uppercase: true },
+  mrbeast: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#FFE000", bold: true, uppercase: true },
+  impact: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#101010", accent: "#FF3B30", bold: true, uppercase: true },
+  pop: { font: "Oswald", color: "#FFFFFF", plate: "pill", plate_c: "#141414", bold: true, uppercase: true },
+  karaoke: { font: "Oswald", color: "#FFFFFF", plate: "pill", plate_c: "#181818", accent: "#28E0A8", bold: true },
+  karaoke_gold: { font: "Montserrat", color: "#FFFFFF", plate: "box", plate_c: "#101010", accent: "#FFD400", bold: true },
+  karaoke_neon: { font: "Montserrat", color: "#FFFFFF", plate: "glow", plate_c: "#0A0A14", accent: "#00E5FF", bold: true },
+  bubble: { font: "Caveat", color: "#201018", plate: "blob", plate_c: "#FF5DA2", bold: true },
+  bubble_pop: { font: "Pacifico", color: "#201018", plate: "blob", plate_c: "#FFC857" },
+  candy: { font: "Pacifico", color: "#2A0E1E", plate: "pill", plate_c: "#FF6FB5" },
+  neon: { font: "Montserrat", color: "#00E5FF", plate: "glow", plate_c: "#0A0A14", accent: "#00E5FF", bold: true },
+  neon_pink: { font: "Oswald", color: "#FF54C8", plate: "glow", plate_c: "#100A14", accent: "#FF54C8", bold: true },
+  cyber: { font: "Oswald", color: "#7DF9FF", plate: "glow", plate_c: "#07101A", accent: "#00E5FF", bold: true },
+  fresh: { font: "Montserrat", color: "#FFFFFF", plate: "none", plate_c: "transparent" },
+  fresh_bold: { font: "Russo One", color: "#FFFFFF", plate: "none", plate_c: "transparent", bold: true },
+  fresh_pop: { font: "Montserrat", color: "#FFFFFF", plate: "none", plate_c: "transparent", bold: true },
+  fresh_karaoke: { font: "Oswald", color: "#FFFFFF", plate: "none", plate_c: "transparent", accent: "#FFD400", bold: true },
+  fresh_hormozi: { font: "Russo One", color: "#FFFFFF", plate: "none", plate_c: "transparent", accent: "#FFD400", bold: true, uppercase: true },
+  fresh_soft: { font: "Montserrat", color: "#FFFFFF", plate: "soft", plate_c: "transparent" },
 };
 
 export default function PreviewCanvas({ pid, project, scrub, rendered, lane, playing = false, onChanged }: Props) {
@@ -47,7 +88,7 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
 
   useEffect(() => { loadingRef.current = false; pendingRef.current = null; }, [rendered, pid]);
 
-  // Запрос превью-кадра только при паузе или скраббинге (не спамит сервер во время гладкого плеера)
+  // Запрос превью-кадра только при паузе или скраббинге
   useEffect(() => {
     if (rendered || playing) return;
     const want = api.previewUrl(pid, scrub, rev, false);
@@ -135,6 +176,10 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
   const subY = project.captions.sub_y ?? Math.round(vh * 0.82);
   const ss: Partial<SubStyle> = project.captions.sub_style || {};
 
+  // Пресет стилей субтитров
+  const presetName = String(project.captions.preset?.name || "");
+  const preset = PRESET_LOOKS[presetName] || null;
+
   const centerGuide = (nx: number, wPx: number) =>
     setGuide(Math.abs(nx + wPx / 2 - disp.w / 2) < 8 ? disp.w / 2 : null);
 
@@ -155,28 +200,47 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
     ? (project.captions.blur_boxes || []).filter((b) => !b.hidden && scrub >= b.t0 && scrub <= b.t1)
     : [];
 
+  const effectiveFont = preset?.font || ss.font || "Montserrat";
+  const effectiveColor = preset?.color || ss.color || "#FFFFFF";
+  const effectiveBold = preset?.bold ?? ss.bold;
+  const effectiveUppercase = preset?.uppercase ?? ss.uppercase;
+  const hasPlate = preset ? preset.plate !== "none" : !!ss.plate;
+  const plateColor = preset?.plate_c || ss.plate_color || "rgba(0,0,0,0.75)";
+  const plateType = preset?.plate || (ss.plate ? "box" : "none");
+
   const subFontSize = Math.max(10, (ss.size_px ?? Math.round((vh || 1080) / 14)) * sy);
   const textShadowCSS = (() => {
     const parts: string[] = [];
-    const ow = Math.max(1, (ss.outline_w ?? 2) * sy);
-    const oc = ss.outline || "#000000";
-    if (ow > 0) {
-      parts.push(
-        `-${ow}px -${ow}px 0 ${oc}`,
-        `${ow}px -${ow}px 0 ${oc}`,
-        `-${ow}px ${ow}px 0 ${oc}`,
-        `${ow}px ${ow}px 0 ${oc}`,
-        `0px -${ow}px 0 ${oc}`,
-        `0px ${ow}px 0 ${oc}`,
-        `-${ow}px 0px 0 ${oc}`,
-        `${ow}px 0px 0 ${oc}`
-      );
-    }
-    if (ss.shadow_dir != null) {
-      const sd = Math.max(2, 3 * sy);
-      parts.push(`${sd}px ${sd}px 3px rgba(0,0,0,0.85)`);
+    if (preset?.plate === "glow" && preset.accent) {
+      parts.push(`0 0 10px ${preset.accent}`, `0 0 20px ${preset.accent}`, `0 0 35px ${preset.accent}`);
+    } else {
+      const ow = Math.max(1, (ss.outline_w ?? 2) * sy);
+      const oc = ss.outline || "#000000";
+      if (ow > 0) {
+        parts.push(
+          `-${ow}px -${ow}px 0 ${oc}`,
+          `${ow}px -${ow}px 0 ${oc}`,
+          `-${ow}px ${ow}px 0 ${oc}`,
+          `${ow}px ${ow}px 0 ${oc}`,
+          `0px -${ow}px 0 ${oc}`,
+          `0px ${ow}px 0 ${oc}`,
+          `-${ow}px 0px 0 ${oc}`,
+          `${ow}px 0px 0 ${oc}`
+        );
+      }
+      if (ss.shadow_dir != null) {
+        const sd = Math.max(2, 3 * sy);
+        parts.push(`${sd}px ${sd}px 3px rgba(0,0,0,0.85)`);
+      }
     }
     return parts.join(", ");
+  })();
+
+  const plateBorderRadius = (() => {
+    if (plateType === "pill") return "9999px";
+    if (plateType === "rounded" || plateType === "card" || plateType === "blob") return `${8 * sy}px`;
+    if (plateType === "box") return `${4 * sy}px`;
+    return `${4 * sy}px`;
   })();
 
   return (
@@ -211,7 +275,23 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
             {/* Живой оверлей субтитров/титров/блюра во время воспроизведения */}
             {playing && disp.w > 0 && (
               <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                {/* Размытия (блюр-боксы) */}
+                {/* Размытие оригинальных субтитров (авто-блюр подложка) */}
+                {project.render.blur && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: `${disp.w * 0.08}px`,
+                      top: `${Math.max(0, subY * sy - subFontSize * 0.7)}px`,
+                      width: `${disp.w * 0.84}px`,
+                      height: `${subFontSize * 1.65}px`,
+                      backdropFilter: `blur(${Math.max(6, (project.render.blur_sigma || 60) * 0.25)}px)`,
+                      backgroundColor: "rgba(0, 0, 0, 0.45)",
+                      borderRadius: `${8 * sy}px`,
+                    }}
+                  />
+                )}
+
+                {/* Пользовательские зоны размытия (блюр-боксы) */}
                 {activeBlurs.map((b, i) => (
                   <div
                     key={`live-blur-${i}`}
@@ -222,8 +302,8 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
                       width: `${b.w * sx}px`,
                       height: `${b.h * sy}px`,
                       backgroundColor: b.fill || "rgba(0,0,0,0.45)",
-                      backdropFilter: b.fill ? undefined : `blur(${Math.max(4, (project.render.blur_sigma || 60) * 0.15)}px)`,
-                      borderRadius: `${2 * sx}px`,
+                      backdropFilter: b.fill ? undefined : `blur(${Math.max(6, (project.render.blur_sigma || 60) * 0.25)}px)`,
+                      borderRadius: `${4 * sx}px`,
                     }}
                   />
                 ))}
@@ -246,7 +326,7 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
                         justifyContent: ti.align === "left" ? "flex-start" : ti.align === "right" ? "flex-end" : "center",
                         textAlign: (ti.align || "center") as React.CSSProperties["textAlign"],
                         fontSize: `${tSize}px`,
-                        fontFamily: ti.font || ss.font || "Montserrat",
+                        fontFamily: ti.font || effectiveFont,
                         fontWeight: ti.bold ? "bold" : "normal",
                         fontStyle: ti.italic ? "italic" : "normal",
                         textTransform: ti.uppercase ? "uppercase" : "none",
@@ -269,27 +349,32 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
                       width: `${disp.w}px`,
                       textAlign: (ss.align || "center") as React.CSSProperties["textAlign"],
                       fontSize: `${subFontSize}px`,
-                      fontFamily: ss.font || "Montserrat",
-                      fontWeight: ss.bold ? "bold" : "normal",
+                      fontFamily: effectiveFont,
+                      fontWeight: effectiveBold ? "bold" : "normal",
                       fontStyle: ss.italic ? "italic" : "normal",
-                      textTransform: ss.uppercase ? "uppercase" : "none",
-                      color: ss.color || "#FFFFFF",
+                      textTransform: effectiveUppercase ? "uppercase" : "none",
+                      color: effectiveColor,
                       textShadow: textShadowCSS,
                       lineHeight: 1.15,
                       padding: `0 ${16 * sx}px`,
                     }}
                   >
-                    {ss.plate ? (
+                    {hasPlate ? (
                       <span
                         style={{
-                          backgroundColor: ss.plate_color || "rgba(0,0,0,0.7)",
-                          padding: `${3 * sy}px ${10 * sx}px`,
-                          borderRadius: `${4 * sy}px`,
+                          backgroundColor: plateColor,
+                          padding: `${4 * sy}px ${12 * sx}px`,
+                          borderRadius: plateBorderRadius,
                           boxDecorationBreak: "clone",
                           WebkitBoxDecorationBreak: "clone",
+                          display: "inline-block",
                         }}
                       >
-                        {activeSeg.tgt_text || activeSeg.src_text}
+                        {preset?.accent ? (
+                          <span style={{ color: preset.accent }}>{activeSeg.tgt_text || activeSeg.src_text}</span>
+                        ) : (
+                          activeSeg.tgt_text || activeSeg.src_text
+                        )}
                       </span>
                     ) : (
                       activeSeg.tgt_text || activeSeg.src_text

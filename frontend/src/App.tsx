@@ -1981,14 +1981,45 @@ function WaveformTimeline({ pid, duration, scrub, segments, onSeek, gainDb = 0 }
   const [peaks, setPeaks] = useState<number[]>([]);
   const wrap = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(800);
+  const isDragging = useRef(false);
+
   useEffect(() => { api.waveform(pid).then((r) => setPeaks(r.peaks)).catch(() => {}); }, [pid]);
   useEffect(() => { const el = wrap.current; if (!el) return; const ro = new ResizeObserver(() => setW(el.clientWidth)); ro.observe(el); return () => ro.disconnect(); }, []);
   const h = 40, dur = duration || 1, bw = peaks.length ? w / peaks.length : 1;
   const gainLin = Math.pow(10, gainDb / 20);   // dB -> линейный коэффициент амплитуды (гейн дорожки визуально)
+
+  const seekFromEvent = (clientX: number) => {
+    const el = wrap.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const t = Math.max(0, Math.min(dur, ((clientX - r.left) / r.width) * dur));
+    onSeek(t);
+  };
+
   return (
-    <div ref={wrap} className="relative w-full overflow-hidden cursor-pointer select-none" style={{ height: h }}
-      onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); onSeek(Math.max(0, Math.min(dur, (e.clientX - r.left) / r.width * dur))); }}>
-      <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="block">
+    <div
+      ref={wrap}
+      className="relative w-full overflow-hidden cursor-pointer select-none touch-none"
+      style={{ height: h }}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        isDragging.current = true;
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        seekFromEvent(e.clientX);
+      }}
+      onPointerMove={(e) => {
+        if (isDragging.current) {
+          seekFromEvent(e.clientX);
+        }
+      }}
+      onPointerUp={(e) => {
+        if (isDragging.current) {
+          isDragging.current = false;
+          try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+        }
+      }}
+    >
+      <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="block pointer-events-none">
         {peaks.map((pk, i) => {
           const bh = Math.max(2, Math.min(h - 2, pk * gainLin * (h - 6))), played = (i / peaks.length) * dur <= scrub;
           return <rect key={i} x={(i / peaks.length) * w} y={(h - bh) / 2} width={Math.max(1, bw - 0.5)} height={bh}
@@ -2094,9 +2125,9 @@ function useMediaHotkeys(opts: {
         case "k": case "K":
           e.preventDefault(); togglePlay(); break;
         case "ArrowRight":
-          e.preventDefault(); seek(clamp(cur + (e.shiftKey ? 1 : e.ctrlKey ? 10 : 5))); break;
+          e.preventDefault(); seek(clamp(cur + (e.shiftKey ? 0.04 : e.ctrlKey ? 5 : 1))); break;
         case "ArrowLeft":
-          e.preventDefault(); seek(clamp(cur - (e.shiftKey ? 1 : e.ctrlKey ? 10 : 5))); break;
+          e.preventDefault(); seek(clamp(cur - (e.shiftKey ? 0.04 : e.ctrlKey ? 5 : 1))); break;
         case "Home":
           e.preventDefault(); seek(0); break;
         case "End":
@@ -2461,6 +2492,7 @@ function InteractiveTimeline({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
+  const isTimelineDragging = useRef(false);
   const [zoom, setZoom] = useState(60); // pixels per second
   const [draggingSeg, setDraggingSeg] = useState<{
     id: string;
@@ -2691,7 +2723,23 @@ function InteractiveTimeline({
       <div
         ref={containerRef}
         onWheel={handleWheel}
-        onClick={(e) => onSeek(getT(e.clientX))}
+        onPointerDown={(e) => {
+          if (e.button !== 0 || (e.target as HTMLElement).closest("[data-seg-block]")) return;
+          isTimelineDragging.current = true;
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          onSeek(getT(e.clientX));
+        }}
+        onPointerMove={(e) => {
+          if (isTimelineDragging.current) {
+            onSeek(getT(e.clientX));
+          }
+        }}
+        onPointerUp={(e) => {
+          if (isTimelineDragging.current) {
+            isTimelineDragging.current = false;
+            try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+          }
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           if (!trackRef.current) return;
@@ -2700,7 +2748,7 @@ function InteractiveTimeline({
           const tAt = Math.max(0, Math.min(total, (clickX / totalPx) * total));
           setContextMenu({ x: e.clientX, y: e.clientY, tAt });
         }}
-        className="relative w-full h-[114px] bg-[var(--color-surface-2)]/60 border border-[var(--color-border)] rounded-xl overflow-x-auto overflow-y-hidden select-none cursor-pointer"
+        className="relative w-full h-[114px] bg-[var(--color-surface-2)]/60 border border-[var(--color-border)] rounded-xl overflow-x-auto overflow-y-hidden select-none cursor-pointer touch-none"
       >
         <div ref={trackRef} className="relative h-full" style={{ width: `${totalPx}px` }}>
           {/* Top Row: Waveform Background */}
@@ -2716,6 +2764,7 @@ function InteractiveTimeline({
             return (
               <div
                 key={seg.id}
+                data-seg-block="true"
                 style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
                 onPointerDown={(e) => handlePointerDown(e, seg, "move")}
                 onPointerMove={handlePointerMove}
