@@ -230,9 +230,10 @@
     "del": "Eliminar línea",
     "refresh": "Actualizar",
     "refreshHint": "Forzar el refresco de la vista previa / subtítulos",
-    "lock": "Bloquear toma (proteger de re-generación)",
+    "lock": "Fijar toma",
     "unlock": "Desbloquear toma",
-    "lockedHint": "Bloqueado: protegido de re-generación masiva"
+    "lockedHint": "Bloqueado: protegido de re-generación masiva",
+    "lockedBadge": "Fijado 🔒"
   },
   "settings": {
     "sounds": "Sonidos de notificación",

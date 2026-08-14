@@ -3402,7 +3402,23 @@ function Editor() {
   async function doHideSeg(segId: string) { return segOp(segId, "hide_segment"); }   // toggle a line off/on
   async function doDelSeg(segId: string) { return segOp(segId, "del_segment"); }     // delete a line entirely (undoable)
   async function doKeepSeg(segId: string) { return segOp(segId, "keep_segment"); }   // toggle 'keep original audio'
-  async function doLockSeg(segId: string) { return segOp(segId, "lock_segment"); }   // toggle 'lock/protect from mass regen'
+  async function doLockSeg(segId: string) {
+    const cur = p.segments.find((s) => s.id === segId);
+    const nextLocked = !Boolean(cur?.locked);
+    // Мгновенное оптимистичное обновление состояния
+    setProject({
+      ...p,
+      segments: p.segments.map((s) => (s.id === segId ? { ...s, locked: nextLocked } : s)),
+    });
+    bump();
+    try {
+      const fresh = await api.patch(pid, { op: "lock_segment", id: segId, locked: nextLocked });
+      setProject(fresh);
+      bump();
+    } catch (e) {
+      await surfaceErr(e);
+    }
+  }
   async function bulkDelIdx(op: "del_titles" | "del_blurs", idxs: Set<number>, clear: () => void) {
     if (!idxs.size) return;                                           // bulk-delete several titles / mask boxes by index
     pushHistory(p); setRendered(false);
@@ -3981,7 +3997,7 @@ function Editor() {
                         onDragOver={(e) => { e.preventDefault(); }}
                         onDrop={(e) => { e.preventDefault(); dropSeg(seg.id); }}
                         onClick={() => { setRendered(false); setScrub(seg.start); }}
-                        className={`rounded-xl p-2 border-l-2 transition-colors cursor-pointer ${dragSegId === seg.id ? "opacity-30 border-dashed border-[var(--color-accent)]" : ""} ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${on ? "bg-[var(--color-surface-2)] border-[var(--color-accent)]" : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"}`}>
+                        className={`rounded-xl p-2 border-l-2 transition-all cursor-pointer ${dragSegId === seg.id ? "opacity-30 border-dashed border-[var(--color-accent)]" : ""} ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${seg.locked ? "ring-1 ring-[var(--color-accent)]/40 bg-[var(--color-surface-2)]/60 border-l-[var(--color-accent)]" : on ? "bg-[var(--color-surface-2)] border-[var(--color-accent)]" : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"}`}>
                         <div className="flex items-center justify-between gap-1">
                           <div className="flex items-center gap-1 flex-1 min-w-0">
                             <button type="button" draggable
@@ -4003,17 +4019,12 @@ function Editor() {
                             <span className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"}`}>{fmtT(seg.start)} → {fmtT(seg.end)}</span>
                           </div>
                           <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
-                            {seg.extra?.locked && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title={t("seg.lockedHint")}>🔒</span>}
                             {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
                             <button onClick={(e) => { e.stopPropagation(); playSeg(seg); }} title={t("seg.play")}
                               className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><Play size={13} /></button>
                             <button onClick={(e) => { e.stopPropagation(); doRegen(seg.id); }} disabled={regenId !== null} title={t("seg.regen")}
                               className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
                               {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); doLockSeg(seg.id); }} disabled={regenId !== null} title={seg.extra?.locked ? t("seg.unlock") : t("seg.lock")}
-                              className={`p-0.5 disabled:opacity-40 transition-colors ${seg.extra?.locked ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}>
-                              {seg.extra?.locked ? <Lock size={13} /> : <Unlock size={13} />}
                             </button>
                             <button onClick={(e) => { e.stopPropagation(); doKeepSeg(seg.id); }} disabled={regenId !== null} title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
                               className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}><Music size={13} /></button>
@@ -4029,6 +4040,33 @@ function Editor() {
                           onClick={(e) => e.stopPropagation()}
                           onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
                           className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
+                        
+                        {/* Нижняя плашка карточки: в левом углу аккуратная кнопка-замок с анимацией */}
+                        <div className="flex items-center justify-between gap-1.5 mt-1.5 pt-1 border-t border-[var(--color-border)]/30">
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); doLockSeg(seg.id); }}
+                            disabled={regenId !== null}
+                            title={seg.locked ? t("seg.unlock") : t("seg.lock")}
+                            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10.5px] font-medium transition-all duration-200 active:scale-95 disabled:opacity-40 select-none ${
+                              seg.locked
+                                ? "bg-[var(--color-accent)]/15 border border-[var(--color-accent)]/50 text-[var(--color-accent)] shadow-sm font-semibold"
+                                : "text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface)] border border-[var(--color-border)]/40"
+                            }`}
+                          >
+                            {seg.locked ? (
+                              <>
+                                <Lock size={12} className="text-[var(--color-accent)] shrink-0 animate-in zoom-in-75 duration-200" />
+                                <span>{t("seg.lockedBadge", "Закреплен 🔒")}</span>
+                              </>
+                            ) : (
+                              <>
+                                <Unlock size={12} className="opacity-70 shrink-0 transition-transform duration-200 hover:scale-110" />
+                                <span className="opacity-80">{t("seg.lock", "Закрепить дубль")}</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                         {on && (
                           <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
                             <Clock size={11} className="text-[var(--color-muted)] shrink-0" />

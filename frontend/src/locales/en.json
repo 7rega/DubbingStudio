@@ -300,9 +300,10 @@
     "del": "Delete line",
     "refresh": "Refresh",
     "refreshHint": "Force-refresh the preview / subtitles (if it lags or hangs)",
-    "lock": "Lock take (protect from regen)",
+    "lock": "Lock take",
     "unlock": "Unlock take",
-    "lockedHint": "Locked: protected from mass regen"
+    "lockedHint": "Locked: protected from mass regen",
+    "lockedBadge": "Locked 🔒"
   },
   "settings": {
     "sounds": "Notification sounds",

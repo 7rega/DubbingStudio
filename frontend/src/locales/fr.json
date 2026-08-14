@@ -230,9 +230,10 @@
     "del": "Supprimer la ligne",
     "refresh": "Actualiser",
     "refreshHint": "Forcer le rafraîchissement de l'aperçu / sous-titres",
-    "lock": "Verrouiller la prise (protéger de la regénération)",
-    "unlock": "Déverrouiller la prise",
-    "lockedHint": "Verrouillé : protégé de la regénération de masse"
+    "lock": "Verrouiller",
+    "unlock": "Déverrouiller",
+    "lockedHint": "Verrouillé : protégé de la regénération de masse",
+    "lockedBadge": "Verrouillé 🔒"
   },
   "settings": {
     "sounds": "Sons de notification",

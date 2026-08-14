@@ -47,8 +47,7 @@ fn idxs_desc(edit: &Value) -> Vec<usize> {
 /// Заблокированные (locked == true) сегменты пропускаются, сохраняя утвержденные пользователем дубли.
 fn mark_all_dirty(p: &mut Project) {
     for seg in &mut p.segments {
-        let is_locked = seg.extra.get("locked").and_then(|v| v.as_bool()).unwrap_or(false);
-        if !is_locked {
+        if !seg.locked {
             seg.dirty = true;
         }
     }
@@ -321,10 +320,8 @@ fn op_regen_all(p: &mut Project, _edit: &Value) -> PatchResult {
 /// lock_segment — заблокировать/разблокировать сегмент от перезаписи при массовой перегенерации.
 fn op_lock_segment(p: &mut Project, edit: &Value) -> PatchResult {
     let seg = seg_by_id(p, edit)?;
-    let locked = b(edit, "locked").unwrap_or_else(|| {
-        !seg.extra.get("locked").and_then(|v| v.as_bool()).unwrap_or(false)
-    });
-    seg.extra.insert("locked".into(), Value::Bool(locked));
+    let locked = b(edit, "locked").unwrap_or(!seg.locked);
+    seg.locked = locked;
     Ok(())
 }
 
@@ -334,7 +331,7 @@ fn op_lock_segments(p: &mut Project, edit: &Value) -> PatchResult {
     let locked = b(edit, "locked").unwrap_or(true);
     for seg in &mut p.segments {
         if sids.contains(&seg.id) {
-            seg.extra.insert("locked".into(), Value::Bool(locked));
+            seg.locked = locked;
         }
     }
     Ok(())

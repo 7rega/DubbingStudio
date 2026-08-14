@@ -230,9 +230,10 @@
     "del": "Excluir linha",
     "refresh": "Atualizar",
     "refreshHint": "Forçar a atualização da prévia / legendas",
-    "lock": "Bloquear tomada (proteger de re-geração)",
+    "lock": "Fixar tomada",
     "unlock": "Desbloquear tomada",
-    "lockedHint": "Bloqueado: protegido de re-geração em massa"
+    "lockedHint": "Bloqueado: protegido de re-geração em massa",
+    "lockedBadge": "Fixado 🔒"
   },
   "settings": {
     "sounds": "Sons de notificação",
