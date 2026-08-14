@@ -3080,6 +3080,8 @@ function Editor() {
   const [castView, setCastView] = useState(false);   // главная область: сетка карточек вместо превью
   useEffect(() => { api.casting(pid).then((r) => setCharacters(r.characters)).catch(() => setCharacters([])); }, [pid]);
   const hasCasting = !!characters && characters.length > 0;
+  const audioOnly = !((p.meta.width || 0) > 0 && (p.meta.height || 0) > 0);   // вход без видео -> режим только аудио
+  const mode = p.mode === "voiceover" ? "voiceover" : p.mode === "transcribe" ? "transcribe" : p.audio.rewrite ? "funny" : (p.mode === "nodub" ? "subtitles" : "dub");   // derived output mode
   const [blurAll, setBlurAll] = useState(false);                      // blur: only active-on-frame vs all zones
   const [play, setPlay] = useState(false);                            // dub playback: play TTS audio + advance preview frames + playhead
   const [showHelp, setShowHelp] = useState(false);                    // оверлей-шпаргалка хоткеев (?)
@@ -3087,29 +3089,65 @@ function Editor() {
   const scrubRef = useRef(0);                                         // свежий scrub без stale-замыкания в хоткеях
   const audioRef = useRef<HTMLAudioElement>(null);
   const [vol, setVol] = useState<number>(() => { const s = localStorage.getItem("dub-vol"); return s ? parseFloat(s) : 1; });
+  const [audioErr, setAudioErr] = useState(false);
+  const audioPlayingRef = useRef(false);
 
   const playEndRef = useRef<number>(Infinity);                        // stop time for single-phrase playback (Infinity = full)
   const [dubRev, setDubRev] = useState(0);                            // dub-audio cache-buster — bumped ONLY when the dub track is re-rendered (regen/export), NOT on every edit, so live edits don't reload <audio> mid-playback
+
+  useEffect(() => {
+    setAudioErr(false);
+  }, [dubRev, pid]);
+
+  const hasDubTrack = !audioOnly && (mode === "dub" || mode === "voiceover" || mode === "funny") && !audioErr;
+
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.volume = vol;
       audioRef.current.playbackRate = 1.0;
     }
   }, [vol, dubRev]);   // применить громкость прослушки (скорость звука ВСЕГДА 1.0x)
-  // Dub playback — drive the EDITOR preview from the dub audio track (no video element): the preview frame and the
-  // waveform playhead follow audio.currentTime, so you hear the dub while the future result plays frame-by-frame.
+
+  // Dub playback & timeline driver:
   useEffect(() => {
-    const a = audioRef.current; if (!a) return;
-    if (!play) { a.pause(); return; }
+    const a = audioRef.current;
+    if (!play) {
+      audioPlayingRef.current = false;
+      if (a) a.pause();
+      return;
+    }
     setRendered(false);
-    a.playbackRate = 1.0;
-    a.play().catch(() => {});
+    if (a && hasDubTrack) {
+      a.playbackRate = 1.0;
+      a.volume = vol;
+      if (Math.abs(a.currentTime - scrub) > 0.1) {
+        a.currentTime = scrub;
+      }
+      a.play()
+        .then(() => {
+          audioPlayingRef.current = true;
+        })
+        .catch((err) => {
+          console.warn("Dub audio playback failed, falling back to video audio:", err);
+          audioPlayingRef.current = false;
+          setAudioErr(true);
+        });
+    } else {
+      audioPlayingRef.current = false;
+    }
+
     const id = window.setInterval(() => {
-      if (a.currentTime >= playEndRef.current) { a.pause(); setPlay(false); }   // single phrase -> stop at its end
-      else setScrub(a.currentTime);
-    }, 50);
+      if (audioPlayingRef.current && a && !a.paused) {
+        if (a.currentTime >= playEndRef.current) {
+          a.pause();
+          setPlay(false);
+        } else {
+          setScrub(a.currentTime);
+        }
+      }
+    }, 40);
     return () => window.clearInterval(id);
-  }, [play]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [play, hasDubTrack, vol]); // eslint-disable-line react-hooks/exhaustive-deps
   const [regenId, setRegenId] = useState<string | null>(null);        // segment whose TTS is being re-generated
   const [remixText, setRemixText] = useState("");                     // funny-remix theme/instruction for Gemma
   const [remixing, setRemixing] = useState(false);
@@ -3434,15 +3472,24 @@ function Editor() {
   function playFull() {                                               // bottom-bar Play: play the whole dub from the playhead
     const a = audioRef.current;
     if (play) { setPlay(false); return; }
-    playEndRef.current = Infinity; if (a) a.currentTime = scrub; setPlay(true);
+    playEndRef.current = Infinity;
+    if (a && hasDubTrack) a.currentTime = scrub;
+    setPlay(true);
   }
   function playSeg(seg: Project["segments"][number]) {               // play JUST this phrase's TTS [start, end]
-    const a = audioRef.current; if (!a) return;
-    playEndRef.current = seg.end; a.currentTime = seg.start; setScrub(seg.start); setRendered(false);
-    if (play) a.play().catch(() => {}); else setPlay(true);
+    const a = audioRef.current;
+    playEndRef.current = seg.end;
+    if (a && hasDubTrack) a.currentTime = seg.start;
+    setScrub(seg.start);
+    setRendered(false);
+    if (!play) setPlay(true);
   }
   // единый seek: скраб вейформы/слайдера + позиция dub-аудио (используется хоткеями, слайдером и вейформой)
-  function onSeek(tt: number) { setRendered(false); setScrub(tt); if (audioRef.current) audioRef.current.currentTime = tt; }
+  function onSeek(tt: number) {
+    setRendered(false);
+    setScrub(tt);
+    if (audioRef.current && hasDubTrack) audioRef.current.currentTime = tt;
+  }
   useEffect(() => { scrubRef.current = scrub; }, [scrub]);   // свежий scrub для хоткеев (без stale-замыкания)
   const setVolK = (v: number) => { setVol(v); if (audioRef.current) audioRef.current.volume = v; localStorage.setItem("dub-vol", String(v)); };
   const blockedRef = useRef(() => document.querySelector(".glass-scrim") != null);
@@ -3534,8 +3581,6 @@ function Editor() {
 
   const isActive = (seg: Project["segments"][number]) => scrub >= seg.start && scrub < seg.end;
   const activeId = p.segments.find(isActive)?.id;
-  const audioOnly = !((p.meta.width || 0) > 0 && (p.meta.height || 0) > 0);   // вход без видео -> режим только аудио
-  const mode = p.mode === "voiceover" ? "voiceover" : p.mode === "transcribe" ? "transcribe" : p.audio.rewrite ? "funny" : (p.mode === "nodub" ? "subtitles" : "dub");   // derived output mode
   const MODES = [["subtitles", Captions], ["dub", AudioLines], ["voiceover", Mic2], ["funny", Sparkles], ["transcribe", FileText]] as const;
   const cmds = [
     { label: t("mode.subtitles"), run: () => branch("mode", { value: "subtitles" }) },
@@ -3679,6 +3724,18 @@ function Editor() {
                   rendered={rendered}
                   lane={lane}
                   playing={play}
+                  vol={vol}
+                  audioMuted={hasDubTrack}
+                  onTimeUpdate={(t) => {
+                    if (!audioPlayingRef.current) {
+                      if (t >= playEndRef.current) {
+                        setPlay(false);
+                      } else {
+                        setScrub(t);
+                      }
+                    }
+                  }}
+                  onEnded={() => setPlay(false)}
                   onChanged={(fresh) => setProject(fresh)}
                 />
               )}
@@ -3713,7 +3770,18 @@ function Editor() {
                   {play ? <Pause size={15} fill="currentColor" /> : <Play size={15} className="ml-0.5" fill="currentColor" />}
                 </button>
 
-                <audio ref={audioRef} src={api.dubUrl(pid, dubRev)} onEnded={() => setPlay(false)} preload="auto" className="hidden" />
+                <audio
+                  ref={audioRef}
+                  src={hasDubTrack ? api.dubUrl(pid, dubRev) : undefined}
+                  onEnded={() => setPlay(false)}
+                  onError={() => {
+                    console.warn("Audio element error, falling back to video audio");
+                    setAudioErr(true);
+                    audioPlayingRef.current = false;
+                  }}
+                  preload="auto"
+                  className="hidden"
+                />
 
                 <div className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg text-xs" title={t("play.volume")}>
                   <Music size={13} className="text-[var(--color-muted)]" />

@@ -18,6 +18,10 @@ type Props = {
   rendered: boolean;
   lane: Lane;
   playing?: boolean;
+  vol?: number;
+  audioMuted?: boolean;
+  onTimeUpdate?: (currentTime: number) => void;
+  onEnded?: () => void;
   onChanged: (fresh: Project) => void;
 };
 
@@ -97,7 +101,19 @@ const getWordsWithTimings = (seg: Project["segments"][number], customText?: stri
   });
 };
 
-export default function PreviewCanvas({ pid, project, scrub, rendered, lane, playing = false, onChanged }: Props) {
+export default function PreviewCanvas({
+  pid,
+  project,
+  scrub,
+  rendered,
+  lane,
+  playing = false,
+  vol = 1,
+  audioMuted = true,
+  onTimeUpdate,
+  onEnded,
+  onChanged,
+}: Props) {
   const rev = useStore((s) => s.rev);
   const bump = useStore((s) => s.bump);
   const sel = useStore((s) => s.selBlur);        // SHARED with the left blur list
@@ -121,8 +137,9 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
+    v.muted = audioMuted;
+    v.volume = vol;
     if (playing) {
-      v.muted = true;
       if (Math.abs(v.currentTime - scrub) > 0.1) {
         v.currentTime = scrub;
       }
@@ -138,17 +155,19 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
         v.currentTime = scrub;
       }
     }
-  }, [playing]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [playing, audioMuted, vol]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
+    v.muted = audioMuted;
+    v.volume = vol;
     if (!playing && Math.abs(v.currentTime - scrub) > 0.04) {
       v.currentTime = scrub;
     } else if (playing && Math.abs(v.currentTime - scrub) > 0.25) {
       v.currentTime = scrub;
     }
-  }, [scrub, playing]);
+  }, [scrub, playing, audioMuted, vol]);
 
   // Масштабирование холста под контейнер с сохранением соотношения сторон
   useEffect(() => {
@@ -286,7 +305,15 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
     <div ref={wrap} className="relative w-full h-full min-h-0 overflow-hidden grid place-items-center bg-black/40 rounded-xl">
       <div className="relative overflow-hidden rounded-lg" style={{ width: disp.w, height: disp.h }}>
         {rendered ? (
-          <video src={previewSrc} controls className="absolute inset-0 w-full h-full rounded-lg" />
+          <video
+            ref={videoRef}
+            src={previewSrc}
+            playsInline
+            controls
+            onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)}
+            onEnded={() => onEnded?.()}
+            className="absolute inset-0 w-full h-full rounded-lg"
+          />
         ) : (
           <>
             {/* Аппаратный видеоплеер (Pure HTML5 Video: активен и на плее, и на паузе, и при скраббинге) */}
@@ -294,8 +321,14 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
               ref={videoRef}
               src={api.sourceVideoUrl(pid)}
               playsInline
-              muted
+              muted={audioMuted}
               preload="auto"
+              onTimeUpdate={(e) => {
+                if (playing) {
+                  onTimeUpdate?.(e.currentTarget.currentTime);
+                }
+              }}
+              onEnded={() => onEnded?.()}
               className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black"
             />
 
