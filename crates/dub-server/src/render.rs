@@ -1511,18 +1511,16 @@ fn build_dub(
         let duck_db = proj.audio.voiceover_gain_db.clamp(VOICEOVER_DUCK_MIN_DB, 0.0);
         let new_audio = wd.join("new_audio.m4a");
         if did_sep && vo_duck_vocals_only {
-            // Профессиональный закадр (UN Voice-Over): чистый инструментал 100% + приглушенный оригинальный вокал + русский диктор
+            // Профессиональный гибридный закадр (UN Voice-Over):
+            // 1) Музыка и интершумы: мягкий дакинг -3.5 дБ под речью диктора (сохраняет сочность и драйв, но дает место голосу), 100% в паузах.
+            // 2) Оригинальный вокал: глубокий дакинг duck_db (-12..-14 дБ) под речью диктора, 100% во время lead-in (0.6с) и в паузах.
+            // 3) Русский диктор: 100% громкость.
+            let inst_duck_db = -3.5f64;
             emit(progress, "mix", &format!(
-                "voiceover (UN-style): музыка/эффекты 100% + вокал оригинала {duck_db:+.1} dB ПОД переводом ({} блоков)",
+                "voiceover (гибридный): музыка {inst_duck_db:+.1} dB + вокал оригинала {duck_db:+.1} dB ПОД переводом ({} блоков)",
                 speech_blocks.len()));
-            let ducked_voc = wd.join("vocals_ducked.m4a");
-            if media::duck_envelope_file(&cached_voc, &speech_blocks, duck_db, &ducked_voc).is_ok() {
-                if let Err(e) = media::mix3(&dub, &cached_inst, &ducked_voc, &new_audio) {
-                    emit(progress, "mix", &format!("mix3 сбой ({e}) -> фолбэк на 2-трековый микс"));
-                    let _ = media::mix_env_db(&dub, &audio_hq, &speech_blocks, duck_db, &new_audio);
-                }
-            } else {
-                emit(progress, "mix", "огибающая вокала недоступна -> фолбэк на микс с аудиодорожкой");
+            if let Err(e) = media::mix_voiceover_hybrid(&dub, &cached_inst, &cached_voc, &speech_blocks, inst_duck_db, duck_db, &new_audio) {
+                emit(progress, "mix", &format!("mix_voiceover_hybrid сбой ({e}) -> фолбэк на 2-трековый микс"));
                 media::mix_env_db(&dub, &audio_hq, &speech_blocks, duck_db, &new_audio)?;
             }
         } else {

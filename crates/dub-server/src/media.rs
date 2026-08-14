@@ -483,6 +483,43 @@ pub fn apply_spatial_reverb(src_wav: &Path, dst_wav: &Path) -> Result<(), String
     ])
 }
 
+/// Гибридный 3-трековый микшинг для профессионального UN Voice-Over:
+/// - voice: дубляж диктора (полный уровень 1.0)
+/// - music: инструментал / эффекты (мягкая огибающая inst_duck_db, напр. -3.5 дБ под речью, 0 дБ в паузах)
+/// - vocals: оригинальный вокал (глубокая огибающая voc_duck_db, напр. -12..-14 дБ под речью, 0 дБ в паузах)
+pub fn mix_voiceover_hybrid(
+    voice: &Path,
+    music: &Path,
+    vocals: &Path,
+    blocks: &[SpeechBlock],
+    inst_duck_db: f64,
+    voc_duck_db: f64,
+    out: &Path,
+) -> Result<(), String> {
+    let g_inst = 10f64.powf(inst_duck_db / 20.0).clamp(0.02, 1.0);
+    let g_voc = 10f64.powf(voc_duck_db / 20.0).clamp(0.01, 1.0);
+    let vol_inst = duck_volume_expr(blocks, g_inst);
+    let vol_voc = duck_volume_expr(blocks, g_voc);
+    let fc = format!(
+        "[0:a]aformat=channel_layouts=stereo[v];\
+         [1:a]aformat=channel_layouts=stereo,volume='{vol_inst}':eval=frame[m];\
+         [2:a]aformat=channel_layouts=stereo,volume='{vol_voc}':eval=frame[voc];\
+         [v][m][voc]amix=inputs=3:duration=longest:dropout_transition=0:normalize=0[a]"
+    );
+    let secs = (duration(music).unwrap_or(0.0) * 2.0).max(600.0) as u64;
+    run_ff_timeout(&[
+        OsStr::new("-y"),
+        OsStr::new("-i"), voice.as_os_str(),
+        OsStr::new("-i"), music.as_os_str(),
+        OsStr::new("-i"), vocals.as_os_str(),
+        OsStr::new("-filter_complex"), OsStr::new(&fc),
+        OsStr::new("-map"), OsStr::new("[a]"),
+        OsStr::new("-c:a"), OsStr::new("aac"),
+        OsStr::new("-b:a"), OsStr::new("256k"),
+        out.as_os_str(),
+    ], secs)
+}
+
 /// Речевой блок на таймлайне [start,end] — слитые по паузе <1.6с реплики дубляжа. Границы берутся из
 /// ФАКТИЧЕСКИ уложенных сегментов (onset + длительность fit-файла), а не из сырых proj.segments.
 #[derive(Clone, Copy, Debug)]
