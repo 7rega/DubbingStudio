@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { Sparkles, Smile, Mic, Clock, Volume2, ChevronRight, Copy, Scissors, Clipboard } from "lucide-react";
@@ -97,6 +97,72 @@ export interface HiggsContextMenuState {
   onInsert: (newText: string, newCursorPos: number) => void;
 }
 
+function SubmenuPanel({
+  parentEl,
+  tags,
+  onSelect,
+}: {
+  parentEl: HTMLElement | null;
+  tags: HiggsTagDef[];
+  onSelect: (def: HiggsTagDef) => void;
+}) {
+  const { t } = useTranslation();
+  const subRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ left: number; top: number; ready: boolean }>({
+    left: 0,
+    top: 0,
+    ready: false,
+  });
+
+  useLayoutEffect(() => {
+    if (!parentEl || !subRef.current) return;
+    const pRect = parentEl.getBoundingClientRect();
+    const sRect = subRef.current.getBoundingClientRect();
+    const subWidth = sRect.width || 224;
+    const subHeight = sRect.height || 300;
+
+    // Горизонтальное положение (если справа не влезает -> влево)
+    let left = pRect.right + 4;
+    if (left + subWidth > window.innerWidth - 8) {
+      left = Math.max(8, pRect.left - subWidth - 4);
+    }
+
+    // Вертикальное положение: стремимся к верхнему краю пункта, но не даем уйти за нижний край экрана
+    let top = pRect.top - 4;
+    if (top + subHeight > window.innerHeight - 12) {
+      top = Math.max(12, window.innerHeight - 12 - subHeight);
+    }
+
+    setCoords({ left, top, ready: true });
+  }, [parentEl]);
+
+  return (
+    <div
+      ref={subRef}
+      style={{
+        left: `${coords.left}px`,
+        top: `${coords.top}px`,
+        opacity: coords.ready ? 1 : 0,
+        visibility: coords.ready ? "visible" : "hidden",
+      }}
+      className="fixed z-[100000] w-56 max-h-[min(380px,calc(100vh-32px))] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/98 shadow-2xl backdrop-blur-xl p-1.5 space-y-0.5 anim-fade select-none"
+    >
+      {tags.map((def) => (
+        <button
+          key={def.tag}
+          onClick={() => onSelect(def)}
+          className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)] text-[12px] text-left transition-colors group"
+        >
+          <span className="font-medium">{t(def.labelKey)}</span>
+          <span className="mono text-[10px] text-[var(--color-muted)] group-hover:text-[var(--color-accent)] opacity-80">
+            {def.mode === "start" ? "начало" : "инлайн"}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function HiggsContextMenu({
   state,
   onClose,
@@ -107,14 +173,25 @@ export function HiggsContextMenu({
   const { t } = useTranslation();
   const menuRef = useRef<HTMLDivElement>(null);
   const [activeSubmenu, setActiveSubmenu] = useState<HiggsTagCategory | null>(null);
+  const [activeEl, setActiveEl] = useState<HTMLElement | null>(null);
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number; ready: boolean }>({
+    left: state.x,
+    top: state.y,
+    ready: false,
+  });
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onClose();
+      const target = e.target as Node;
+      if (menuRef.current && !menuRef.current.contains(target)) {
+        // Проверяем клики вне открытого подменю
+        const isSubmenuClick = (target as HTMLElement)?.closest?.(".z-\\[100000\\]");
+        if (!isSubmenuClick) {
+          onClose();
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -124,6 +201,25 @@ export function HiggsContextMenu({
       window.removeEventListener("mousedown", handleClickOutside);
     };
   }, [onClose]);
+
+  useLayoutEffect(() => {
+    if (!menuRef.current) return;
+    const rect = menuRef.current.getBoundingClientRect();
+    const width = rect.width || 240;
+    const height = rect.height || 310;
+
+    let left = state.x;
+    if (left + width > window.innerWidth - 12) {
+      left = Math.max(12, window.innerWidth - width - 12);
+    }
+
+    let top = state.y;
+    if (top + height > window.innerHeight - 12) {
+      top = Math.max(12, window.innerHeight - height - 12);
+    }
+
+    setMenuPos({ left, top, ready: true });
+  }, [state.x, state.y]);
 
   const handleInsert = (def: HiggsTagDef) => {
     const currentVal = state.targetInput?.value || "";
@@ -167,27 +263,6 @@ export function HiggsContextMenu({
     onClose();
   };
 
-  // Реальные размеры меню
-  const menuWidth = 240;
-  const menuHeight = 310;
-  const submenuWidth = 230;
-
-  // Умное позиционирование главного меню в пределах окна
-  const left = state.x + menuWidth > window.innerWidth - 12
-    ? Math.max(12, state.x - menuWidth)
-    : state.x;
-
-  const top = state.y + menuHeight > window.innerHeight - 16
-    ? Math.max(16, state.y - menuHeight)
-    : state.y;
-
-  // Определение стороны раскрытия подменю:
-  // Если справа от главного меню не помещается подменю (230px) -> открываем ВЛЕВО
-  const openSubmenuLeft = left + menuWidth + submenuWidth > window.innerWidth - 12;
-
-  // Если меню открыто в нижней части экрана -> подменю выравнивается по нижнему краю
-  const isNearBottom = top + 200 > window.innerHeight - 120;
-
   const categories: { key: HiggsTagCategory; label: string; icon: typeof Smile; color: string }[] = [
     { key: "emotion", label: t("higgs.cat.emotion"), icon: Smile, color: "text-[#c6f24e]" },
     { key: "style", label: t("higgs.cat.style"), icon: Mic, color: "text-[#60a5fa]" },
@@ -195,93 +270,91 @@ export function HiggsContextMenu({
     { key: "sfx", label: t("higgs.cat.sfx"), icon: Volume2, color: "text-[#ec4899]" },
   ];
 
+  // С какой стороны относительно меню откроется подменю
+  const openSubmenuLeft = menuPos.left + 240 + 230 > window.innerWidth - 12;
+
   return createPortal(
-    <div
-      ref={menuRef}
-      style={{ left: `${left}px`, top: `${top}px` }}
-      className="fixed z-[99999] w-60 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/98 shadow-2xl backdrop-blur-xl text-[13px] py-1.5 anim-fade select-none"
-    >
-      {/* Стандартные действия редактирования */}
-      <div className="px-1 py-1 border-b border-[var(--color-border)]/60 space-y-0.5">
-        <button
-          onClick={handleCut}
-          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
-        >
-          <Scissors size={14} className="text-[var(--color-muted)]" />
-          <span>{t("common.cut", "Вырезать")}</span>
-        </button>
-        <button
-          onClick={handleCopy}
-          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
-        >
-          <Copy size={14} className="text-[var(--color-muted)]" />
-          <span>{t("common.copy", "Копировать")}</span>
-        </button>
-        <button
-          onClick={handlePaste}
-          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
-        >
-          <Clipboard size={14} className="text-[var(--color-muted)]" />
-          <span>{t("common.paste", "Вставить")}</span>
-        </button>
-      </div>
+    <>
+      <div
+        ref={menuRef}
+        style={{
+          left: `${menuPos.left}px`,
+          top: `${menuPos.top}px`,
+          opacity: menuPos.ready ? 1 : 0,
+          visibility: menuPos.ready ? "visible" : "hidden",
+        }}
+        className="fixed z-[99999] w-60 max-h-[calc(100vh-24px)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/98 shadow-2xl backdrop-blur-xl text-[13px] py-1.5 anim-fade select-none"
+      >
+        {/* Стандартные действия редактирования */}
+        <div className="px-1 py-1 border-b border-[var(--color-border)]/60 space-y-0.5">
+          <button
+            onClick={handleCut}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
+          >
+            <Scissors size={14} className="text-[var(--color-muted)]" />
+            <span>{t("common.cut", "Вырезать")}</span>
+          </button>
+          <button
+            onClick={handleCopy}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
+          >
+            <Copy size={14} className="text-[var(--color-muted)]" />
+            <span>{t("common.copy", "Копировать")}</span>
+          </button>
+          <button
+            onClick={handlePaste}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
+          >
+            <Clipboard size={14} className="text-[var(--color-muted)]" />
+            <span>{t("common.paste", "Вставить")}</span>
+          </button>
+        </div>
 
-      {/* Раздел тегов Higgs TTS */}
-      <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase font-bold tracking-wider text-[var(--color-muted)] flex items-center gap-1.5">
-        <Sparkles size={12} className="text-[var(--color-accent)]" />
-        <span>{t("higgs.sectionTitle")}</span>
-      </div>
+        {/* Раздел тегов Higgs TTS */}
+        <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase font-bold tracking-wider text-[var(--color-muted)] flex items-center gap-1.5">
+          <Sparkles size={12} className="text-[var(--color-accent)]" />
+          <span>{t("higgs.sectionTitle")}</span>
+        </div>
 
-      <div className="px-1 space-y-0.5">
-        {categories.map((cat) => {
-          const Icon = cat.icon;
-          const isHovered = activeSubmenu === cat.key;
-          const tagsInCat = HIGGS_TAGS.filter((t) => t.category === cat.key);
+        <div className="px-1 space-y-0.5">
+          {categories.map((cat) => {
+            const Icon = cat.icon;
+            const isHovered = activeSubmenu === cat.key;
 
-          return (
-            <div
-              key={cat.key}
-              className="relative"
-              onMouseEnter={() => setActiveSubmenu(cat.key)}
-            >
-              <button
-                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors ${
-                  isHovered ? "bg-[var(--color-surface-2)] text-[var(--color-text)]" : "text-[var(--color-text)]/90"
-                }`}
+            return (
+              <div
+                key={cat.key}
+                onMouseEnter={(e) => {
+                  setActiveSubmenu(cat.key);
+                  setActiveEl(e.currentTarget);
+                }}
               >
-                <div className="flex items-center gap-2">
-                  <Icon size={14} className={cat.color} />
-                  <span className="font-medium">{cat.label}</span>
-                </div>
-                <ChevronRight size={13} className={`text-[var(--color-muted)] transition-transform ${openSubmenuLeft ? "rotate-180" : ""}`} />
-              </button>
-
-              {/* Выпадающее подменю тегов с адаптивным позиционированием */}
-              {isHovered && (
-                <div
-                  className={`absolute w-56 max-h-[min(340px,80vh)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/98 shadow-2xl backdrop-blur-xl p-1.5 space-y-0.5 anim-fade z-[100000] ${
-                    openSubmenuLeft ? "right-full mr-1.5" : "left-full ml-1.5"
-                  } ${isNearBottom ? "bottom-0" : "top-0"}`}
+                <button
+                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors ${
+                    isHovered ? "bg-[var(--color-surface-2)] text-[var(--color-text)]" : "text-[var(--color-text)]/90"
+                  }`}
                 >
-                  {tagsInCat.map((def) => (
-                    <button
-                      key={def.tag}
-                      onClick={() => handleInsert(def)}
-                      className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)] text-[12px] text-left transition-colors group"
-                    >
-                      <span className="font-medium">{t(def.labelKey)}</span>
-                      <span className="mono text-[10px] text-[var(--color-muted)] group-hover:text-[var(--color-accent)] opacity-80">
-                        {def.mode === "start" ? "начало" : "инлайн"}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
+                  <div className="flex items-center gap-2">
+                    <Icon size={14} className={cat.color} />
+                    <span className="font-medium">{cat.label}</span>
+                  </div>
+                  <ChevronRight size={13} className={`text-[var(--color-muted)] transition-transform ${openSubmenuLeft ? "rotate-180" : ""}`} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </div>,
+
+      {/* Адаптивное всплывающее подменю тегов */}
+      {activeSubmenu && activeEl && (
+        <SubmenuPanel
+          parentEl={activeEl}
+          tags={HIGGS_TAGS.filter((t) => t.category === activeSubmenu)}
+          onSelect={handleInsert}
+        />
+      )}
+    </>,
     document.body
   );
 }

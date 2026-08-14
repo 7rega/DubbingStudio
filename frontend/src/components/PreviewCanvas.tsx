@@ -117,34 +117,7 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
   const sx = disp.w / vw, sy = disp.h / vh;
   const previewSrc = rendered ? api.outputUrl(pid) : api.previewUrl(pid, scrub, rev);
 
-  // Кадр для режима паузы
-  const [imgSrc, setImgSrc] = useState(() => api.previewUrl(pid, scrub, rev));
-  const loadingRef = useRef(false);
-  const pendingRef = useRef<string | null>(null);
-
-  useEffect(() => { loadingRef.current = false; pendingRef.current = null; }, [rendered, pid]);
-
-  // Запрос превью-кадра только при паузе или скраббинге
-  useEffect(() => {
-    if (rendered || playing) return;
-    const want = api.previewUrl(pid, scrub, rev, false);
-    if (want === imgSrc) return;
-    if (loadingRef.current) { pendingRef.current = want; return; }
-    loadingRef.current = true;
-    setImgSrc(want);
-  }, [pid, scrub, rev, rendered, playing, imgSrc]);
-
-  const onFrameSettled = () => {
-    const next = pendingRef.current;
-    pendingRef.current = null;
-    if (next && next !== imgSrc) {
-      setImgSrc(next);
-    } else {
-      loadingRef.current = false;
-    }
-  };
-
-  // Синхронизация нативного видеоплеера при плее/паузе/перемотке
+  // Синхронизация нативного видеоплеера при плее/паузе/перемотке (Pure HTML5 Video)
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -296,31 +269,18 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
           <video src={previewSrc} controls className="absolute inset-0 w-full h-full rounded-lg" />
         ) : (
           <>
-            {/* Аппаратный видеоплеер (плавное 60 FPS воспроизведение) */}
+            {/* Аппаратный видеоплеер (Pure HTML5 Video: активен и на плее, и на паузе, и при скраббинге) */}
             <video
               ref={videoRef}
               src={api.sourceVideoUrl(pid)}
               playsInline
               preload="auto"
-              className={`absolute inset-0 w-full h-full rounded-lg object-contain bg-black ${
-                playing ? "opacity-100" : "opacity-0 pointer-events-none"
-              }`}
+              className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black"
             />
 
-            {/* Стоп-кадр с сервера для точного редактирования на паузе */}
-            <img
-              src={imgSrc}
-              alt="frame"
-              onLoad={onFrameSettled}
-              onError={onFrameSettled}
-              className={`absolute inset-0 w-full h-full rounded-lg object-contain ${
-                playing ? "opacity-0 pointer-events-none" : "opacity-100"
-              }`}
-            />
-
-            {/* Живой оверлей субтитров/титров/блюра во время воспроизведения */}
-            {playing && disp.w > 0 && (
-              <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            {/* Единый оверлей субтитров/титров/блюра (активен всегда: 0% мерцания, 100% стабильность шрифта) */}
+            {disp.w > 0 && (
+              <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
                 {/* Автоматическое размытие оригинальных субтитров при p.render.blur (только для оригинального пресета) */}
                 {shouldRenderAutoSubBlur && (
                   <div
@@ -490,7 +450,7 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
               <Stage
                 width={disp.w}
                 height={disp.h}
-                className="absolute inset-0"
+                className="absolute inset-0 z-20"
                 onMouseDown={(e) => {
                   if (e.target === e.target.getStage()) {
                     setSel(null);

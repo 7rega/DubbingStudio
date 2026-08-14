@@ -3702,14 +3702,13 @@ function Editor() {
                 <button
                   onClick={playFull}
                   title={play ? "Пауза (Пробел)" : "Воспроизвести (Пробел)"}
-                  className={`inline-flex items-center justify-center py-1.5 px-3 rounded-lg font-semibold text-xs gap-1.5 transition-all shadow-sm ${
+                  className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all shadow-sm shrink-0 ${
                     play
-                      ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] ring-2 ring-[var(--color-accent)]/30"
-                      : "bg-[var(--color-surface-2)] text-[var(--color-text)] hover:border-[var(--color-accent)] border border-[var(--color-border)]"
+                      ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-[0_0_12px_rgba(198,242,78,0.35)]"
+                      : "bg-[var(--color-surface-2)] text-[var(--color-text)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] border border-[var(--color-border)] active:scale-95"
                   }`}
                 >
-                  {play ? <Pause size={14} /> : <Play size={14} />}
-                  <span>{play ? "Пауза" : "Воспроизвести"}</span>
+                  {play ? <Pause size={15} fill="currentColor" /> : <Play size={15} className="ml-0.5" fill="currentColor" />}
                 </button>
 
                 <audio ref={audioRef} src={api.dubUrl(pid, dubRev)} onEnded={() => setPlay(false)} preload="auto" className="hidden" />
