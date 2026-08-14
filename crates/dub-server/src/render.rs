@@ -904,6 +904,9 @@ fn build_dub(
         .and_then(|v| v.as_str())
         .map(|v| v != "0")
         .unwrap_or(true);
+    if voiceover && vo_lead_in {
+        emit(progress, "mix", "закадр: UN Lead-in активен (оригинал звучит первым +0.6с)");
+    }
     // Scene Spatial Reverb: согласование пространственной акустики (Early Reflections).
     let dub_reverb_match = crate::models::load_selection(&paths.models_root)
         .get("dub_reverb_match")
