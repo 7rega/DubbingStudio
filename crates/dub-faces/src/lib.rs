@@ -29,6 +29,7 @@ pub use cast::{
 pub use ccip::{ccip_path, ccip_threshold, character_crop_bbox, l2_distance, CcipEmbedder, CCIP_DIM};
 pub use detect::{Face, Scrfd};
 pub use embed::{align_112, l2_normalize, LvFace};
+#[allow(deprecated)]
 pub use frames::{
     crop_sharpness, sample_frames, save_face_crop, stream_frames, FrameDisposition, SampledFrame,
     DEFAULT_FPS,

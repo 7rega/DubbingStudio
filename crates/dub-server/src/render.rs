@@ -1158,7 +1158,7 @@ fn build_dub(
         // слот: от текущего onset до старта СЛЕДУЮЩЕГО сегмента ПО ИНДЕКСУ (fi+1) полного списка /
         // конца видео (питон nxt = segs[i+1].start if i+1<len else total).
         // UN Voice-Over Lead-in: вступление диктора после оригинала (0.6с для длинных фраз, 0.3с для средних)
-        let lead_in = if is_voiceover && vo_lead_in {
+        let lead_in = if voiceover && vo_lead_in {
             let slot_len = (s.end - s.start).max(0.1);
             if slot_len >= 1.5 {
                 0.60
