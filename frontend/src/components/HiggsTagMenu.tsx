@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { createPortal } from "react-dom";
 import { Sparkles, Smile, Mic, Clock, Volume2, ChevronRight, Copy, Scissors, Clipboard } from "lucide-react";
 
 export type HiggsTagCategory = "emotion" | "style" | "prosody" | "sfx";
@@ -166,11 +167,26 @@ export function HiggsContextMenu({
     onClose();
   };
 
-  // Adjust positioning to stay inside screen bounds
+  // Реальные размеры меню
   const menuWidth = 240;
-  const menuHeight = 220;
-  const left = Math.min(state.x, window.innerWidth - menuWidth - 10);
-  const top = Math.min(state.y, window.innerHeight - menuHeight - 10);
+  const menuHeight = 310;
+  const submenuWidth = 230;
+
+  // Умное позиционирование главного меню в пределах окна
+  const left = state.x + menuWidth > window.innerWidth - 12
+    ? Math.max(12, state.x - menuWidth)
+    : state.x;
+
+  const top = state.y + menuHeight > window.innerHeight - 16
+    ? Math.max(16, state.y - menuHeight)
+    : state.y;
+
+  // Определение стороны раскрытия подменю:
+  // Если справа от главного меню не помещается подменю (230px) -> открываем ВЛЕВО
+  const openSubmenuLeft = left + menuWidth + submenuWidth > window.innerWidth - 12;
+
+  // Если меню открыто в нижней части экрана -> подменю выравнивается по нижнему краю
+  const isNearBottom = top + 200 > window.innerHeight - 120;
 
   const categories: { key: HiggsTagCategory; label: string; icon: typeof Smile; color: string }[] = [
     { key: "emotion", label: t("higgs.cat.emotion"), icon: Smile, color: "text-[#c6f24e]" },
@@ -179,11 +195,11 @@ export function HiggsContextMenu({
     { key: "sfx", label: t("higgs.cat.sfx"), icon: Volume2, color: "text-[#ec4899]" },
   ];
 
-  return (
+  return createPortal(
     <div
       ref={menuRef}
       style={{ left: `${left}px`, top: `${top}px` }}
-      className="fixed z-[9999] w-60 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/95 shadow-2xl backdrop-blur-md text-[13px] py-1.5 anim-fade select-none"
+      className="fixed z-[99999] w-60 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/98 shadow-2xl backdrop-blur-xl text-[13px] py-1.5 anim-fade select-none"
     >
       {/* Стандартные действия редактирования */}
       <div className="px-1 py-1 border-b border-[var(--color-border)]/60 space-y-0.5">
@@ -237,13 +253,15 @@ export function HiggsContextMenu({
                   <Icon size={14} className={cat.color} />
                   <span className="font-medium">{cat.label}</span>
                 </div>
-                <ChevronRight size={13} className="text-[var(--color-muted)]" />
+                <ChevronRight size={13} className={`text-[var(--color-muted)] transition-transform ${openSubmenuLeft ? "rotate-180" : ""}`} />
               </button>
 
-              {/* Выпадающее подменю тегов */}
+              {/* Выпадающее подменю тегов с адаптивным позиционированием */}
               {isHovered && (
                 <div
-                  className="absolute left-full top-0 ml-1 w-56 max-h-72 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/98 shadow-2xl backdrop-blur-md p-1.5 space-y-0.5 anim-fade z-[10000]"
+                  className={`absolute w-56 max-h-[min(340px,80vh)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/98 shadow-2xl backdrop-blur-xl p-1.5 space-y-0.5 anim-fade z-[100000] ${
+                    openSubmenuLeft ? "right-full mr-1.5" : "left-full ml-1.5"
+                  } ${isNearBottom ? "bottom-0" : "top-0"}`}
                 >
                   {tagsInCat.map((def) => (
                     <button
@@ -263,6 +281,7 @@ export function HiggsContextMenu({
           );
         })}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

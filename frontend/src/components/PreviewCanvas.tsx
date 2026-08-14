@@ -215,6 +215,8 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
   // Пресет стилей субтитров
   const presetName = String(project.captions.preset?.name || "");
   const preset = PRESET_LOOKS[presetName] || null;
+  const isOriginalPreset = !preset || presetName === "original" || presetName === "match";
+  const shouldRenderAutoSubBlur = project.render.blur && isOriginalPreset;
 
   const centerGuide = (nx: number, wPx: number) =>
     setGuide(Math.abs(nx + wPx / 2 - disp.w / 2) < 8 ? disp.w / 2 : null);
@@ -319,8 +321,8 @@ export default function PreviewCanvas({ pid, project, scrub, rendered, lane, pla
             {/* Живой оверлей субтитров/титров/блюра во время воспроизведения */}
             {playing && disp.w > 0 && (
               <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                {/* Автоматическое размытие оригинальных субтитров при p.render.blur */}
-                {project.render.blur && (
+                {/* Автоматическое размытие оригинальных субтитров при p.render.blur (только для оригинального пресета) */}
+                {shouldRenderAutoSubBlur && (
                   <div
                     style={{
                       position: "absolute",

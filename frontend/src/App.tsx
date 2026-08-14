@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Columns2, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -1966,14 +1966,6 @@ function Toggle({ label, on, onClick }: { label: string; on: boolean; onClick: (
   );
 }
 
-function ComparePane({ label, src }: { label: string; src: string }) {
-  return (
-    <div className="relative h-full min-h-0 grid place-items-center bg-black/40 rounded-xl overflow-hidden">
-      <img src={src} alt={label} className="max-h-full max-w-full object-contain" />
-      <span className="absolute top-2 left-2 mono text-[10px] px-2 py-0.5 rounded bg-black/60 text-[var(--color-text)] border border-[var(--color-border)]">{label}</span>
-    </div>
-  );
-}
 
 function WaveformTimeline({ pid, duration, scrub, segments, onSeek, gainDb = 0 }: {
   pid: string; duration: number; scrub: number; segments: Project["segments"]; onSeek: (t: number) => void; gainDb?: number;
@@ -3006,7 +2998,6 @@ function parseSrtAssText(content: string): { start: number; end: number; speaker
 function Editor() {
   const { t, i18n } = useTranslation();
   const p = useStore((s) => s.project) as Project;
-  const rev = useStore((s) => s.rev);   // for the compare 'result' pane refetch (PreviewCanvas reads rev itself)        // subscribe ONLY to what we render -> no re-render on
   const pid = useStore((s) => s.pid) as string;           // rev bumps or progress SSE ticks (those go to PreviewCanvas)
   const rendered = useStore((s) => s.rendered);
   const setProject = useStore((s) => s.setProject);
@@ -3088,7 +3079,6 @@ function Editor() {
   useEffect(() => { api.casting(pid).then((r) => setCharacters(r.characters)).catch(() => setCharacters([])); }, [pid]);
   const hasCasting = !!characters && characters.length > 0;
   const [blurAll, setBlurAll] = useState(false);                      // blur: only active-on-frame vs all zones
-  const [compare, setCompare] = useState(false);                      // before/after split preview (Topaz-style)
   const [play, setPlay] = useState(false);                            // dub playback: play TTS audio + advance preview frames + playhead
   const [showHelp, setShowHelp] = useState(false);                    // оверлей-шпаргалка хоткеев (?)
   const previewRef = useRef<HTMLDivElement>(null);                    // контейнер превью -> фулскрин по F + Ctrl-колесо
@@ -3554,7 +3544,6 @@ function Editor() {
     { label: t("export.proceed"), run: () => setShowExportModal(true) },
     { label: t("common.undo"), run: () => doUndo() },
     { label: t("common.redo"), run: () => doRedo() },
-    { label: t("compare.toggle"), run: () => setCompare((c) => !c) },
     { label: t("hotkeys.title"), run: () => setShowHelp(true) },
     ...Object.keys(presets).map((n) => ({ label: `${t("preset.title")}: ${n}`, run: () => branch("preset", { name: n }) })),
   ];
@@ -3651,87 +3640,121 @@ function Editor() {
             )}
           </div>, s) : null; })()}
         </div>
-        <div ref={previewRef} className="fs-preview flex-1 min-h-0 p-3 overflow-hidden flex flex-col gap-2">
+        <div ref={previewRef} className="fs-preview flex-1 min-h-0 p-3 overflow-hidden flex flex-col gap-2.5">
+          {/* Видео-контейнер */}
           <div className="flex-1 min-h-0">
-          {/* #122/#115: НЕ размонтируем CastingPanel при переключении на превью — прячем через CSS, чтобы
-              локальный черновик (имя/речь/голос) и imgFail пережили тоггл вкладки. Превью — в соседнем
-              контейнере, скрытом при castView. Плеер дубляжа — отдельный <audio> в футере, display:none его не рвёт. */}
-          {hasCasting && (
-            <div className={castView ? "w-full h-full" : "hidden"}>
-              <CastingPanel pid={pid} characters={characters!} voices={voiceList} onChange={setCharacters} />
+            {hasCasting && (
+              <div className={castView ? "w-full h-full" : "hidden"}>
+                <CastingPanel pid={pid} characters={characters!} voices={voiceList} onChange={setCharacters} />
+              </div>
+            )}
+            <div className={hasCasting && castView ? "hidden" : "w-full h-full"}>
+              {audioOnly ? (
+                <div className="w-full h-full grid place-items-center rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)]">
+                  <div className="text-center px-6">
+                    <AudioLines size={42} className="mx-auto text-[var(--color-accent)]" />
+                    <div className="mt-4 text-[16px] font-semibold">{t("audio.onlyTitle")}</div>
+                    <div className="mt-1.5 text-[13px] text-[var(--color-muted)] max-w-sm mx-auto leading-snug">{t("audio.onlyHint")}</div>
+                  </div>
+                </div>
+              ) : (
+                <PreviewCanvas
+                  pid={pid}
+                  project={
+                    sizeDraft != null
+                      ? {
+                          ...p,
+                          captions: {
+                            ...p.captions,
+                            sub_style: p.captions.sub_style
+                              ? { ...p.captions.sub_style, size_px: sizeDraft }
+                              : ({ ...defaultSubStyle, size_px: sizeDraft } as SubStyle),
+                          },
+                        }
+                      : p
+                  }
+                  scrub={scrub}
+                  rendered={rendered}
+                  lane={lane}
+                  playing={play}
+                  onChanged={(fresh) => setProject(fresh)}
+                />
+              )}
             </div>
-          )}
-          <div className={hasCasting && castView ? "hidden" : "w-full h-full"}>
-          {audioOnly ? (
-            <div className="w-full h-full grid place-items-center rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)]">
-              <div className="text-center px-6">
-                <AudioLines size={42} className="mx-auto text-[var(--color-accent)]" />
-                <div className="mt-4 text-[16px] font-semibold">{t("audio.onlyTitle")}</div>
-                <div className="mt-1.5 text-[13px] text-[var(--color-muted)] max-w-sm mx-auto leading-snug">{t("audio.onlyHint")}</div>
+          </div>
+
+          {/* Панель управления плеером прямо под видео (Transport Bar) */}
+          <div className="shrink-0 px-3 py-2 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl flex flex-col gap-2 shadow-sm">
+            {/* Верхняя строка: Ползунок перемотки видео */}
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0.1, p.meta.duration || 0)}
+              step={0.05}
+              value={Math.min(scrub, p.meta.duration || 0)}
+              onChange={(e) => onSeek(parseFloat(e.target.value))}
+              className="w-full h-1.5 accent-[var(--color-accent)] cursor-pointer"
+            />
+
+            {/* Нижняя строка: Кнопка Play, регулятор громкости и счетчик времени */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={playFull}
+                  title={play ? "Пауза (Пробел)" : "Воспроизвести (Пробел)"}
+                  className={`inline-flex items-center justify-center py-1.5 px-3 rounded-lg font-semibold text-xs gap-1.5 transition-all shadow-sm ${
+                    play
+                      ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] ring-2 ring-[var(--color-accent)]/30"
+                      : "bg-[var(--color-surface-2)] text-[var(--color-text)] hover:border-[var(--color-accent)] border border-[var(--color-border)]"
+                  }`}
+                >
+                  {play ? <Pause size={14} /> : <Play size={14} />}
+                  <span>{play ? "Пауза" : "Воспроизвести"}</span>
+                </button>
+
+                <audio ref={audioRef} src={api.dubUrl(pid, dubRev)} onEnded={() => setPlay(false)} preload="auto" className="hidden" />
+
+                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg text-xs" title={t("play.volume")}>
+                  <Music size={13} className="text-[var(--color-muted)]" />
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.02}
+                    value={vol}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setVol(v);
+                      if (audioRef.current) audioRef.current.volume = v;
+                      localStorage.setItem("dub-vol", String(v));
+                    }}
+                    className="w-16 accent-[var(--color-accent)] cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              <div className="mono text-[12px] tabnum px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg shadow-inner">
+                <span className="text-[var(--color-accent)] font-semibold">{fmtT(scrub)}</span>
+                <span className="text-[var(--color-muted)]"> / {fmtT(p.meta.duration || 0)}</span>
               </div>
             </div>
-          ) : compare ? (
-            <div className="w-full h-full grid grid-cols-2 gap-2 min-h-0">
-              <ComparePane label={t("compare.original")} src={api.originalUrl(pid, scrub)} />
-              <ComparePane label={t("compare.result")} src={api.previewUrl(pid, scrub, rev)} />
-            </div>
-          ) : (
-            <PreviewCanvas
-              pid={pid}
-              project={
-                sizeDraft != null
-                  ? {
-                      ...p,
-                      captions: {
-                        ...p.captions,
-                        sub_style: p.captions.sub_style
-                          ? { ...p.captions.sub_style, size_px: sizeDraft }
-                          : ({ ...defaultSubStyle, size_px: sizeDraft } as SubStyle),
-                      },
-                    }
-                  : p
-              }
-              scrub={scrub}
-              rendered={rendered}
-              lane={lane}
-              playing={play}
-              onChanged={(fresh) => setProject(fresh)}
-            />
-          )}
           </div>
-          </div>
-          {/* Ползунок перемотки + вейформа — СТРОГО друг под другом, ОДНОЙ ширины (полная ширина превью).
-              Оба скрабят единый scrub. Время/транспорт — в баре ниже. */}
+
           {/* Интерактивный таймлайн снизу (в стиле ElevenLabs / NLE): визуализация плашек фраз + перетаскивание / растягивание */}
           {!audioOnly && (
-            <div className="shrink-0 px-2 pb-1 flex flex-col gap-1.5">
-              <input type="range" min={0} max={Math.max(0.1, p.meta.duration || 0)} step={0.05} value={Math.min(scrub, p.meta.duration || 0)}
-                onChange={(e) => onSeek(parseFloat(e.target.value))}
-                className="w-full h-1 accent-[var(--color-accent)] cursor-pointer" />
-              <InteractiveTimeline pid={pid} duration={p.meta.duration || 0} scrub={scrub} segments={p.segments}
-                playing={play} onSeek={onSeek} onPlaySeg={playSeg} setProject={setProject} />
+            <div className="shrink-0 pb-1">
+              <InteractiveTimeline
+                pid={pid}
+                duration={p.meta.duration || 0}
+                scrub={scrub}
+                segments={p.segments}
+                playing={play}
+                onSeek={onSeek}
+                onPlaySeg={playSeg}
+                setProject={setProject}
+              />
             </div>
           )}
-        </div>
-        <div className="flex items-center gap-3 px-4 py-2.5 border-t border-[var(--color-border)] bg-[var(--color-surface)]">
-          <button onClick={playFull} title={t("play.dub")}
-            className={`shrink-0 p-1.5 rounded-md transition-colors ${play ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
-            {play ? <Pause size={15} /> : <Play size={15} />}
-          </button>
-
-          <audio ref={audioRef} src={api.dubUrl(pid, dubRev)} onEnded={() => setPlay(false)} preload="auto" className="hidden" />
-          <div className="flex items-center gap-1.5 shrink-0" title={t("play.volume")}>
-            <Music size={13} className="text-[var(--color-muted)]" />
-            <input type="range" min={0} max={1} step={0.02} value={vol}
-              onChange={(e) => { const v = parseFloat(e.target.value); setVol(v); if (audioRef.current) audioRef.current.volume = v; localStorage.setItem("dub-vol", String(v)); }}
-              className="w-16 accent-[var(--color-accent)]" />
-          </div>
-          <button onClick={() => setCompare((c) => !c)} title={t("compare.toggle")}
-            className={`shrink-0 p-1.5 rounded-md transition-colors ${compare ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>
-            <Columns2 size={15} />
-          </button>
-          <span className="mono text-[11px] tabnum shrink-0"><span className="text-[var(--color-accent)] font-semibold">{fmtT(scrub)}</span><span className="text-[var(--color-muted)]"> / {fmtT(p.meta.duration || 0)}</span></span>
-          <div className="flex-1" />
         </div>
       </main>
 
