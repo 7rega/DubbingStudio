@@ -543,12 +543,7 @@ fn build_dub(
     let cached_inst = stems.join("instrumental.wav");
 
     let _needs_clone = proj.audio.voice.mode == "clone" || proj.audio.voice.name.as_deref().unwrap_or("").split(',').any(|s| s.trim() == crate::voice_slots::CLONE_SLOT);
-    let vo_duck_vocals_only = crate::models::load_selection(&paths.models_root)
-        .get("vo_duck_vocals_only")
-        .and_then(|v| v.as_str())
-        .map(|v| v != "0")
-        .unwrap_or(true);
-    let want_inst = (keep_music && !voiceover) || (voiceover && vo_duck_vocals_only);
+    let want_inst = keep_music && !voiceover;
     let needs_clean_vocals = true; // ВСЕГДА пытаемся получить чистый вокал для референса (TTS/клонирование работает лучше)
     let mut did_sep = false;
 
@@ -567,7 +562,7 @@ fn build_dub(
         }
     }
 
-    let instrumental = if did_sep && (keep_music && !voiceover) {
+    let instrumental = if want_inst && did_sep {
         Some(cached_inst.clone())
     } else {
         None
@@ -1507,40 +1502,25 @@ fn build_dub(
     let mixed = if voiceover {
         // Закадровый (UN-style voice-over): оригинал ЗВУЧИТ ПОЛНЫМ между репликами перевода (слышно
         // исходного спикера/эмоцию) и ДИНАМИЧЕСКИ приглушается на voiceover_gain_db ПОД переводом,
-        // восстанавливаясь после — best-practice (IVA/Wikipedia).
+        // восстанавливаясь после — best-practice (IVA/Wikipedia). В паузах и во время lead-in (0.6с) оригинал 100%.
         let duck_db = proj.audio.voiceover_gain_db.clamp(VOICEOVER_DUCK_MIN_DB, 0.0);
+        emit(progress, "mix", &format!(
+            "voiceover: оригинал {duck_db:+.1} dB ПОД переводом, полный в паузах (динам. огибающая, {} блоков)",
+            speech_blocks.len()));
         let new_audio = wd.join("new_audio.m4a");
-        if did_sep && vo_duck_vocals_only {
-            // Профессиональный гибридный закадр (UN Voice-Over):
-            // 1) Музыка и интершумы: мягкий дакинг -3.5 дБ под речью диктора (сохраняет сочность и драйв, но дает место голосу), 100% в паузах.
-            // 2) Оригинальный вокал: глубокий дакинг duck_db (-12..-14 дБ) под речью диктора, 100% во время lead-in (0.6с) и в паузах.
-            // 3) Русский диктор: 100% громкость.
-            let inst_duck_db = -3.5f64;
-            emit(progress, "mix", &format!(
-                "voiceover (гибридный): музыка {inst_duck_db:+.1} dB + вокал оригинала {duck_db:+.1} dB ПОД переводом ({} блоков)",
-                speech_blocks.len()));
-            if let Err(e) = media::mix_voiceover_hybrid(&dub, &cached_inst, &cached_voc, &speech_blocks, inst_duck_db, duck_db, &new_audio) {
-                emit(progress, "mix", &format!("mix_voiceover_hybrid сбой ({e}) -> фолбэк на 2-трековый микс"));
-                media::mix_env_db(&dub, &audio_hq, &speech_blocks, duck_db, &new_audio)?;
-            }
-        } else {
-            // Без сепарации: приглушаем весь аудио-микс под переводом
-            emit(progress, "mix", &format!(
-                "voiceover: оригинал {duck_db:+.1} dB ПОД переводом, полный в паузах (динам. огибающая, {} блоков)",
-                speech_blocks.len()));
-            if media::mix_env_db(&dub, &audio_hq, &speech_blocks, duck_db, &new_audio).is_err() {
-                emit(progress, "mix", "voiceover: огибающая недоступна -> плоское приглушение");
-                let bed = if duck_db.abs() < 0.05 {
-                    audio_hq.clone()
-                } else {
-                    let ducked = wd.join("orig_ducked.m4a");
-                    match media::gain(&audio_hq, &ducked, duck_db) {
-                        Ok(()) => ducked,
-                        Err(_) => audio_hq.clone(),
-                    }
-                };
-                media::mix(&dub, &bed, &new_audio)?;
-            }
+        // Динамическая огибающая на ОРИГИНАЛ по таймингам перевода. Фолбэк — старое плоское приглушение.
+        if media::mix_env_db(&dub, &audio_hq, &speech_blocks, duck_db, &new_audio).is_err() {
+            emit(progress, "mix", "voiceover: огибающая недоступна -> плоское приглушение");
+            let bed = if duck_db.abs() < 0.05 {
+                audio_hq.clone()
+            } else {
+                let ducked = wd.join("orig_ducked.m4a");
+                match media::gain(&audio_hq, &ducked, duck_db) {
+                    Ok(()) => ducked,
+                    Err(_) => audio_hq.clone(),
+                }
+            };
+            media::mix(&dub, &bed, &new_audio)?;
         }
         new_audio
     } else if let Some(inst) = instrumental {
