@@ -1158,7 +1158,7 @@ fn build_dub(
             let take1_ok = if delta <= 0.10 && raw_dur > 0.0 {
                 // Первый дубль уложился в 10% от слота — проверяем на отсутствие дефектов синтеза
                 if let Ok((samples, sr)) = crate::wavio::read_mono_f32(&raw) {
-                    synth_defect(&samples, sr, tgt.chars().filter(|c| c.is_alphanumeric()).count()).is_none()
+                    synth_defect(&samples, sr as i32, tgt.chars().filter(|c| c.is_alphanumeric()).count()).is_none()
                 } else {
                     false
                 }
@@ -1887,7 +1887,7 @@ fn fit_to_slot(seg_wav: &Path, target_dur: f64, work_path: &Path, cap: f64, paus
     let mut factor = actual_dur / target_dur;
     factor = factor.min(cap).max(MIN_SLOW);
     if (0.98..=1.02).contains(&factor) {
-        if cur_wav != seg_wav {
+        if cur_wav.as_path() != seg_wav {
             // Если паузы сжаты и этого хватило, сохраняем результат в work_path
             let _ = std::fs::copy(&cur_wav, work_path);
             let _ = std::fs::remove_file(&cur_wav);
@@ -1896,7 +1896,7 @@ fn fit_to_slot(seg_wav: &Path, target_dur: f64, work_path: &Path, cap: f64, paus
         return Ok((seg_wav.to_path_buf(), actual));
     }
     media::time_stretch(&cur_wav, work_path, factor)?;
-    if cur_wav != seg_wav {
+    if cur_wav.as_path() != seg_wav {
         let _ = std::fs::remove_file(&cur_wav);
     }
     let d = media::duration(work_path).unwrap_or(actual_dur / factor);

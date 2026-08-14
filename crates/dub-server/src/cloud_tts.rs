@@ -4,7 +4,6 @@
 //! ОДИН раз. Модель/голос — только из настроек юзера (or_tts_model/or_tts_voice), без хардкода.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::AtomicU64;
 
 /// Уникализатор temp-файлов синтеза (для потокобезопасности synth_batch).

@@ -2,7 +2,7 @@
 //! видеопоток, fps, кодек) и extract_audio -> wav 16k mono. Тяжёлого ничего: только вызовы бинарей.
 
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[cfg(windows)]
@@ -312,7 +312,7 @@ pub fn squeeze_internal_pauses(
         None => return samples.to_vec(),
     };
 
-    let min_pause_wins = ((0.070 / 0.010).round() as usize).max(1); // 70 мс = 7 окон
+    let min_pause_wins = ((0.070f64 / 0.010f64).round() as usize).max(1); // 70 мс = 7 окон
     let target_pause_samples = ((sr as f64 * target_max_pause_ms / 1000.0).round() as usize).max(1);
     let xfade_samples = ((sr as f64 * 0.005).round() as usize).min(target_pause_samples / 2).max(1); // 5 мс
 
