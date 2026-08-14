@@ -722,15 +722,15 @@ fn build_dub(
             return None; // пак — фикс-голос юзера, эмоцию источника не переносим
         }
         let key = s.speaker.as_deref().unwrap_or("0");
-        if (s.end - s.start) < REF_MIN_AFTER_TRIM {
-            return None; // слишком коротко для отдельного рефа
+        if (s.end - s.start) < 1.0 {
+            return None; // слишком коротко (< 1.0с) для отдельного рефа
         }
         if !seg_is_clean(s, key, &segs) {
             return None; // оверлап чужого спикера -> не чистый эмоц-реф
         }
         let out = wd.join(format!("emoref_{sid}.wav"));
         // кап длины сверху ref_secs (не раздувать prefill-граф Higgs), как для identity-рефа.
-        let cap = paths.ref_secs.min(REF_IDEAL_HI).max(REF_MIN_AFTER_TRIM);
+        let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
         let end = s.end.min(s.start + cap);
         match media::trim(&vocals16, &out, s.start, end.max(s.start + 0.05), 16_000) {
             Ok(()) => Some(out),

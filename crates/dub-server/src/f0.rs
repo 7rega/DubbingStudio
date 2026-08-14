@@ -130,6 +130,117 @@ fn median(v: &mut [f64]) -> f64 {
     }
 }
 
+/// Минимальная длительность речи (сек) для надежного замера F0 сегмента.
+const MIN_VOICED_SEG_SEC: f64 = 0.4;
+
+/// Автоматическая корректировка спикеров в сегментах проекта на основе высоты тона (F0).
+/// Если реплика девушки (~210 Гц) ошибочно приписана мужчине (~120 Гц) (или наоборот),
+/// алгоритм переназначает фразу соответствующему спикеру нужного пола либо выделяет нового спикера.
+pub fn fix_cross_gender_segments(segs: &mut [dub_core::Segment], vocals_path: &std::path::Path) {
+    use std::collections::HashMap;
+    let (samples, sr) = match crate::wavio::read_mono_f32(vocals_path) {
+        Ok(res) => res,
+        Err(_) => return, // нет аудио — ничего не меняем
+    };
+    if samples.is_empty() || sr == 0 {
+        return;
+    }
+
+    // 1) Замеряем F0 для всех сегментов достаточной длины
+    let mut seg_f0s: HashMap<usize, f64> = HashMap::new();
+    for (idx, seg) in segs.iter().enumerate() {
+        let dur = seg.end - seg.start;
+        if dur < MIN_VOICED_SEG_SEC {
+            continue;
+        }
+        let start_sample = ((seg.start * sr as f64).round() as usize).min(samples.len());
+        let end_sample = ((seg.end * sr as f64).round() as usize).min(samples.len());
+        if end_sample <= start_sample + (sr as f64 * 0.2) as usize {
+            continue;
+        }
+        if let Some(f0) = median_f0(&samples[start_sample..end_sample], sr) {
+            seg_f0s.insert(idx, f0);
+        }
+    }
+
+    // 2) Вычисляем преобладающий пол для каждого спикера
+    let mut speaker_pitches: HashMap<String, Vec<f64>> = HashMap::new();
+    for (idx, seg) in segs.iter().enumerate() {
+        let spk = seg.speaker.clone().unwrap_or_else(|| "0".to_string());
+        if let Some(&f0) = seg_f0s.get(&idx) {
+            speaker_pitches.entry(spk).or_default().push(f0);
+        }
+    }
+
+    let mut speaker_gender: HashMap<String, Gender> = HashMap::new();
+    for (spk, mut pitches) in speaker_pitches {
+        if pitches.is_empty() {
+            continue;
+        }
+        let med = median(&mut pitches);
+        speaker_gender.insert(spk, gender_of(med));
+    }
+
+    if speaker_gender.is_empty() {
+        return;
+    }
+
+    // 3) Находим спикеров под каждый пол (для переназначения)
+    let male_speakers: Vec<String> = speaker_gender
+        .iter()
+        .filter(|&(_, &g)| g == Gender::Male)
+        .map(|(s, _)| s.clone())
+        .collect();
+    let female_speakers: Vec<String> = speaker_gender
+        .iter()
+        .filter(|&(_, &g)| g == Gender::Female)
+        .map(|(s, _)| s.clone())
+        .collect();
+
+    // 4) Проверяем каждый сегмент на несовпадение пола со своим спикером
+    let mut next_spk_id = segs
+        .iter()
+        .filter_map(|s| s.speaker.as_deref())
+        .filter_map(|s| s.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1;
+
+    for (idx, seg) in segs.iter_mut().enumerate() {
+        let current_spk = seg.speaker.clone().unwrap_or_else(|| "0".to_string());
+        let current_spk_gender = match speaker_gender.get(&current_spk) {
+            Some(&g) => g,
+            None => continue,
+        };
+
+        if let Some(&f0) = seg_f0s.get(&idx) {
+            let seg_gender = gender_of(f0);
+            // Если реплика женская (~210 Гц), а спикер мужской (~120 Гц) — переназначаем!
+            if seg_gender != current_spk_gender {
+                if seg_gender == Gender::Female {
+                    if let Some(target_spk) = female_speakers.first() {
+                        seg.speaker = Some(target_spk.clone());
+                    } else {
+                        let new_id = format!("{next_spk_id}");
+                        next_spk_id += 1;
+                        speaker_gender.insert(new_id.clone(), Gender::Female);
+                        seg.speaker = Some(new_id);
+                    }
+                } else if seg_gender == Gender::Male {
+                    if let Some(target_spk) = male_speakers.first() {
+                        seg.speaker = Some(target_spk.clone());
+                    } else {
+                        let new_id = format!("{next_spk_id}");
+                        next_spk_id += 1;
+                        speaker_gender.insert(new_id.clone(), Gender::Male);
+                        seg.speaker = Some(new_id);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
