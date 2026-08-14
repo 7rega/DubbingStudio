@@ -229,7 +229,10 @@
     "show": "Mostrar línea",
     "del": "Eliminar línea",
     "refresh": "Actualizar",
-    "refreshHint": "Forzar el refresco de la vista previa / subtítulos"
+    "refreshHint": "Forzar el refresco de la vista previa / subtítulos",
+    "lock": "Bloquear toma (proteger de re-generación)",
+    "unlock": "Desbloquear toma",
+    "lockedHint": "Bloqueado: protegido de re-generación masiva"
   },
   "settings": {
     "sounds": "Sonidos de notificación",

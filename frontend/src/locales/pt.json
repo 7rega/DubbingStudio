@@ -229,7 +229,10 @@
     "show": "Mostrar linha",
     "del": "Excluir linha",
     "refresh": "Atualizar",
-    "refreshHint": "Forçar a atualização da prévia / legendas"
+    "refreshHint": "Forçar a atualização da prévia / legendas",
+    "lock": "Bloquear tomada (proteger de re-geração)",
+    "unlock": "Desbloquear tomada",
+    "lockedHint": "Bloqueado: protegido de re-geração em massa"
   },
   "settings": {
     "sounds": "Sons de notificação",

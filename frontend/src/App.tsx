@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2 } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Lock, Unlock } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -3402,6 +3402,7 @@ function Editor() {
   async function doHideSeg(segId: string) { return segOp(segId, "hide_segment"); }   // toggle a line off/on
   async function doDelSeg(segId: string) { return segOp(segId, "del_segment"); }     // delete a line entirely (undoable)
   async function doKeepSeg(segId: string) { return segOp(segId, "keep_segment"); }   // toggle 'keep original audio'
+  async function doLockSeg(segId: string) { return segOp(segId, "lock_segment"); }   // toggle 'lock/protect from mass regen'
   async function bulkDelIdx(op: "del_titles" | "del_blurs", idxs: Set<number>, clear: () => void) {
     if (!idxs.size) return;                                           // bulk-delete several titles / mask boxes by index
     pushHistory(p); setRendered(false);
@@ -3411,7 +3412,7 @@ function Editor() {
     }
     catch (e) { await surfaceErr(e); }
   }
-  async function bulkSeg(op: "del_segments" | "hide_segments" | "keep_segments", extra: Record<string, unknown> = {}) {
+  async function bulkSeg(op: "del_segments" | "hide_segments" | "keep_segments" | "lock_segments", extra: Record<string, unknown> = {}) {
     if (!selSegs.size || regenId) return;                            // bulk hide/delete the selected lines
     pushHistory(p); setRegenId("__bulk__"); setRendered(false);
     try {
@@ -4002,12 +4003,17 @@ function Editor() {
                             <span className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"}`}>{fmtT(seg.start)} → {fmtT(seg.end)}</span>
                           </div>
                           <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
+                            {seg.extra?.locked && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title={t("seg.lockedHint")}>🔒</span>}
                             {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
                             <button onClick={(e) => { e.stopPropagation(); playSeg(seg); }} title={t("seg.play")}
                               className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><Play size={13} /></button>
                             <button onClick={(e) => { e.stopPropagation(); doRegen(seg.id); }} disabled={regenId !== null} title={t("seg.regen")}
                               className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
                               {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); doLockSeg(seg.id); }} disabled={regenId !== null} title={seg.extra?.locked ? t("seg.unlock") : t("seg.lock")}
+                              className={`p-0.5 disabled:opacity-40 transition-colors ${seg.extra?.locked ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}>
+                              {seg.extra?.locked ? <Lock size={13} /> : <Unlock size={13} />}
                             </button>
                             <button onClick={(e) => { e.stopPropagation(); doKeepSeg(seg.id); }} disabled={regenId !== null} title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
                               className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}><Music size={13} /></button>

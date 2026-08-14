@@ -229,7 +229,10 @@
     "show": "Afficher la ligne",
     "del": "Supprimer la ligne",
     "refresh": "Actualiser",
-    "refreshHint": "Forcer le rafraîchissement de l'aperçu / sous-titres"
+    "refreshHint": "Forcer le rafraîchissement de l'aperçu / sous-titres",
+    "lock": "Verrouiller la prise (protéger de la regénération)",
+    "unlock": "Déverrouiller la prise",
+    "lockedHint": "Verrouillé : protégé de la regénération de masse"
   },
   "settings": {
     "sounds": "Sons de notification",

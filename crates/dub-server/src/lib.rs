@@ -1775,6 +1775,23 @@ fn clone_project_for_relang(src: &Path, dst: &Path) -> Result<(), String> {
             std::fs::copy(&p, dst.join(&name)).map_err(|e| format!("copy {name}: {e}"))?;
         }
     }
+    // Копируем кэш стемов (stems/vocals.wav и stems/instrumental.wav) — чтобы целевой проект не крутил
+    // тяжелую сепарацию BSRoformer заново, а мгновенно взял уже разделенные дорожки.
+    let src_stems = src.join("stems");
+    if src_stems.is_dir() {
+        let dst_stems = dst.join("stems");
+        let _ = std::fs::create_dir_all(&dst_stems);
+        if let Ok(rd_stems) = std::fs::read_dir(&src_stems) {
+            for e in rd_stems.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    if let Some(n) = p.file_name() {
+                        let _ = std::fs::copy(&p, dst_stems.join(n));
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }
 

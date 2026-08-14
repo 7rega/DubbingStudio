@@ -229,7 +229,10 @@
     "show": "显示该句",
     "del": "删除该句",
     "refresh": "刷新",
-    "refreshHint": "强制刷新预览/字幕（如卡顿或卡住）"
+    "refreshHint": "强制刷新预览/字幕（如卡顿或卡住）",
+    "lock": "锁定本句（防止被批量重新生成）",
+    "unlock": "解锁本句",
+    "lockedHint": "已锁定：防止被批量重新生成覆盖"
   },
   "settings": {
     "sounds": "通知音效",

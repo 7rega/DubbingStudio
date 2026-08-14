@@ -210,12 +210,22 @@ pub fn burn(
         vec!["-vf".into(), ass_f.clone()]
     };
 
-    let enc = if gpu_encode { nv } else { sw };
     // Таймаут пропорционален длительности: фикс-30мин зарезал бы легитимный burn многочасового
-    // фильма (NVENC ~5-10x риалтайма, softwarе медленнее). 4x длительность + 10 мин запас, минимум 30 мин.
+    // фильма (NVENC ~5-10x риалтайма, software медленнее). 4x длительность + 10 мин запас, минимум 30 мин.
     let dur_secs = probe_duration_secs(video).unwrap_or(0.0);
     let timeout = BURN_TIMEOUT_SECS.max((dur_secs * 4.0) as u64 + 600);
-    run_ffmpeg(video, &vargs, &enc, out, gpu_decode, timeout)
+
+    if gpu_encode {
+        match run_ffmpeg(video, &vargs, &nv, out, gpu_decode, timeout) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("[burn] NVENC аппаратный энкодер вернул ошибку ({e}) -> автоматический откат на процессорный libx264...");
+                run_ffmpeg(video, &vargs, &sw, out, false, timeout)
+            }
+        }
+    } else {
+        run_ffmpeg(video, &vargs, &sw, out, false, timeout)
+    }
 }
 
 /// Длительность видео в секундах через ffprobe (для пропорционального таймаута burn). Ошибка -> None.

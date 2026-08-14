@@ -798,6 +798,20 @@ pub fn trim(src: &Path, dst: &Path, start: f64, end: f64, sr: u32) -> Result<(),
     ])
 }
 
+/// Вырезать [start,end] в mono @ sr Гц с полосовой фильтрацией (Bandpass) [low_hz, high_hz].
+/// Используется для нарезки чистого emo_ref без сабвуферного гула (взрывы/шаги <80Гц) и шипения (>8000Гц).
+pub fn trim_bandpass(src: &Path, dst: &Path, start: f64, end: f64, sr: u32, low_hz: f64, high_hz: f64) -> Result<(), String> {
+    let ss = format!("{:.3}", start);
+    let to = format!("{:.3}", end);
+    let ar = sr.to_string();
+    let af = format!("highpass=f={low_hz:.1},lowpass=f={high_hz:.1}");
+    run_ff(&[
+        OsStr::new("-y"), OsStr::new("-ss"), OsStr::new(&ss), OsStr::new("-to"), OsStr::new(&to),
+        OsStr::new("-i"), src.as_os_str(), OsStr::new("-af"), OsStr::new(&af),
+        OsStr::new("-ac"), OsStr::new("1"), OsStr::new("-ar"), OsStr::new(&ar), dst.as_os_str(),
+    ])
+}
+
 // ─── Оконная нарезка для полнометражного пайплайна (#79) ──────────────────────────────────────────
 // Новые хелперы (не трогают существующие): вырезать ОДНО окно вокала в отдельный WAV (RAM O(окна)),
 // либо нарезать весь вокал segment-muxer'ом одним проходом. `-reset_timestamps 1` даёт локальный t=0 в
