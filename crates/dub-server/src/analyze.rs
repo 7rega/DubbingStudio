@@ -691,7 +691,6 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                     tgt_text,
                     voice: None,
                     dirty: false,
-                    locked: false,
                     ckpt: None,
                     extra: Default::default(),
                 }
@@ -721,7 +720,6 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                 tgt_text: String::new(),
                 voice: None,
                 dirty: false,
-                locked: false,
                 ckpt: None,
                 extra: Default::default(),
             })
@@ -769,7 +767,6 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                     tgt_text: String::new(),
                     voice: None,
                     dirty: false,
-                    locked: false,
                     ckpt: None,
                     extra,
                 }

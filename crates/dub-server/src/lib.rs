@@ -1324,7 +1324,6 @@ async fn create_project(
                             tgt_text: c.text,
                             voice: None,
                             dirty: true,
-                            locked: false,
                             ckpt: None,
                             extra: serde_json::Map::new(),
                         });

@@ -299,11 +299,7 @@
     "show": "Show line",
     "del": "Delete line",
     "refresh": "Refresh",
-    "refreshHint": "Force-refresh the preview / subtitles (if it lags or hangs)",
-    "lock": "Lock take",
-    "unlock": "Unlock take",
-    "lockedHint": "Locked: protected from mass regen",
-    "lockedBadge": "Locked 🔒"
+    "refreshHint": "Force-refresh the preview / subtitles (if it lags or hangs)"
   },
   "settings": {
     "sounds": "Notification sounds",

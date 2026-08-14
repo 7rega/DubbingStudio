@@ -229,11 +229,7 @@
     "show": "Afficher la ligne",
     "del": "Supprimer la ligne",
     "refresh": "Actualiser",
-    "refreshHint": "Forcer le rafraîchissement de l'aperçu / sous-titres",
-    "lock": "Verrouiller",
-    "unlock": "Déverrouiller",
-    "lockedHint": "Verrouillé : protégé de la regénération de masse",
-    "lockedBadge": "Verrouillé 🔒"
+    "refreshHint": "Forcer le rafraîchissement de l'aperçu / sous-titres"
   },
   "settings": {
     "sounds": "Sons de notification",

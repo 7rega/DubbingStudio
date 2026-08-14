@@ -43,13 +43,10 @@ fn idxs_desc(edit: &Value) -> Vec<usize> {
     set.iter().rev().filter_map(|&x| usize::try_from(x).ok()).collect::<Vec<_>>()
 }
 
-/// Пометить все незаблокированные сегменты dirty (после смены режима/перевода re-gen на render).
-/// Заблокированные (locked == true) сегменты пропускаются, сохраняя утвержденные пользователем дубли.
+/// Пометить все сегменты dirty (после смены режима/перевода re-gen на render).
 fn mark_all_dirty(p: &mut Project) {
     for seg in &mut p.segments {
-        if !seg.locked {
-            seg.dirty = true;
-        }
+        seg.dirty = true;
     }
 }
 
@@ -314,26 +311,6 @@ fn op_regen_multi(p: &mut Project, edit: &Value) -> PatchResult {
 /// regen_all — пометить ВСЕ сегменты dirty (ре-TTS всего дубляжа). Порт app.py op=="regen_all".
 fn op_regen_all(p: &mut Project, _edit: &Value) -> PatchResult {
     mark_all_dirty(p);
-    Ok(())
-}
-
-/// lock_segment — заблокировать/разблокировать сегмент от перезаписи при массовой перегенерации.
-fn op_lock_segment(p: &mut Project, edit: &Value) -> PatchResult {
-    let seg = seg_by_id(p, edit)?;
-    let locked = b(edit, "locked").unwrap_or(!seg.locked);
-    seg.locked = locked;
-    Ok(())
-}
-
-/// lock_segments — массово заблокировать/разблокировать несколько сегментов.
-fn op_lock_segments(p: &mut Project, edit: &Value) -> PatchResult {
-    let sids = ids(edit);
-    let locked = b(edit, "locked").unwrap_or(true);
-    for seg in &mut p.segments {
-        if sids.contains(&seg.id) {
-            seg.locked = locked;
-        }
-    }
     Ok(())
 }
 
@@ -732,8 +709,6 @@ pub fn apply(p: &mut Project, edit: &Value) -> PatchResult {
         "del_blurs" => op_del_blurs(p, edit),
         "keep_segment" => op_keep_segment(p, edit),
         "keep_segments" => op_keep_segments(p, edit),
-        "lock_segment" => op_lock_segment(p, edit),
-        "lock_segments" => op_lock_segments(p, edit),
         "blur" => op_blur(p, edit),
         "blur_add" => op_blur_add(p, edit),
         "blur_del" => op_blur_del(p, edit),

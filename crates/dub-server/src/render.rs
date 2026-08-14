@@ -732,22 +732,8 @@ fn build_dub(
         // кап длины сверху ref_secs (не раздувать prefill-граф Higgs), как для identity-рефа.
         let cap = paths.ref_secs.min(REF_IDEAL_HI).max(REF_MIN_AFTER_TRIM);
         let end = s.end.min(s.start + cap);
-        match media::trim_bandpass(&vocals16, &out, s.start, end.max(s.start + 0.05), 16_000, 80.0, 8000.0) {
-            Ok(()) => {
-                // Проверка энергии / SNR: если реф слишком тихий/зашумленный (< -32 dBFS RMS), откат на identity-реф
-                if let Ok((samples, _)) = crate::wavio::read_mono_f32(&out) {
-                    if samples.is_empty() {
-                        return None;
-                    }
-                    let sum_sq: f32 = samples.iter().map(|&x| x * x).sum();
-                    let rms = (sum_sq / samples.len() as f32).sqrt();
-                    let rms_db = 20.0 * (rms.max(1e-6)).log10();
-                    if rms_db < -32.0 {
-                        return None; // слишком тихий шепот/шум -> на чистый identity-реф
-                    }
-                }
-                Some(out)
-            }
+        match media::trim(&vocals16, &out, s.start, end.max(s.start + 0.05), 16_000) {
+            Ok(()) => Some(out),
             Err(_) => None, // сбой обрезки -> тихо на identity-реф
         }
     };

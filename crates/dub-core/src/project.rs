@@ -134,9 +134,6 @@ pub struct Segment {
     pub voice: Option<String>,
     #[serde(default)]
     pub dirty: bool,
-    /// Заблокирован ли дубль от стирания при массовой перегенерации (regen_all / recast / etc).
-    #[serde(default)]
-    pub locked: bool,
     /// BLAKE3-ключ последнего успешно синтезированного TTS-фрагмента (tgt_text+speaker+voice+ref+quant).
     /// Позволяет решать ре-синтез сравнением ckpt с пересчитанным ключом ВМЕСТО/В ДОПОЛНЕНИЕ к dirty
     /// (dirty остаётся UI-сигналом «показать точку правки»). Option → отсутствует в старых project.json

@@ -229,11 +229,7 @@
     "show": "Mostrar linha",
     "del": "Excluir linha",
     "refresh": "Atualizar",
-    "refreshHint": "Forçar a atualização da prévia / legendas",
-    "lock": "Fixar tomada",
-    "unlock": "Desbloquear tomada",
-    "lockedHint": "Bloqueado: protegido de re-geração em massa",
-    "lockedBadge": "Fixado 🔒"
+    "refreshHint": "Forçar a atualização da prévia / legendas"
   },
   "settings": {
     "sounds": "Sons de notificação",
