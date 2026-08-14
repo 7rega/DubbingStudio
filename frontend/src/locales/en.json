@@ -1,9 +1,15 @@
 {
   "common": {
-    "cut": "Cut",
-    "copy": "Copy",
-    "paste": "Paste",
-    "error": "Error"
+    "undo": "Undo",
+    "redo": "Redo",
+    "cancel": "Cancel",
+    "language": "Language",
+    "theme": "Theme",
+    "rendering": "Rendering",
+    "done": "Done",
+    "error": "Error",
+    "play": "Play",
+    "pause": "Pause"
   },
   "app": {
     "name": "Dub Studio",
@@ -234,8 +240,23 @@
   },
   "recent": {
     "title": "Recent projects",
-    "delete": "Delete project",
-    "deleteConfirm": "Delete project «{{video}}»? Its files will be permanently erased."
+    "delete": "Delete permanently",
+    "deleteConfirm": "Permanently delete project \"{{video}}\" from disk?",
+    "trash": "Move to Recycle Bin",
+    "trashConfirm": "Move project \"{{video}}\" to Windows Recycle Bin?",
+    "showAll": "Show all projects ({{count}})",
+    "modalTitle": "All Projects",
+    "searchPlaceholder": "Search project by name...",
+    "openFolder": "Open project folder",
+    "folder": "Folder",
+    "diskSpace": "Projects occupy {{size}}",
+    "cleanOld": "Clean old",
+    "cleanOldTrash": "Old to Recycle Bin",
+    "cleanOldTrashConfirm": "Move old projects (>30 days) to Windows Recycle Bin?",
+    "cleanOldDelete": "Permanently delete old",
+    "cleanOldDeleteConfirm": "Permanently delete old projects (>30 days) from disk?",
+    "cleanConfirm": "Delete old projects?",
+    "noProjects": "No projects found"
   },
   "multilang": {
     "title": "Multiple languages",
@@ -315,7 +336,10 @@
     "auto": "Auto",
     "sec": "s",
     "bench": "Stage benchmark",
-    "benchHint": "Measure time/GPU/VRAM per pipeline stage -> bench.json + ⏱ lines in the log. Light background sampling once per second."
+    "benchHint": "Measure time/GPU/VRAM per pipeline stage -> bench.json + ⏱ lines in the log. Light background sampling once per second.",
+    "pauseSqueeze": "Pause Squeeze",
+    "pauseSqueezeDesc": "shortens silence between words instead of speeding up speech (preserves natural voice)",
+    "pauseSqueezeHint": "Automatically compresses silence between words before speedup to preserve natural voice timbre"
   },
   "help": {
     "title": "About Dub Studio",
@@ -367,18 +391,6 @@
     "regenHint": "Regenerate selected phrases",
     "spkDone": "Assigned SPK {{spk}} to {{n}} phrase(s)",
     "regenBusy": "Regenerating audio ({{n}} phrases)..."
-  },
-  "common": {
-    "undo": "Undo",
-    "redo": "Redo",
-    "cancel": "Cancel",
-    "language": "Language",
-    "theme": "Theme",
-    "rendering": "Rendering",
-    "done": "Done",
-    "error": "Error",
-    "play": "Play",
-    "pause": "Pause"
   },
   "hotkeys": {
     "title": "Keyboard shortcuts",
@@ -477,7 +489,8 @@
     "literary": "Literary",
     "casual": "Casual",
     "custom": "Custom…",
-    "customPlaceholder": "Your instruction for the translator — e.g. 'formal, no slang', 'Gen-Z tone'"
+    "customPlaceholder": "Your instruction for the translator — e.g. 'formal, no slang', 'Gen-Z tone'",
+    "dub_fit": "Movie Dubbing (fit to timing)"
   },
   "keepOrig": {
     "label": "Keep original track",
@@ -541,26 +554,6 @@
     "empty": "Library is empty — save a cast from the editor.",
     "delete": "Delete profile",
     "deleteConfirm": "Delete this cast profile?"
-  },
-  "recent": {
-    "title": "Recent projects",
-    "delete": "Delete permanently",
-    "deleteConfirm": "Permanently delete project \"{{video}}\" from disk?",
-    "trash": "Move to Recycle Bin",
-    "trashConfirm": "Move project \"{{video}}\" to Windows Recycle Bin?",
-    "showAll": "Show all projects ({{count}})",
-    "modalTitle": "All Projects",
-    "searchPlaceholder": "Search project by name...",
-    "openFolder": "Open project folder",
-    "folder": "Folder",
-    "diskSpace": "Projects occupy {{size}}",
-    "cleanOld": "Clean old",
-    "cleanOldTrash": "Old to Recycle Bin",
-    "cleanOldTrashConfirm": "Move old projects (>30 days) to Windows Recycle Bin?",
-    "cleanOldDelete": "Permanently delete old",
-    "cleanOldDeleteConfirm": "Permanently delete old projects (>30 days) from disk?",
-    "cleanConfirm": "Delete old projects?",
-    "noProjects": "No projects found"
   },
   "higgs": {
     "sectionTitle": "Higgs TTS Tags",

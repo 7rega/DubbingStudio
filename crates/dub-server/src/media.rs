@@ -270,6 +270,136 @@ pub fn time_stretch(src: &Path, dst: &Path, factor: f64) -> Result<(), String> {
     ])
 }
 
+/// Умное сжатие межсловных пауз (squeeze_internal_pauses):
+/// Находит промежутки тишины (< -35 dB) между словами длительностью > min_pause_ms (70 мс)
+/// и сжимает их до target_max_pause_ms (40 мс) с применением 5 мс сглаживающего кроссфейда.
+/// Не затрагивает сами слова и гласные, сохраняя 100% тембр и натуральность речи.
+pub fn squeeze_internal_pauses(
+    samples: &[f32],
+    sr: u32,
+    target_max_pause_ms: f64,
+) -> Vec<f32> {
+    if samples.is_empty() || sr == 0 {
+        return samples.to_vec();
+    }
+    let win_len = ((sr as f64 * 0.010).round() as usize).max(1); // 10 мс окно
+    let n_wins = samples.len() / win_len;
+    if n_wins < 3 {
+        return samples.to_vec();
+    }
+
+    // Порог тишины: -35 dB -> amp ~ 0.01778
+    let silence_threshold = 0.01778f32;
+
+    // Рассчитываем RMS для каждого 10 мс окна
+    let mut is_speech: Vec<bool> = Vec::with_capacity(n_wins);
+    for w in 0..n_wins {
+        let start = w * win_len;
+        let end = start + win_len;
+        let slice = &samples[start..end];
+        let sum_sq: f32 = slice.iter().map(|&s| s * s).sum();
+        let rms = (sum_sq / win_len as f32).sqrt();
+        is_speech.push(rms >= silence_threshold);
+    }
+
+    // Находим первое и последнее речевые окна
+    let first_speech = match is_speech.iter().position(|&s| s) {
+        Some(pos) => pos,
+        None => return samples.to_vec(), // всё аудио — тишина, ничего не трогаем
+    };
+    let last_speech = match is_speech.iter().rposition(|&s| s) {
+        Some(pos) => pos,
+        None => return samples.to_vec(),
+    };
+
+    let min_pause_wins = ((0.070 / 0.010).round() as usize).max(1); // 70 мс = 7 окон
+    let target_pause_samples = ((sr as f64 * target_max_pause_ms / 1000.0).round() as usize).max(1);
+    let xfade_samples = ((sr as f64 * 0.005).round() as usize).min(target_pause_samples / 2).max(1); // 5 мс
+
+    let mut out: Vec<f32> = Vec::with_capacity(samples.len());
+
+    // Ведущая тишина (до first_speech) добавляется как есть
+    let leading_end = first_speech * win_len;
+    out.extend_from_slice(&samples[..leading_end]);
+
+    // Проходим по сегментам от first_speech до last_speech
+    let mut cur_win = first_speech;
+    while cur_win <= last_speech {
+        if is_speech[cur_win] {
+            // Накапливаем связный кусок речи
+            let spk_start = cur_win * win_len;
+            while cur_win <= last_speech && is_speech[cur_win] {
+                cur_win += 1;
+            }
+            let spk_end = if cur_win <= last_speech {
+                cur_win * win_len
+            } else {
+                (last_speech + 1) * win_len
+            };
+            out.extend_from_slice(&samples[spk_start..spk_end]);
+        } else {
+            // Внутренняя пауза
+            let pause_start_win = cur_win;
+            while cur_win <= last_speech && !is_speech[cur_win] {
+                cur_win += 1;
+            }
+            let pause_len_wins = cur_win - pause_start_win;
+            let pause_raw_start = pause_start_win * win_len;
+            let pause_raw_end = cur_win * win_len;
+            let pause_raw_len = pause_raw_end - pause_raw_start;
+
+            if pause_len_wins >= min_pause_wins && pause_raw_len > target_pause_samples + xfade_samples {
+                // Сжимаем паузу до target_pause_samples с 5мс кроссфейдом между началом и концом тишины
+                let half_target = target_pause_samples / 2;
+                let part1_end = pause_raw_start + half_target;
+                let part2_start = pause_raw_end.saturating_sub(half_target + xfade_samples);
+
+                // Добавляем первую часть сжатой паузы (за вычетом зоны кроссфейда)
+                let p1_clean_end = part1_end.saturating_sub(xfade_samples);
+                out.extend_from_slice(&samples[pause_raw_start..p1_clean_end]);
+
+                // Кроссфейд стыка (xfade_samples)
+                for i in 0..xfade_samples {
+                    let alpha = i as f32 / xfade_samples as f32;
+                    let s1 = samples.get(p1_clean_end + i).copied().unwrap_or(0.0);
+                    let s2 = samples.get(part2_start + i).copied().unwrap_or(0.0);
+                    out.push((1.0 - alpha) * s1 + alpha * s2);
+                }
+
+                // Добавляем вторую часть сжатой паузы
+                let p2_clean_start = part2_start + xfade_samples;
+                if p2_clean_start < pause_raw_end {
+                    out.extend_from_slice(&samples[p2_clean_start..pause_raw_end]);
+                }
+            } else {
+                // Короткая пауза (<70 мс) — оставляем без изменений
+                out.extend_from_slice(&samples[pause_raw_start..pause_raw_end]);
+            }
+        }
+    }
+
+    // Хвостовая часть (после last_speech) добавляется как есть
+    let tail_start = (last_speech + 1) * win_len;
+    if tail_start < samples.len() {
+        out.extend_from_slice(&samples[tail_start..]);
+    }
+
+    out
+}
+
+/// Прочитать WAV -> сжать межсловные паузы -> записать в dst_wav -> вернуть (dst_wav, duration_s).
+pub fn squeeze_internal_pauses_wav(
+    src_wav: &Path,
+    dst_wav: &Path,
+    target_max_pause_ms: f64,
+) -> Result<(PathBuf, f64), String> {
+    let (samples, sr) = crate::wavio::read_mono_f32(src_wav)?;
+    let squeezed = squeeze_internal_pauses(&samples, sr, target_max_pause_ms);
+    crate::wavio::write_mono_f32(dst_wav, &squeezed, sr)?;
+    let dur = squeezed.len() as f64 / sr as f64;
+    Ok((dst_wav.to_path_buf(), dur))
+}
+
 /// Свести дубль-вокал поверх фона. МУЗЫКУ НЕ ГЛУШИМ (прямой приказ юзера, многократно): вокал уже вырезан
 /// сепарацией, поэтому инструментал = чистый реальный фон и звучит в ПОЛНЫЙ уровень (1.0) — дублированный
 /// голос заменяет вырезанный вокал, фон остаётся как в оригинале. amix normalize=0 НЕ делит входы пополам
@@ -757,3 +887,54 @@ mod iso639_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod pause_squeeze_tests {
+    use super::squeeze_internal_pauses;
+
+    #[test]
+    fn squeezes_internal_long_pauses_only() {
+        let sr = 1000u32; // 1000 samples/sec -> 10 samples per 10ms window
+        // Строим сигнал:
+        // 0.0 .. 0.1с (100 samples) -> звук (амплитуда 0.5)
+        // 0.1 .. 0.4с (300 samples = 300 мс) -> длинная пауза (тишина 0.0)
+        // 0.4 .. 0.5с (100 samples) -> звук (амплитуда 0.5)
+        let mut samples = Vec::new();
+        samples.extend(vec![0.5f32; 100]); // word 1: 100ms
+        samples.extend(vec![0.0f32; 300]); // pause: 300ms (>70ms)
+        samples.extend(vec![0.5f32; 100]); // word 2: 100ms
+
+        assert_eq!(samples.len(), 500);
+
+        // Сжимаем паузу до 40 мс (40 samples при sr=1000)
+        let squeezed = squeeze_internal_pauses(&samples, sr, 40.0);
+
+        // Ожидаем ~240 samples (100 + 40 + 100) вместо 500
+        assert!(squeezed.len() < 300, "len was {}", squeezed.len());
+        assert!(squeezed.len() >= 220, "len was {}", squeezed.len());
+    }
+
+    #[test]
+    fn keeps_short_pauses_untouched() {
+        let sr = 1000u32;
+        // Короткая пауза 50 мс (< 70 мс)
+        let mut samples = Vec::new();
+        samples.extend(vec![0.5f32; 100]); // word 1: 100ms
+        samples.extend(vec![0.0f32; 50]);  // pause: 50ms (<70ms)
+        samples.extend(vec![0.5f32; 100]); // word 2: 100ms
+
+        let squeezed = squeeze_internal_pauses(&samples, sr, 40.0);
+        assert_eq!(squeezed.len(), samples.len());
+    }
+
+    #[test]
+    fn empty_or_pure_silence_returns_as_is() {
+        let empty = squeeze_internal_pauses(&[], 16000, 40.0);
+        assert!(empty.is_empty());
+
+        let silence = vec![0.0f32; 1000];
+        let res = squeeze_internal_pauses(&silence, 1000, 40.0);
+        assert_eq!(res.len(), 1000);
+    }
+}
+

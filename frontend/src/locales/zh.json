@@ -175,9 +175,18 @@
     "lagNotice": "预览可能有延迟——这不是错误。导出即为最终效果。"
   },
   "recent": {
-    "title": "最近的项目",
+    "title": "最近项目",
     "delete": "删除项目",
-    "deleteConfirm": "删除项目「{{video}}」？其文件将被永久删除。"
+    "deleteConfirm": "确定删除项目“{{video}}”吗？",
+    "showAll": "查看所有项目 ({{count}})",
+    "modalTitle": "所有项目",
+    "searchPlaceholder": "搜索项目名称...",
+    "openFolder": "打开项目文件夹",
+    "folder": "文件夹",
+    "diskSpace": "项目共占用 {{size}}",
+    "cleanOld": "清理旧项目",
+    "cleanConfirm": "确定清理旧项目吗？",
+    "noProjects": "未找到相关项目"
   },
   "multilang": {
     "title": "多种语言",
@@ -257,7 +266,10 @@
     "auto": "自动",
     "sec": "秒",
     "bench": "阶段基准测试",
-    "benchHint": "按阶段测量时间/GPU/显存 -> bench.json + 日志中的 ⏱ 行。每秒一次的轻量后台采样。"
+    "benchHint": "按阶段测量时间/GPU/显存 -> bench.json + 日志中的 ⏱ 行。每秒一次的轻量后台采样。",
+    "pauseSqueeze": "语音停顿压缩",
+    "pauseSqueezeDesc": "缩短词间静音而不是加速语音（保持自然音色）",
+    "pauseSqueezeHint": "加速前自动压缩词间静音，以保持自然的语音音色"
   },
   "help": {
     "title": "关于 Dub Studio",
@@ -450,7 +462,8 @@
     "literary": "文学",
     "casual": "口语",
     "custom": "自定义…",
-    "customPlaceholder": "给译者的说明——例如「正式，无俚语」「Z 世代语气」"
+    "customPlaceholder": "给译者的说明——例如「正式，无俚语」「Z 世代语气」",
+    "dub_fit": "电影配音（对齐时长）"
   },
   "keepOrig": {
     "label": "保留原始音轨",
@@ -514,19 +527,5 @@
     "empty": "Library is empty — save a cast from the editor.",
     "delete": "Delete profile",
     "deleteConfirm": "Delete this cast profile?"
-  },
-  "recent": {
-    "title": "最近项目",
-    "delete": "删除项目",
-    "deleteConfirm": "确定删除项目“{{video}}”吗？",
-    "showAll": "查看所有项目 ({{count}})",
-    "modalTitle": "所有项目",
-    "searchPlaceholder": "搜索项目名称...",
-    "openFolder": "打开项目文件夹",
-    "folder": "文件夹",
-    "diskSpace": "项目共占用 {{size}}",
-    "cleanOld": "清理旧项目",
-    "cleanConfirm": "确定清理旧项目吗？",
-    "noProjects": "未找到相关项目"
   }
 }

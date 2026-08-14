@@ -177,7 +177,16 @@
   "recent": {
     "title": "Projets récents",
     "delete": "Supprimer le projet",
-    "deleteConfirm": "Supprimer le projet «{{video}}» ? Ses fichiers seront effacés définitivement."
+    "deleteConfirm": "Supprimer le projet « {{video}} » ?",
+    "showAll": "Afficher tous les projets ({{count}})",
+    "modalTitle": "Tous les projets",
+    "searchPlaceholder": "Rechercher par nom...",
+    "openFolder": "Ouvrir le dossier du projet",
+    "folder": "Dossier",
+    "diskSpace": "Les projets occupent {{size}}",
+    "cleanOld": "Nettoyer les anciens",
+    "cleanConfirm": "Supprimer les anciens projets ?",
+    "noProjects": "Aucun projet trouvé"
   },
   "multilang": {
     "title": "Plusieurs langues",
@@ -257,7 +266,10 @@
     "auto": "Auto",
     "sec": "s",
     "bench": "Benchmark des étapes",
-    "benchHint": "Mesure temps/GPU/VRAM par étape -> bench.json + lignes ⏱ dans le journal. Échantillonnage léger en arrière-plan chaque seconde."
+    "benchHint": "Mesure temps/GPU/VRAM par étape -> bench.json + lignes ⏱ dans le journal. Échantillonnage léger en arrière-plan chaque seconde.",
+    "pauseSqueeze": "Compression des pauses",
+    "pauseSqueezeDesc": "réduit le silence entre les mots au lieu d'accélérer la parole (préserve le timbre naturel)",
+    "pauseSqueezeHint": "Compresse automatiquement le silence entre les mots avant d'accélérer pour préserver le timbre naturel"
   },
   "help": {
     "title": "À propos de Dub Studio",
@@ -450,7 +462,8 @@
     "literary": "Littéraire",
     "casual": "Familier",
     "custom": "Personnalisé…",
-    "customPlaceholder": "Votre consigne pour le traducteur — p. ex. « formel, sans argot », « ton Gen-Z »"
+    "customPlaceholder": "Votre consigne pour le traducteur — p. ex. « formel, sans argot », « ton Gen-Z »",
+    "dub_fit": "Doublage cinéma (adaptation au timing)"
   },
   "keepOrig": {
     "label": "Conserver la piste originale",
@@ -514,19 +527,5 @@
     "empty": "Library is empty — save a cast from the editor.",
     "delete": "Delete profile",
     "deleteConfirm": "Delete this cast profile?"
-  },
-  "recent": {
-    "title": "Projets récents",
-    "delete": "Supprimer le projet",
-    "deleteConfirm": "Supprimer le projet « {{video}} » ?",
-    "showAll": "Afficher tous les projets ({{count}})",
-    "modalTitle": "Tous les projets",
-    "searchPlaceholder": "Rechercher par nom...",
-    "openFolder": "Ouvrir le dossier du projet",
-    "folder": "Dossier",
-    "diskSpace": "Les projets occupent {{size}}",
-    "cleanOld": "Nettoyer les anciens",
-    "cleanConfirm": "Supprimer les anciens projets ?",
-    "noProjects": "Aucun projet trouvé"
   }
 }

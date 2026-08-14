@@ -177,7 +177,16 @@
   "recent": {
     "title": "Projetos recentes",
     "delete": "Excluir projeto",
-    "deleteConfirm": "Excluir o projeto «{{video}}»? Os arquivos serão apagados permanentemente."
+    "deleteConfirm": "Excluir o projeto \"{{video}}\"?",
+    "showAll": "Mostrar todos os projetos ({{count}})",
+    "modalTitle": "Todos os Projetos",
+    "searchPlaceholder": "Buscar projeto por nome...",
+    "openFolder": "Abrir pasta do projeto",
+    "folder": "Pasta",
+    "diskSpace": "Os projetos ocupam {{size}}",
+    "cleanOld": "Limpar antigos",
+    "cleanConfirm": "Excluir projetos antigos?",
+    "noProjects": "Nenhum projeto encontrado"
   },
   "multilang": {
     "title": "Vários idiomas",
@@ -257,7 +266,10 @@
     "auto": "Auto",
     "sec": "s",
     "bench": "Benchmark de etapas",
-    "benchHint": "Mede tempo/GPU/VRAM por etapa -> bench.json + linhas ⏱ no registro. Amostragem leve em segundo plano a cada segundo."
+    "benchHint": "Mede tempo/GPU/VRAM por etapa -> bench.json + linhas ⏱ no registro. Amostragem leve em segundo plano a cada segundo.",
+    "pauseSqueeze": "Compressão de pausas",
+    "pauseSqueezeDesc": "reduz o silêncio entre as palavras em vez de acelerar a fala (preserva o timbre natural)",
+    "pauseSqueezeHint": "Comprime automaticamente o silêncio entre as palavras antes de acelerar para preservar o timbre natural"
   },
   "help": {
     "title": "Sobre o Dub Studio",
@@ -450,7 +462,8 @@
     "literary": "Literário",
     "casual": "Coloquial",
     "custom": "Personalizado…",
-    "customPlaceholder": "Sua instrução para o tradutor — ex. «formal, sem gíria», «tom Gen-Z»"
+    "customPlaceholder": "Sua instrução para o tradutor — ex. «formal, sem gíria», «tom Gen-Z»",
+    "dub_fit": "Dublagem de cinema (ajuste ao tempo)"
   },
   "keepOrig": {
     "label": "Manter a faixa original",
@@ -514,19 +527,5 @@
     "empty": "Library is empty — save a cast from the editor.",
     "delete": "Delete profile",
     "deleteConfirm": "Delete this cast profile?"
-  },
-  "recent": {
-    "title": "Projetos recentes",
-    "delete": "Excluir projeto",
-    "deleteConfirm": "Excluir o projeto \"{{video}}\"?",
-    "showAll": "Mostrar todos os projetos ({{count}})",
-    "modalTitle": "Todos os Projetos",
-    "searchPlaceholder": "Buscar projeto por nome...",
-    "openFolder": "Abrir pasta do projeto",
-    "folder": "Pasta",
-    "diskSpace": "Os projetos ocupam {{size}}",
-    "cleanOld": "Limpar antigos",
-    "cleanConfirm": "Excluir projetos antigos?",
-    "noProjects": "Nenhum projeto encontrado"
   }
 }

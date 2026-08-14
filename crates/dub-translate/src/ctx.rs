@@ -189,9 +189,9 @@ fn chunk_bounds(line_texts: &[String]) -> Vec<(usize, usize)> {
     bounds
 }
 
-/// Плотность речи для бюджета длины (#107): ~14 символов/сек комфортной дикции. Бюджет строки =
-/// round(14 × длительность_сек); длительность ≤0 (нет таймингов) -> None (без лимита).
-const CHARS_PER_SEC: f64 = 14.0;
+/// Плотность речи для бюджета длины (#107): ~13 символов/сек комфортной дикции. Бюджет строки =
+/// round(13 × длительность_сек); длительность ≤0 (нет таймингов) -> None (без лимита).
+const CHARS_PER_SEC: f64 = 13.0;
 const MIN_BUDGET: usize = 12; // пол бюджета (#116): «(≤3)» на междометиях искажает перевод
 pub(crate) fn char_budget(dur: f64) -> Option<usize> {
     if dur > 0.0 {
@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn char_budget_and_marker_strip() {
-        assert_eq!(char_budget(2.0), Some(28)); // 14 симв/сек × 2с
+        assert_eq!(char_budget(2.0), Some(26)); // 13 симв/сек × 2с
         assert_eq!(char_budget(0.0), None);
         assert_eq!(strip_budget_marker("(≤45) перевод"), "перевод");
         assert_eq!(strip_budget_marker("(<=12)  x"), "x");

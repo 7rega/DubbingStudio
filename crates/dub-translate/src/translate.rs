@@ -180,9 +180,9 @@ fn numbered_block(segs: &[Seg], chunk: &[usize]) -> String {
         .join("\n")
 }
 
-/// Плотность речи для бюджета длины (#107): ~14 символов/сек. Бюджет = round(14 × длит.сек), но не ниже
-/// 12 (#116, находка [13]: «(≤3)» на междометиях провоцирует искажение); ≤0 -> None.
-const CHARS_PER_SEC: f64 = 14.0;
+/// Плотность речи для бюджета длины (#107): ~13 символов/сек (киностандарт укладки дубляжа).
+/// Бюджет = round(13 × длит.сек), но не ниже 12 (#116, находка [13]: «(≤3)» на междометиях провоцирует искажение); ≤0 -> None.
+const CHARS_PER_SEC: f64 = 13.0;
 const MIN_BUDGET: usize = 12;
 fn char_budget(dur: f64) -> Option<usize> {
     if dur > 0.0 {
@@ -206,6 +206,8 @@ pub(crate) fn style_clause(style: &str) -> String {
     let s = style.trim();
     if s.is_empty() {
         String::new()
+    } else if s == "dub_fit" {
+        " Translation style: Movie dubbing (strict timing fit). Translate strictly within the given character limit (≤N chars). Compress phrasing, drop filler and introductory words, keep core meaning and natural spoken flow. Do NOT output character count markers in the result.".into()
     } else {
         format!(" Translation style: {s}.")
     }
@@ -386,7 +388,7 @@ mod tests {
 
     #[test]
     fn char_budget_from_duration() {
-        assert_eq!(char_budget(3.0), Some(42)); // 14 симв/сек × 3с
+        assert_eq!(char_budget(3.0), Some(39)); // 13 симв/сек × 3с
         assert_eq!(char_budget(0.0), None); // нет таймингов -> без лимита
         assert_eq!(char_budget(-1.0), None);
         assert_eq!(char_budget(0.01), Some(12)); // пол бюджета 12 (#116) — междометие не в «(≤1)»
@@ -408,10 +410,10 @@ mod tests {
     fn numbered_block_has_budget_when_timed() {
         let mut s = Seg::new("hello world", 0);
         s.start = 0.0;
-        s.end = 3.0; // -> (≤42)
+        s.end = 3.0; // -> (≤39)
         let segs = vec![s];
         let block = numbered_block(&segs, &[0]);
-        assert!(block.starts_with("1. (≤42) hello world"), "{block}");
+        assert!(block.starts_with("1. (≤39) hello world"), "{block}");
         // без таймингов -> без лимита
         let s0 = Seg::new("no timing", 0);
         let b0 = numbered_block(&[s0], &[0]);
