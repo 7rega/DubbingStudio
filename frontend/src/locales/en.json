@@ -339,7 +339,13 @@
     "benchHint": "Measure time/GPU/VRAM per pipeline stage -> bench.json + ⏱ lines in the log. Light background sampling once per second.",
     "pauseSqueeze": "Pause Squeeze",
     "pauseSqueezeDesc": "shortens silence between words instead of speeding up speech (preserves natural voice)",
-    "pauseSqueezeHint": "Automatically compresses silence between words before speedup to preserve natural voice timbre"
+    "pauseSqueezeHint": "Automatically compresses silence between words before speedup to preserve natural voice timbre",
+    "voLeadIn": "UN Voice-Over: Lead-in",
+    "voLeadInDesc": "Original plays 0.6s full volume before narrator enters",
+    "voLeadInHint": "Allows listeners to hear original voice and tone (BBC/Discovery standard)",
+    "dubReverb": "Scene Spatial Reverb",
+    "dubReverbDesc": "Subtle early room reflections for acoustic immersion",
+    "dubReverbHint": "Eliminates dry radio-booth sound and blends speech into video scene"
   },
   "help": {
     "title": "About Dub Studio",

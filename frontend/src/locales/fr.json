@@ -269,7 +269,13 @@
     "benchHint": "Mesure temps/GPU/VRAM par étape -> bench.json + lignes ⏱ dans le journal. Échantillonnage léger en arrière-plan chaque seconde.",
     "pauseSqueeze": "Compression des pauses",
     "pauseSqueezeDesc": "réduit le silence entre les mots au lieu d'accélérer la parole (préserve le timbre naturel)",
-    "pauseSqueezeHint": "Compresse automatiquement le silence entre les mots avant d'accélérer pour préserver le timbre naturel"
+    "pauseSqueezeHint": "Compresse automatiquement le silence entre les mots avant d'accélérer pour préserver le timbre naturel",
+    "voLeadIn": "Voice-Over: Règle de l'ONU",
+    "voLeadInDesc": "L'original sonne 0.6s à plein volume avant le narrateur",
+    "voLeadInHint": "Permet d'entendre la voix et l'intonation originales",
+    "dubReverb": "Acoustique spatiale",
+    "dubReverbDesc": "Premières réflexions subtiles pour une immersion naturelle",
+    "dubReverbHint": "Élimine le son sec de cabine et intègre la voix dans la scène"
   },
   "help": {
     "title": "À propos de Dub Studio",

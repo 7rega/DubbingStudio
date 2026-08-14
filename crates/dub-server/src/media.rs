@@ -433,6 +433,56 @@ pub fn mix_ducked(voice: &Path, music: &Path, out: &Path) -> Result<(), String> 
     ])
 }
 
+/// Свести три аудиопотока в один стерео-микс (для профессионального закадра):
+/// track1 (дубляж 100%) + track2 (инструментал/музыка 100%) + track3 (приглушенный оригинальный вокал).
+pub fn mix3(track1: &Path, track2: &Path, track3: &Path, out: &Path) -> Result<(), String> {
+    let fc = "[0:a]aformat=channel_layouts=stereo[a0];\
+              [1:a]aformat=channel_layouts=stereo[a1];\
+              [2:a]aformat=channel_layouts=stereo[a2];\
+              [a0][a1][a2]amix=inputs=3:duration=longest:dropout_transition=0:normalize=0[a]";
+    run_ff(&[
+        OsStr::new("-y"),
+        OsStr::new("-i"), track1.as_os_str(),
+        OsStr::new("-i"), track2.as_os_str(),
+        OsStr::new("-i"), track3.as_os_str(),
+        OsStr::new("-filter_complex"), OsStr::new(fc),
+        OsStr::new("-map"), OsStr::new("[a]"),
+        OsStr::new("-c:a"), OsStr::new("aac"),
+        OsStr::new("-b:a"), OsStr::new("256k"),
+        out.as_os_str(),
+    ])
+}
+
+/// Наложить детерминированную огибающую дакинга на аудиофайл (напр. изолированный вокал):
+/// 1.0 в паузах, 10^(duck_db/20) во время речевых блоков с плавными рампами.
+pub fn duck_envelope_file(src_audio: &Path, blocks: &[SpeechBlock], duck_db: f64, out: &Path) -> Result<(), String> {
+    let g = 10f64.powf(duck_db / 20.0).clamp(0.01, 1.0);
+    let vol = duck_volume_expr(blocks, g);
+    let fc = format!("aformat=channel_layouts=stereo,volume='{vol}':eval=frame");
+    let secs = (duration(src_audio).unwrap_or(0.0) * 2.0).max(600.0) as u64;
+    run_ff_timeout(&[
+        OsStr::new("-y"),
+        OsStr::new("-i"), src_audio.as_os_str(),
+        OsStr::new("-af"), OsStr::new(&fc),
+        OsStr::new("-c:a"), OsStr::new("aac"),
+        OsStr::new("-b:a"), OsStr::new("256k"),
+        out.as_os_str(),
+    ], secs)
+}
+
+/// Акустическое согласование пространства (Scene Spatial Reverb):
+/// Насыщает сухой студийный голос тонкими ранними отражениями (Early Reflections, decay ~0.18с, wet -22 dB).
+/// Устраняет эффект «голоса из радиобудки» и естественно сажает диктора в видеоряд.
+pub fn apply_spatial_reverb(src_wav: &Path, dst_wav: &Path) -> Result<(), String> {
+    let af = "aformat=channel_layouts=stereo,aecho=0.92:0.88:20|42:0.18|0.12";
+    run_ff(&[
+        OsStr::new("-y"),
+        OsStr::new("-i"), src_wav.as_os_str(),
+        OsStr::new("-af"), OsStr::new(af),
+        dst_wav.as_os_str(),
+    ])
+}
+
 /// Речевой блок на таймлайне [start,end] — слитые по паузе <1.6с реплики дубляжа. Границы берутся из
 /// ФАКТИЧЕСКИ уложенных сегментов (onset + длительность fit-файла), а не из сырых proj.segments.
 #[derive(Clone, Copy, Debug)]

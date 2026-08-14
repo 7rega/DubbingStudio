@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -623,6 +623,8 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [pauseSqueezeOn, setPauseSqueezeOn] = useState(true);
   const [speechRateOn, setSpeechRateOn] = useState(true);
   const [emoRefOn, setEmoRefOn] = useState(true);
+  const [voLeadIn, setVoLeadIn] = useState(true);
+  const [dubReverbMatch, setDubReverbMatch] = useState(true);
   useEffect(() => {
     api.capabilities().then((c) => {
       setBench(c.selection?.bench === "1");
@@ -632,6 +634,8 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       setPauseSqueezeOn(c.selection?.pause_squeeze_on !== "0");
       setSpeechRateOn(c.selection?.speech_rate_on !== "0");
       setEmoRefOn(c.selection?.emo_ref_on !== "0");
+      setVoLeadIn(c.selection?.vo_lead_in !== "0");
+      setDubReverbMatch(c.selection?.dub_reverb_match !== "0");
     }).catch(() => {});
   }, []);
   return (
@@ -756,6 +760,34 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               <button onClick={() => { const v = !pauseSqueezeOn; setPauseSqueezeOn(v); api.setSelection("pause_squeeze_on", v ? "1" : "0").catch(() => {}); }} title={t("settings.pauseSqueeze")}
                 className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${pauseSqueezeOn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${pauseSqueezeOn ? "left-[18px]" : "left-0.5"}`} />
+              </button>
+            </label>
+            {/* UN-Закадр: Золотая секунда */}
+            <label className="flex items-center justify-between gap-3 mb-2.5" title={t("settings.voLeadInHint")}>
+              <div className="min-w-0 flex-1">
+                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
+                  <Volume2 size={14} className="text-[var(--color-accent-2)]" />
+                  {t("settings.voLeadIn")}
+                </span>
+                <span className="block text-[10px] text-[var(--color-muted)]">{t("settings.voLeadInDesc")}</span>
+              </div>
+              <button onClick={() => { const v = !voLeadIn; setVoLeadIn(v); api.setSelection("vo_lead_in", v ? "1" : "0").catch(() => {}); }} title={t("settings.voLeadIn")}
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${voLeadIn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${voLeadIn ? "left-[18px]" : "left-0.5"}`} />
+              </button>
+            </label>
+            {/* Пространственная акустика */}
+            <label className="flex items-center justify-between gap-3 mb-2.5" title={t("settings.dubReverbHint")}>
+              <div className="min-w-0 flex-1">
+                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
+                  <Sparkles size={14} className="text-[var(--color-accent-2)]" />
+                  {t("settings.dubReverb")}
+                </span>
+                <span className="block text-[10px] text-[var(--color-muted)]">{t("settings.dubReverbDesc")}</span>
+              </div>
+              <button onClick={() => { const v = !dubReverbMatch; setDubReverbMatch(v); api.setSelection("dub_reverb_match", v ? "1" : "0").catch(() => {}); }} title={t("settings.dubReverb")}
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${dubReverbMatch ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${dubReverbMatch ? "left-[18px]" : "left-0.5"}`} />
               </button>
             </label>
             <label className="flex items-center justify-between gap-3 mb-3 pb-3 border-b border-[var(--color-border)]" title={t("settings.benchHint")}>

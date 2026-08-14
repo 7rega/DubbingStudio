@@ -543,7 +543,12 @@ fn build_dub(
     let cached_inst = stems.join("instrumental.wav");
 
     let _needs_clone = proj.audio.voice.mode == "clone" || proj.audio.voice.name.as_deref().unwrap_or("").split(',').any(|s| s.trim() == crate::voice_slots::CLONE_SLOT);
-    let want_inst = keep_music && !voiceover;
+    let vo_duck_vocals_only = crate::models::load_selection(&paths.models_root)
+        .get("vo_duck_vocals_only")
+        .and_then(|v| v.as_str())
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    let want_inst = (keep_music && !voiceover) || (voiceover && vo_duck_vocals_only);
     let needs_clean_vocals = true; // ВСЕГДА пытаемся получить чистый вокал для референса (TTS/клонирование работает лучше)
     let mut did_sep = false;
 
@@ -562,7 +567,7 @@ fn build_dub(
         }
     }
 
-    let instrumental = if want_inst && did_sep {
+    let instrumental = if did_sep && (keep_music && !voiceover) {
         Some(cached_inst.clone())
     } else {
         None
@@ -898,6 +903,18 @@ fn build_dub(
         .and_then(|v| v.as_str())
         .map(|v| v != "0")
         .unwrap_or(true);
+    // UN Voice-Over Lead-in: вступление диктора с задержкой 0.6с после оригинала (правило «Золотой секунды»).
+    let vo_lead_in = crate::models::load_selection(&paths.models_root)
+        .get("vo_lead_in")
+        .and_then(|v| v.as_str())
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    // Scene Spatial Reverb: согласование пространственной акустики (Early Reflections).
+    let dub_reverb_match = crate::models::load_selection(&paths.models_root)
+        .get("dub_reverb_match")
+        .and_then(|v| v.as_str())
+        .map(|v| v != "0")
+        .unwrap_or(true);
     // ПАРАЛЛЕЛЬНЫЙ ПРЕ-СИНТЕЗ облачного TTS: OpenRouter держит десятки конкурентных запросов, поэтому все
     // сегменты к синтезу гоним в N потоков (настройка or_concurrency) ДО последовательной укладки — она
     // потом просто подхватит уже готовые seg-файлы (network-latency больше не по одному). Провал сегмента ->
@@ -1140,7 +1157,21 @@ fn build_dub(
         }
         // слот: от текущего onset до старта СЛЕДУЮЩЕГО сегмента ПО ИНДЕКСУ (fi+1) полного списка /
         // конца видео (питон nxt = segs[i+1].start if i+1<len else total).
-        let at = s.start.max(cursor);
+        // UN Voice-Over Lead-in: вступление диктора после оригинала (0.6с для длинных фраз, 0.3с для средних)
+        let lead_in = if is_voiceover && vo_lead_in {
+            let slot_len = (s.end - s.start).max(0.1);
+            if slot_len >= 1.5 {
+                0.60
+            } else if slot_len >= 0.8 {
+                0.30
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+        let onset = s.start + lead_in;
+        let at = onset.max(cursor);
         let nxt = if fi + 1 < n_all { proj.segments[fi + 1].start } else { total };
         let room = (nxt - at).max(0.3);
         let fitp = wd.join(format!("seg_{:03}_fit.wav", fi));
@@ -1148,7 +1179,7 @@ fn build_dub(
         // ── MULTI-TAKE: адаптивный отбор дублей ──
         if multitake_on && need_synth && !kept_original && !cloud_tts_on && engine.is_some() {
             let raw_dur = media::duration(&raw).unwrap_or(0.0);
-            let target = if speech_rate_on { (s.end - s.start).max(0.3) } else { room };
+            let target = if speech_rate_on { ((s.end - s.start) - lead_in).max(0.3) } else { room };
             let tgt = s.tgt_text.trim();
             let mut best_path = raw.clone();
             let mut best_score = (raw_dur - target).abs();
@@ -1222,10 +1253,10 @@ fn build_dub(
         }
 
         // Целевая длительность слота: при ВКЛЮЧЕННОМ «Динамическом темпе речи» берем ТОЧНЫЕ границы
-        // данного субтитра (s.end - s.start), чтобы фраза укладывалась ровно в свой прямоугольник.
+        // данного субтитра с вычетом lead_in, чтобы фраза укладывалась ровно в свой прямоугольник.
         // При ВЫКЛЮЧЕННОМ — используем дефолтное поведение (room от старта до старта следующего + защитные кап-лимиты).
         let target_slot = if speech_rate_on {
-            (s.end - s.start).max(0.3)
+            ((s.end - s.start) - lead_in).max(0.3)
         } else {
             room
         };
@@ -1442,8 +1473,17 @@ fn build_dub(
 
     // 5) timeline -> dub_vocals.wav. Возвращает фактические спаны укладки.
     emit(progress, "mix", "укладка дубляжа на таймлайн");
+    let dub_raw = wd.join("dub_vocals_raw.wav");
+    let laid_spans = timeline(&placed, total, &dub_raw)?;
     let dub = wd.join("dub_vocals.wav");
-    let laid_spans = timeline(&placed, total, &dub)?;
+    if dub_reverb_match {
+        emit(progress, "mix", "пространственная акустика (Early Reflections)");
+        if media::apply_spatial_reverb(&dub_raw, &dub).is_err() {
+            let _ = std::fs::copy(&dub_raw, &dub);
+        }
+    } else {
+        let _ = std::fs::copy(&dub_raw, &dub);
+    }
     // Речевые блоки для дакинга (#106) — из ФАКТИЧЕСКИХ спанов timeline (единый источник: с учётом
     // cursor-ripple и QC-пересинтеза), а не из onset'ов placed.
     let mut speech_blocks = build_speech_blocks(&laid_spans);
@@ -1467,26 +1507,42 @@ fn build_dub(
     let mixed = if voiceover {
         // Закадровый (UN-style voice-over): оригинал ЗВУЧИТ ПОЛНЫМ между репликами перевода (слышно
         // исходного спикера/эмоцию) и ДИНАМИЧЕСКИ приглушается на voiceover_gain_db ПОД переводом,
-        // восстанавливаясь после — best-practice (IVA/Wikipedia). Прежде оригинал давился ПЛОСКО на всю
-        // дорожку (−12 дБ навсегда, в т.ч. в паузах) — «странная настройка», оригинал не поднимался.
+        // восстанавливаясь после — best-practice (IVA/Wikipedia).
         let duck_db = proj.audio.voiceover_gain_db.clamp(VOICEOVER_DUCK_MIN_DB, 0.0);
-        emit(progress, "mix", &format!(
-            "voiceover: оригинал {duck_db:+.1} dB ПОД переводом, полный в паузах (динам. огибающая, {} блоков)",
-            speech_blocks.len()));
         let new_audio = wd.join("new_audio.m4a");
-        // Динамическая огибающая на ОРИГИНАЛ по таймингам перевода. Фолбэк — старое плоское приглушение.
-        if media::mix_env_db(&dub, &audio_hq, &speech_blocks, duck_db, &new_audio).is_err() {
-            emit(progress, "mix", "voiceover: огибающая недоступна -> плоское приглушение");
-            let bed = if duck_db.abs() < 0.05 {
-                audio_hq.clone()
-            } else {
-                let ducked = wd.join("orig_ducked.m4a");
-                match media::gain(&audio_hq, &ducked, duck_db) {
-                    Ok(()) => ducked,
-                    Err(_) => audio_hq.clone(),
+        if did_sep && vo_duck_vocals_only {
+            // Профессиональный закадр (UN Voice-Over): чистый инструментал 100% + приглушенный оригинальный вокал + русский диктор
+            emit(progress, "mix", &format!(
+                "voiceover (UN-style): музыка/эффекты 100% + вокал оригинала {duck_db:+.1} dB ПОД переводом ({} блоков)",
+                speech_blocks.len()));
+            let ducked_voc = wd.join("vocals_ducked.m4a");
+            if media::duck_envelope_file(&cached_voc, &speech_blocks, duck_db, &ducked_voc).is_ok() {
+                if let Err(e) = media::mix3(&dub, &cached_inst, &ducked_voc, &new_audio) {
+                    emit(progress, "mix", &format!("mix3 сбой ({e}) -> фолбэк на 2-трековый микс"));
+                    let _ = media::mix_env_db(&dub, &audio_hq, &speech_blocks, duck_db, &new_audio);
                 }
-            };
-            media::mix(&dub, &bed, &new_audio)?;
+            } else {
+                emit(progress, "mix", "огибающая вокала недоступна -> фолбэк на микс с аудиодорожкой");
+                media::mix_env_db(&dub, &audio_hq, &speech_blocks, duck_db, &new_audio)?;
+            }
+        } else {
+            // Без сепарации: приглушаем весь аудио-микс под переводом
+            emit(progress, "mix", &format!(
+                "voiceover: оригинал {duck_db:+.1} dB ПОД переводом, полный в паузах (динам. огибающая, {} блоков)",
+                speech_blocks.len()));
+            if media::mix_env_db(&dub, &audio_hq, &speech_blocks, duck_db, &new_audio).is_err() {
+                emit(progress, "mix", "voiceover: огибающая недоступна -> плоское приглушение");
+                let bed = if duck_db.abs() < 0.05 {
+                    audio_hq.clone()
+                } else {
+                    let ducked = wd.join("orig_ducked.m4a");
+                    match media::gain(&audio_hq, &ducked, duck_db) {
+                        Ok(()) => ducked,
+                        Err(_) => audio_hq.clone(),
+                    }
+                };
+                media::mix(&dub, &bed, &new_audio)?;
+            }
         }
         new_audio
     } else if let Some(inst) = instrumental {
