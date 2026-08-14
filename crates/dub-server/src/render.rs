@@ -1942,9 +1942,6 @@ fn timeline(placed: &[(f64, PathBuf, f64)], total_dur: f64, out_wav: &Path) -> R
         let at = start.max(cursor);
         let end = at + s.len() as f64 / sr as f64;
 
-        // Вставка дыхания в естественную паузу между фразами (0.40..1.80с)
-        }
-
         cursor = end;
         spans.push((at, end));
         laid.push((at, s));
