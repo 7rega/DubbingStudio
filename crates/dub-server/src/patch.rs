@@ -107,6 +107,10 @@ fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(sp) = edit.get("speaker") {
         seg.speaker = sp.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
     }
+    // индивидуальный голос фразы (override): имя из voices/ или "clone:ID" / "donor:ID" или None
+    if let Some(v) = edit.get("voice") {
+        seg.voice = v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+    }
     // hidden / keep_original — хранятся в extra (dub-core Segment их не типизирует, но проносит).
     if let Some(h) = edit.get("hidden").and_then(|x| x.as_bool()) {
         seg.extra.insert("hidden".into(), Value::Bool(h));

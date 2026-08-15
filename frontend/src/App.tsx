@@ -3485,6 +3485,8 @@ function Editor() {
   const [blurSigmaDraft, setBlurSigmaDraft] = useState<number | null>(null); // черновик силы блюра
   const [blurAlphaDraft, setBlurAlphaDraft] = useState<number | null>(null); // черновик затемнения/прозрачности блюра
   const [isAligning, setIsAligning] = useState(false);               // индикатор автовыравнивания субтитров по вокалу
+  const [voiceMenuSeg, setVoiceMenuSeg] = useState<{ id: string; x: number; y: number } | null>(null); // всплывающее меню голоса/спикера фразы
+  const [donorInput, setDonorInput] = useState<string>("");           // ввод номера фразы-донора для чистого клона
   const [showExportModal, setShowExportModal] = useState(false);
   const [editorTab, setEditorTab] = useState<"subs" | "gen">("subs");
   const [duckOn, setDuckOn] = useState(false);
@@ -4751,7 +4753,34 @@ function Editor() {
                                   <button onClick={(e) => { e.stopPropagation(); setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; }); }}
                                     className={`grid place-items-center w-3.5 h-3.5 rounded shrink-0 border transition-colors ${selSegs.has(seg.id) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>
                                     {selSegs.has(seg.id) && <Check size={10} />}</button>
-                                  {seg.speaker != null && <span className="mono px-1 py-0.5 rounded bg-[var(--color-overlay)] text-[9px] font-semibold text-[var(--color-muted)] shrink-0">SPK {seg.speaker}</span>}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const rect = e.currentTarget.getBoundingClientRect();
+                                      setVoiceMenuSeg(voiceMenuSeg?.id === seg.id ? null : { id: seg.id, x: rect.left, y: rect.bottom + 4 });
+                                    }}
+                                    title="Сменить спикера или индивидуальный голос фразы"
+                                    className={`mono px-1.5 py-0.5 rounded text-[9px] font-semibold flex items-center gap-1 transition-all border shrink-0 ${
+                                      seg.voice
+                                        ? "bg-purple-500/20 text-purple-300 border-purple-500/50 shadow-sm"
+                                        : "bg-[var(--color-overlay)] text-[var(--color-muted)] hover:text-white border-transparent hover:border-[var(--color-border)]"
+                                    }`}
+                                  >
+                                    {seg.voice ? (
+                                      <>
+                                        <span>SPK {seg.speaker ?? "0"}</span>
+                                        <span className="opacity-50">·</span>
+                                        {seg.voice.startsWith("donor:") || seg.voice.startsWith("clone:") ? (
+                                          <span className="text-cyan-300 font-bold">🧬 #{seg.voice.replace(/^(donor|clone):/, "")}</span>
+                                        ) : (
+                                          <span className="text-purple-300 font-bold">🎙️ {seg.voice}</span>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <span>SPK {seg.speaker ?? "0"}</span>
+                                    )}
+                                  </button>
                                   <span className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"}`}>{fmtT(seg.start)} → {fmtT(seg.end)}</span>
                                 </div>
                                 <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
@@ -5370,6 +5399,190 @@ function Editor() {
       </aside>
       <CommandPalette commands={cmds} />
       {showHelp && <ShortcutsHelp onClose={() => setShowHelp(false)} />}
+      {showExportModal && (
+        <ExportModal
+          p={p}
+          rendering={rendering}
+          onClose={() => setShowExportModal(false)}
+          onExport={handleConfirmExport}
+        />
+      )}
+      {voiceMenuSeg && (() => {
+        const targetSeg = p.segments.find((s) => s.id === voiceMenuSeg.id);
+        if (!targetSeg) return null;
+        const curVoice = targetSeg.voice ?? "";
+        const curSpk = targetSeg.speaker ?? "0";
+
+        // Все уникальные спикеры проекта
+        const allSpeakers = Array.from(
+          new Set(p.segments.map((s) => s.speaker ?? "0"))
+        ).sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0));
+
+        const setSegVoiceAndSpk = async (voiceVal: string | null, spkVal?: string) => {
+          await api.patch(pid, {
+            op: "segment",
+            id: targetSeg.id,
+            voice: voiceVal ?? "",
+            speaker: spkVal !== undefined ? spkVal : targetSeg.speaker,
+          });
+          setProject(await api.getProject(pid));
+          bump();
+          setVoiceMenuSeg(null);
+          pushActivity(voiceVal ? `Назначен голос: ${voiceVal}` : "Голос сброшен на клон проекта", "work");
+        };
+
+        const topPos = Math.min(window.innerHeight - 360, Math.max(10, voiceMenuSeg.y));
+        const leftPos = Math.min(window.innerWidth - 270, Math.max(10, voiceMenuSeg.x));
+
+        return (
+          <>
+            <div className="fixed inset-0 z-50 bg-transparent" onClick={() => setVoiceMenuSeg(null)} />
+            <div
+              style={{ top: `${topPos}px`, left: `${leftPos}px` }}
+              className="fixed z-50 w-64 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl shadow-2xl p-2.5 space-y-2.5 text-[11px] select-none"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-[var(--color-border)]/60 pb-1.5">
+                <span className="font-semibold text-white flex items-center gap-1.5">
+                  <Mic size={12} className="text-[var(--color-accent)]" />
+                  Голос и спикер фразы
+                </span>
+                <button onClick={() => setVoiceMenuSeg(null)} className="text-[var(--color-muted)] hover:text-white p-0.5 rounded">
+                  <X size={12} />
+                </button>
+              </div>
+
+              {/* 1. Спикер фразы */}
+              <div className="space-y-1">
+                <span className="text-[10px] text-[var(--color-muted)] font-semibold uppercase tracking-wider">Спикер (привязка)</span>
+                <div className="flex flex-wrap items-center gap-1">
+                  {allSpeakers.map((spk) => (
+                    <button
+                      key={spk}
+                      type="button"
+                      onClick={() => setSegVoiceAndSpk(curVoice || null, spk)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                        curSpk === spk
+                          ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] border-[var(--color-accent)] shadow-sm"
+                          : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white border-[var(--color-border)]"
+                      }`}
+                    >
+                      SPK {spk}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextSpkNum = allSpeakers.reduce((max, s) => Math.max(max, (parseInt(s, 10) || 0) + 1), 0);
+                      setSegVoiceAndSpk(curVoice || null, String(nextSpkNum));
+                    }}
+                    className="px-1.5 py-0.5 rounded text-[10px] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-accent)] border border-dashed border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors"
+                    title="Создать нового спикера"
+                  >
+                    + SPK
+                  </button>
+                </div>
+              </div>
+
+              {/* 2. Индивидуальный голос */}
+              <div className="space-y-1.5 pt-1.5 border-t border-[var(--color-border)]/50">
+                <span className="text-[10px] text-[var(--color-muted)] font-semibold uppercase tracking-wider">Индивидуальный голос</span>
+
+                {/* Дефолтный клон */}
+                <button
+                  type="button"
+                  onClick={() => setSegVoiceAndSpk(null)}
+                  className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-colors ${
+                    !curVoice
+                      ? "bg-[var(--color-surface-2)] text-[var(--color-accent)] font-semibold border border-[var(--color-accent)]/40"
+                      : "text-[var(--color-text)] hover:bg-[var(--color-surface-2)]"
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span>🌟</span>
+                    <span>По проекту (Клон оригинала)</span>
+                  </span>
+                  {!curVoice && <Check size={12} className="text-[var(--color-accent)] shrink-0" />}
+                </button>
+
+                {/* Голоса из пака / каталога */}
+                {voiceList.length > 0 && (
+                  <div className="space-y-1 pt-1">
+                    <span className="text-[10px] text-[var(--color-muted)]">Библиотека чистых голосов:</span>
+                    <div className="max-h-32 overflow-y-auto space-y-0.5 pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-white/20">
+                      {voiceList.map((vn) => (
+                        <div
+                          key={vn}
+                          className={`w-full px-2 py-1 rounded-md flex items-center justify-between transition-colors ${
+                            curVoice === vn
+                              ? "bg-purple-500/20 text-purple-300 font-semibold border border-purple-500/40"
+                              : "text-[var(--color-muted)] hover:text-white hover:bg-[var(--color-surface-2)]"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setSegVoiceAndSpk(vn)}
+                            className="flex-1 text-left truncate flex items-center gap-1.5"
+                          >
+                            <Mic size={11} className={curVoice === vn ? "text-purple-400" : "opacity-60"} />
+                            <span>{vn}</span>
+                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleVoicePreview(vn);
+                              }}
+                              title="Прослушать сэмпл голоса"
+                              className="p-1 rounded hover:bg-white/10 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+                            >
+                              {voicePreview === vn ? <Pause size={10} /> : <Play size={10} fill="currentColor" />}
+                            </button>
+                            {curVoice === vn && <Check size={12} className="text-purple-400" />}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Донорский клон */}
+                <div className="pt-1.5 border-t border-[var(--color-border)]/50 space-y-1">
+                  <span className="text-[10px] text-[var(--color-muted)]">Чистый клон из другой фразы:</span>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={1}
+                      max={p.segments.length}
+                      placeholder="№ фразы"
+                      value={donorInput}
+                      onChange={(e) => setDonorInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && donorInput.trim()) {
+                          setSegVoiceAndSpk(`donor:${donorInput.trim()}`);
+                        }
+                      }}
+                      className="w-20 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-1 text-[11px] font-mono focus:border-[var(--color-accent)] focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (donorInput.trim()) {
+                          setSegVoiceAndSpk(`donor:${donorInput.trim()}`);
+                        }
+                      }}
+                      className="px-2 py-1 bg-[var(--color-surface-2)] hover:bg-[var(--color-accent)] text-[var(--color-text)] hover:text-[var(--color-on-accent)] border border-[var(--color-border)] rounded font-semibold text-[10px] transition-colors"
+                    >
+                      Применить
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        );
+      })()}
       {showExportModal && (
         <ExportModal
           p={p}

@@ -997,23 +997,61 @@ fn build_dub(
                 }
             }
             } else {
-            // Реф: сначала пробуем per-segment ЭМОЦ-реф (обрезок vocals16 самой этой чистой реплики ≥2.5с)
-            // — клон наследует эмоцию оригинала в этот момент. Не подошёл (грязная/короткая реплика/пак) ->
-            // стабильный identity-реф спикера. ref_text эмоц-рефа = src_text ЭТОГО сегмента (совпадает с
-            // аудио по построению); для identity-рефа — заранее посчитанный reftext_of. Считаем ТОЛЬКО при
-            // синтезе (не тратить ffmpeg-обрезку на закэшированные не-dirty сегменты).
-            let emo_ref = emo_ref_of(s, &sid);
-            let (ref_wav, ref_text): (PathBuf, Option<String>) = match &emo_ref {
-                Some(er) => {
-                    // ref_text ТОЛЬКО если эмоц-аудио НЕ обрезано капом (иначе текст описывает больше,
-                    // чем в клипе → рассинхрон клона; как exact_cover у identity-пути, ревью-находка C).
-                    // Обрезано → None: Higgs клонирует без транскрипта рефа (хуже мисматча).
-                    let cap = paths.ref_secs.min(REF_IDEAL_HI).max(REF_MIN_AFTER_TRIM);
-                    let capped = (s.end - s.start) > cap + 0.05;
-                    let t = s.src_text.trim();
-                    (er.clone(), if capped || t.is_empty() { None } else { Some(t.to_string()) })
+            // Индивидуальный голос сегмента (override): голос из каталога или донорский сэмпл
+            let custom_ref: Option<(PathBuf, Option<String>)> = if let Some(v) = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                if let Some(donor_spec) = v.strip_prefix("donor:").or_else(|| v.strip_prefix("clone:")) {
+                    // Донорский клон из конкретного сегмента (по ID или по индексу #N)
+                    let donor_seg = proj.segments.iter().find(|ds| ds.id == donor_spec).or_else(|| {
+                        donor_spec.parse::<usize>().ok().and_then(|idx| if idx > 0 { proj.segments.get(idx - 1) } else { proj.segments.get(0) })
+                    });
+                    if let Some(ds) = donor_seg {
+                        let out = wd.join(format!("ref_donor_{sid}.wav"));
+                        let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
+                        let end = ds.end.min(ds.start + cap);
+                        if media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok() {
+                            let t = ds.src_text.trim();
+                            Some((out, if t.is_empty() { None } else { Some(t.to_string()) }))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    // Кастомный голос из библиотеки (voices/<name>.wav/mp3)
+                    let voice_file = ["wav", "mp3"]
+                        .iter()
+                        .map(|e| paths.voices_dir.join(format!("{v}.{e}")))
+                        .find(|p| p.is_file());
+                    if let Some(vf) = voice_file {
+                        let out = wd.join(format!("ref_voice_{sid}.wav"));
+                        if media::trim(&vf, &out, 0.0, paths.ref_secs, 16_000).is_ok() {
+                            Some((out, None))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 }
-                None => (ref_of(s), reftext_of(s)),
+            } else {
+                None
+            };
+
+            // Реф: если задан custom_ref -> используем его; иначе пробуем эмоц-реф, затем identity-реф
+            let emo_ref = if custom_ref.is_some() { None } else { emo_ref_of(s, &sid) };
+            let (ref_wav, ref_text): (PathBuf, Option<String>) = if let Some(cr) = custom_ref {
+                cr
+            } else {
+                match &emo_ref {
+                    Some(er) => {
+                        let cap = paths.ref_secs.min(REF_IDEAL_HI).max(REF_MIN_AFTER_TRIM);
+                        let capped = (s.end - s.start) > cap + 0.05;
+                        let t = s.src_text.trim();
+                        (er.clone(), if capped || t.is_empty() { None } else { Some(t.to_string()) })
+                    }
+                    None => (ref_of(s), reftext_of(s)),
+                }
             };
             // Анти-артефактный ретрай: иногда Higgs выдаёт «гудение» (непрерывный гул без речи). Детект
             // in-memory (synth_defect) по сэмплам; перегенерируем — синтез стохастичен, повтор обычно
