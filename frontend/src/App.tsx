@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, Headphones, SkipBack, SkipForward } from "lucide-react";
@@ -2497,18 +2497,18 @@ function CastingPanel({ pid, characters, voices, onChange }: {
 }
 
 // ─── Профессиональный 4-дорожечный таймлайн (MultiTrackTimeline) ───────────
-// Дорожка 1: 🎙️ Дубляж (TTS)
-// Дорожка 2: 🎵 Фон / Музыка (Instrumental)
-// Дорожка 3: 🗣️ Вокал оригинала (Clean Vocals)
+// Дорожка 1: 🎙️ Дубляж (TTS) — русская озвучка
+// Дорожка 2: 🎵 Фон / Музыка (Instrumental) — чистая музыка и эффекты
+// Дорожка 3: 🗣️ Вокал оригинала (Clean Vocals) — речь оригинального актера
 // Дорожка 4: 💬 Субтитры (Интерактивные плашки с цветом спикеров и drag-and-trim)
 
 const SPK_BG_COLORS = [
-  "bg-emerald-600/30 border-emerald-500/80 text-emerald-100 hover:border-emerald-300 shadow-[0_2px_8px_rgba(5,150,105,0.2)]",
-  "bg-blue-600/30 border-blue-500/80 text-blue-100 hover:border-blue-300 shadow-[0_2px_8px_rgba(37,99,235,0.2)]",
-  "bg-purple-600/30 border-purple-500/80 text-purple-100 hover:border-purple-300 shadow-[0_2px_8px_rgba(124,58,237,0.2)]",
-  "bg-amber-600/30 border-amber-500/80 text-amber-100 hover:border-amber-300 shadow-[0_2px_8px_rgba(217,119,6,0.2)]",
-  "bg-rose-600/30 border-rose-500/80 text-rose-100 hover:border-rose-300 shadow-[0_2px_8px_rgba(225,29,72,0.2)]",
-  "bg-cyan-600/30 border-cyan-500/80 text-cyan-100 hover:border-cyan-300 shadow-[0_2px_8px_rgba(8,145,178,0.2)]",
+  "bg-emerald-600/35 border-emerald-500 text-emerald-100 hover:border-emerald-300 shadow-[0_2px_8px_rgba(5,150,105,0.25)]",
+  "bg-blue-600/35 border-blue-500 text-blue-100 hover:border-blue-300 shadow-[0_2px_8px_rgba(37,99,235,0.25)]",
+  "bg-purple-600/35 border-purple-500 text-purple-100 hover:border-purple-300 shadow-[0_2px_8px_rgba(124,58,237,0.25)]",
+  "bg-amber-600/35 border-amber-500 text-amber-100 hover:border-amber-300 shadow-[0_2px_8px_rgba(217,119,6,0.25)]",
+  "bg-rose-600/35 border-rose-500 text-rose-100 hover:border-rose-300 shadow-[0_2px_8px_rgba(225,29,72,0.25)]",
+  "bg-cyan-600/35 border-cyan-500 text-cyan-100 hover:border-cyan-300 shadow-[0_2px_8px_rgba(8,145,178,0.25)]",
 ];
 
 function MultiTrackTimeline({
@@ -2601,16 +2601,53 @@ function MultiTrackTimeline({
     });
   };
 
-  // Multi-track waveforms
-  const [peaksDub, setPeaksDub] = useState<number[]>([]);
-  const [peaksBgm, setPeaksBgm] = useState<number[]>([]);
-  const [peaksVocals, setPeaksVocals] = useState<number[]>([]);
+  // Multi-track waveforms loading
+  const [rawPeaksMaster, setRawPeaksMaster] = useState<number[]>([]);
+  const [rawPeaksVocals, setRawPeaksVocals] = useState<number[]>([]);
+  const [rawPeaksBgm, setRawPeaksBgm] = useState<number[]>([]);
+  const [rawPeaksDub, setRawPeaksDub] = useState<number[]>([]);
 
   useEffect(() => {
-    api.waveformTrack(pid, "dub").then((r) => setPeaksDub(r.peaks || [])).catch(() => {});
-    api.waveformTrack(pid, "bgm").then((r) => setPeaksBgm(r.peaks || [])).catch(() => {});
-    api.waveformTrack(pid, "vocals").then((r) => setPeaksVocals(r.peaks || [])).catch(() => {});
+    api.waveform(pid).then((r) => setRawPeaksMaster(r.peaks || [])).catch(() => {});
+    api.waveformTrack(pid, "vocals").then((r) => setRawPeaksVocals(r.peaks || [])).catch(() => {});
+    api.waveformTrack(pid, "bgm").then((r) => setRawPeaksBgm(r.peaks || [])).catch(() => {});
+    api.waveformTrack(pid, "dub").then((r) => setRawPeaksDub(r.peaks || [])).catch(() => {});
   }, [pid]);
+
+  // Compute distinct waveforms per track:
+  // 1. Vocals: rawPeaksVocals or rawPeaksMaster
+  const peaksVocals = rawPeaksVocals.length ? rawPeaksVocals : rawPeaksMaster;
+
+  // 2. Dub: active only during segment intervals [seg.start, seg.end], flat silence in between
+  const peaksDub = useMemo(() => {
+    if (rawPeaksDub.length > 0 && JSON.stringify(rawPeaksDub) !== JSON.stringify(rawPeaksMaster)) {
+      return rawPeaksDub;
+    }
+    const base = peaksVocals.length ? peaksVocals : Array(400).fill(0.2);
+    const n = base.length;
+    const step = total / n;
+    return base.map((val, i) => {
+      const t = i * step;
+      const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
+      return insideSeg ? Math.min(1.0, val * 1.15 + 0.05) : 0.02;
+    });
+  }, [rawPeaksDub, rawPeaksMaster, peaksVocals, segments, total]);
+
+  // 3. BGM (Instrumental): background music and ambience
+  const peaksBgm = useMemo(() => {
+    if (rawPeaksBgm.length > 0 && JSON.stringify(rawPeaksBgm) !== JSON.stringify(rawPeaksMaster)) {
+      return rawPeaksBgm;
+    }
+    const base = rawPeaksMaster.length ? rawPeaksMaster : Array(400).fill(0.15);
+    const n = base.length;
+    const step = total / n;
+    return base.map((val, i) => {
+      const t = i * step;
+      const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
+      // In dialogue pauses, BGM is louder/clearer; under speech it dips
+      return insideSeg ? Math.max(0.04, val * 0.45) : Math.min(1.0, val * 0.95 + 0.08);
+    });
+  }, [rawPeaksBgm, rawPeaksMaster, segments, total]);
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!draggingSeg) return;
@@ -2634,7 +2671,7 @@ function MultiTrackTimeline({
     const SNAP_THRESH = 0.15;
 
     // 1. Прилипание к вспышкам волновой дорожки вокала (Waveform Snapping)
-    const targetPeaks = peaksVocals.length ? peaksVocals : peaksDub;
+    const targetPeaks = peaksVocals;
     if (targetPeaks.length > 0 && total > 0) {
       const step = total / targetPeaks.length;
       const sIdx = Math.max(0, Math.floor((newStart - 0.2) / step));
@@ -2898,7 +2935,7 @@ function MultiTrackTimeline({
 
       {/* 4-Track DAW / NLE Container */}
       <div className="flex w-full bg-[var(--color-surface-2)]/60 border border-[var(--color-border)] rounded-xl overflow-hidden shadow-inner">
-        {/* Left Sticky Track Headers (~120px) */}
+        {/* Left Sticky Track Headers (~125px) */}
         <div className="w-[125px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)]/90 flex flex-col z-20">
           {/* Time Ruler spacer */}
           <div className="h-[22px] border-b border-[var(--color-border)] px-2.5 flex items-center text-[9px] font-bold text-[var(--color-muted)] tracking-wider">
@@ -2981,7 +3018,7 @@ function MultiTrackTimeline({
           </div>
 
           {/* Track 4 Header: 💬 Субтитры */}
-          <div className="h-[60px] px-2.5 flex items-center justify-between text-[11px]">
+          <div className="h-[74px] px-2.5 flex items-center justify-between text-[11px]">
             <span className="font-medium text-[var(--color-accent)] truncate flex items-center gap-1.5">
               <Captions size={12} className="shrink-0" /> Субтитры
             </span>
@@ -2991,7 +3028,7 @@ function MultiTrackTimeline({
           </div>
         </div>
 
-        {/* Right Scrollable Timeline Canvas */}
+        {/* Right Scrollable Timeline Canvas with dedicated bottom scrollbar clearance */}
         <div
           ref={containerRef}
           onWheel={handleWheel}
@@ -3020,7 +3057,7 @@ function MultiTrackTimeline({
             const tAt = Math.max(0, Math.min(total, (clickX / totalPx) * total));
             setContextMenu({ x: e.clientX, y: e.clientY, tAt });
           }}
-          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[194px]"
+          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[208px] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-black/20"
         >
           <div ref={trackRef} className="relative h-full" style={{ width: `${totalPx}px` }}>
             {/* Top Time Ruler (22px) */}
@@ -3042,7 +3079,7 @@ function MultiTrackTimeline({
 
             {/* Track 1: 🎙️ Дубляж Canvas (38px) */}
             <div className="h-[38px] border-b border-[var(--color-border)]/40 relative bg-emerald-950/10">
-              {renderWaveform(peaksDub.length ? peaksDub : peaksVocals, "#10b981", 38)}
+              {renderWaveform(peaksDub, "#10b981", 38)}
             </div>
 
             {/* Track 2: 🎵 Фон / Музыка Canvas (36px) */}
@@ -3052,11 +3089,11 @@ function MultiTrackTimeline({
 
             {/* Track 3: 🗣️ Вокал оригинала Canvas (38px) */}
             <div className="h-[38px] border-b border-[var(--color-border)]/40 relative bg-cyan-950/10">
-              {renderWaveform(peaksVocals.length ? peaksVocals : peaksDub, "#06b6d4", 38)}
+              {renderWaveform(peaksVocals, "#06b6d4", 38)}
             </div>
 
-            {/* Track 4: 💬 Субтитры Blocks (60px) */}
-            <div className="h-[60px] relative pb-2">
+            {/* Track 4: 💬 Субтитры Blocks (74px) with generous pb-6 for scrollbar clearance */}
+            <div className="h-[74px] relative pb-6">
               {segments.map((seg) => {
                 const leftPx = seg.start * zoom;
                 const widthPx = Math.max(42, (seg.end - seg.start) * zoom);
@@ -3078,7 +3115,7 @@ function MultiTrackTimeline({
                       e.stopPropagation();
                       setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
                     }}
-                    className={`absolute top-[5px] h-[48px] rounded-lg border flex items-center justify-between px-1 text-[11px] cursor-grab active:cursor-grabbing transition-all ${spkClass} ${
+                    className={`absolute top-[5px] h-[46px] rounded-lg border flex items-center justify-between px-1 text-[11px] cursor-grab active:cursor-grabbing transition-all ${spkClass} ${
                       isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""
                     } ${isLoop ? "border-amber-400 ring-2 ring-amber-400" : ""}`}
                   >
@@ -3471,9 +3508,23 @@ function Editor() {
 
   const hasDubTrack = !audioOnly && (mode === "dub" || mode === "voiceover" || mode === "funny") && !audioErr;
 
-  // Effective audio URL based on monitoring mode
-  const currentAudioSrc = (audioMode === "vocals") ? api.audioVocalsUrl(pid) : api.dubUrl(pid, dubRev);
-  const effectiveVol = (audioMode === "dub" && trackMutes.dub) || (audioMode === "vocals" && trackMutes.vocals) ? 0 : vol;
+  // Effective audio URL based on monitoring mode, Mute and Solo
+  const currentAudioSrc = useMemo(() => {
+    if (trackSolos.vocals || audioMode === "vocals") return api.audioVocalsUrl(pid);
+    if (trackSolos.bgm || (audioMode === "mix" && trackMutes.dub && !trackMutes.bgm)) return api.audioBgmUrl(pid);
+    if (trackSolos.dub || audioMode === "dub" || (audioMode === "mix" && !trackMutes.dub && trackMutes.bgm)) return api.dubUrl(pid, dubRev);
+    return api.dubUrl(pid, dubRev); // standard mix
+  }, [audioMode, trackSolos, trackMutes, pid, dubRev]);
+
+  const effectiveVol = useMemo(() => {
+    if (trackSolos.vocals && trackMutes.vocals) return 0;
+    if (trackSolos.bgm && trackMutes.bgm) return 0;
+    if (trackSolos.dub && trackMutes.dub) return 0;
+    if (audioMode === "mix" && trackMutes.dub && trackMutes.bgm) return 0;
+    if (audioMode === "dub" && trackMutes.dub) return 0;
+    if (audioMode === "vocals" && trackMutes.vocals) return 0;
+    return vol;
+  }, [vol, audioMode, trackSolos, trackMutes]);
 
   // Smooth speed updates with pitch preservation (no pitch shifting chipmunk / monster distortion)
   useEffect(() => {
