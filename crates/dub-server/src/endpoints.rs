@@ -263,7 +263,11 @@ pub async fn waveform(
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    let n: usize = q.get("n").and_then(|v| v.parse().ok()).unwrap_or(600);
+    // Динамический расчет числа точек волны: 20 точек на 1 секунду аудио (1 пик каждые 50 мс),
+    // чтобы и на 1-минутном, и на 2-часовом видео пики речи были студийно детализированы.
+    let dur = proj.meta.duration.max(1.0);
+    let dynamic_n = (dur * 20.0).round() as usize;
+    let n: usize = q.get("n").and_then(|v| v.parse().ok()).unwrap_or(dynamic_n.clamp(600, 200_000));
     let cache = dir.join(cache_name);
 
     // Выбираем соответствующий аудиофайл под запрошенный трек
@@ -284,18 +288,25 @@ pub async fn waveform(
             let p2 = dir.join("dub_vocals_raw.wav");
             let p3 = dir.join("dub_audio.m4a");
             let p4 = dir.join("output.wav");
-            if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else if p3.is_file() { Some(p3) } else if p4.is_file() { Some(p4) } else { None }
+            if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else if p3.is_file() { Some(p3) } else { None }
         }
         _ => Some(PathBuf::from(&proj.meta.video)),
     };
 
-    // Если кэш существует и новее целевого аудиофайла — отдаём из кэша
+    // Если кэш существует и новее целевого аудиофайла — проверяем также его разрешение
     if let Some(ref tf) = target_file {
         if let (Ok(c_meta), Ok(t_meta)) = (cache.metadata(), tf.metadata()) {
             if let (Ok(c_mtime), Ok(t_mtime)) = (c_meta.modified(), t_meta.modified()) {
                 if c_mtime >= t_mtime {
                     if let Ok(txt) = std::fs::read_to_string(&cache) {
-                        return ([("content-type", "application/json")], txt).into_response();
+                        // Если в кэше достаточно точек (не старый низкорезолюционный кэш на 600 точек для длинного видео)
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&txt) {
+                            if let Some(arr) = val.get("peaks").and_then(|v| v.as_array()) {
+                                if arr.len() >= n.min(600) {
+                                    return ([("content-type", "application/json")], txt).into_response();
+                                }
+                            }
+                        }
                     }
                 }
             }

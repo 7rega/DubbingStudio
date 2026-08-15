@@ -2643,7 +2643,7 @@ function MultiTrackTimeline({
 
   // 2. Dub: clean synthesized dub speech strictly inside segments, flat silence outside
   const peaksDub = useMemo(() => {
-    if (rawPeaksDub.length > 0 && JSON.stringify(rawPeaksDub) !== JSON.stringify(rawPeaksMaster)) {
+    if (rawPeaksDub.length > 0) {
       return rawPeaksDub;
     }
     const base = peaksVocals.length ? peaksVocals : Array(400).fill(0.2);
@@ -2654,11 +2654,11 @@ function MultiTrackTimeline({
       const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
       return insideSeg ? Math.min(1.0, val * 1.15 + 0.06) : 0.015;
     });
-  }, [rawPeaksDub, rawPeaksMaster, peaksVocals, segments, total]);
+  }, [rawPeaksDub, peaksVocals, segments, total]);
 
   // 3. BGM (Instrumental): background music and ambience
   const peaksBgm = useMemo(() => {
-    if (rawPeaksBgm.length > 0 && JSON.stringify(rawPeaksBgm) !== JSON.stringify(rawPeaksMaster)) {
+    if (rawPeaksBgm.length > 0) {
       return rawPeaksBgm;
     }
     const base = rawPeaksMaster.length ? rawPeaksMaster : Array(400).fill(0.15);
@@ -2891,10 +2891,24 @@ function MultiTrackTimeline({
     });
   };
 
-  // Render waveform bar SVG helper
+  // Ultra-fast single-path SVG waveform renderer (0 DOM overhead, hardware 60fps)
   const renderWaveform = (peaks: number[], color: string, h: number, isVocalsTrack = false) => {
     if (!peaks.length) return null;
-    const bw = totalPx / peaks.length;
+    const n = peaks.length;
+    const bw = totalPx / n;
+    const barW = Math.max(1.0, bw > 2 ? bw - 0.7 : bw);
+
+    // Сплошной контур path объединяет все столбики волны в 1 единый GPU-вектор
+    let d = "";
+    for (let i = 0; i < n; i++) {
+      const pk = peaks[i];
+      if (pk < 0.005) continue; // тишину пропускаем — экономит вес SVG
+      const bh = Math.max(1.5, Math.min(h - 2, pk * (h - 4)));
+      const x = (i / n) * totalPx;
+      const y = (h - bh) / 2;
+      d += `M${x.toFixed(1)},${y.toFixed(1)}h${barW.toFixed(1)}v${bh.toFixed(1)}h-${barW.toFixed(1)}Z `;
+    }
+
     return (
       <svg width={totalPx} height={h} className="block pointer-events-none w-full h-full">
         {/* Render phrase delimiters & background highlights on Vocals track */}
@@ -2915,21 +2929,8 @@ function MultiTrackTimeline({
             );
           })}
 
-        {peaks.map((pk, i) => {
-          const bh = Math.max(2, Math.min(h - 2, pk * (h - 4)));
-          const played = (i / peaks.length) * total <= scrub;
-          return (
-            <rect
-              key={i}
-              x={(i / peaks.length) * totalPx}
-              y={(h - bh) / 2}
-              width={Math.max(1, bw - 0.5)}
-              height={bh}
-              fill={color}
-              opacity={played ? 0.95 : 0.45}
-            />
-          );
-        })}
+        {/* Сплошной вектор звуковой волны */}
+        <path d={d} fill={color} opacity={0.88} />
       </svg>
     );
   };
