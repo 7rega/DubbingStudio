@@ -1051,6 +1051,15 @@ fn build_dub(
             }
         };
 
+        let spk_seed_base: u64 = if seed_lock {
+            let n: u64 = s.speaker.as_deref().unwrap_or("0").parse::<u64>().unwrap_or_else(|_| {
+                s.speaker.as_deref().unwrap_or("0").bytes().fold(42u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
+            });
+            (n + 1) * 77777 + 42
+        } else {
+            (fi as u64) * 1000
+        };
+
         // Синтез ТОЛЬКО если сегмент dirty (правился текст/спикер/голос) ИЛИ нет кэша. Реф-клипы
         // пересобираются каждый рендер, поэтому mtime-сравнение с рефом («stale_ref») ошибочно
         // помечало ВЕСЬ кэш устаревшим на каждом рендере → экспорт ре-роллил уже одобренную озвучку
@@ -1116,15 +1125,6 @@ fn build_dub(
                 user_voice_temp
             };
             let base_ras_rep = if rate_ratio > 1.12 { ",\"ras_win_max_num_repeat\":1" } else { "" };
-
-            let spk_seed_base: u64 = if seed_lock {
-                let n: u64 = s.speaker.as_deref().unwrap_or("0").parse::<u64>().unwrap_or_else(|_| {
-                    s.speaker.as_deref().unwrap_or("0").bytes().fold(42u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
-                });
-                (n + 1) * 77777 + 42
-            } else {
-                (fi as u64) * 1000
-            };
 
             let mut attempt = 0usize;
             let mut retried = false;
