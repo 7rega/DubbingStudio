@@ -3490,7 +3490,21 @@ function Editor() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [editorTab, setEditorTab] = useState<"subs" | "gen">("subs");
   const [duckOn, setDuckOn] = useState(false);
-  useEffect(() => { api.capabilities().then((c) => setDuckOn(c.selection?.duck_on === "1")).catch(() => {}); }, []);
+  const [voiceTemp, setVoiceTemp] = useState(0.20);
+  const [voiceTempDraft, setVoiceTempDraft] = useState<number | null>(null);
+  const [seedLock, setSeedLock] = useState(true);
+  useEffect(() => {
+    api.capabilities().then((c) => {
+      setDuckOn(c.selection?.duck_on === "1");
+      if (c.selection?.voice_temp) {
+        const vt = parseFloat(c.selection.voice_temp);
+        if (!isNaN(vt) && vt >= 0.08 && vt <= 0.50) setVoiceTemp(vt);
+      }
+      if (c.selection?.seed_lock !== undefined) {
+        setSeedLock(c.selection.seed_lock !== "0");
+      }
+    }).catch(() => {});
+  }, []);
   const setDuckSaved = (v: boolean) => { setDuckOn(v); api.setSelection("duck_on", v ? "1" : "0").catch(() => {}); };
   const [presets, setPresets] = useState<Record<string, Record<string, unknown>>>({});
   useEffect(() => { api.fonts().then((r) => setFonts(r.fonts)).catch(() => {}); }, []);   // bundled caption fonts
@@ -5387,6 +5401,49 @@ function Editor() {
                     <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("editor.duckHint")}</div>
                   </div>
                 )}
+
+                <div className="pt-2">
+                  <div className="flex items-center justify-between text-[11px] mb-1">
+                    <span className="text-[var(--color-muted)]">{t("voice.stability")}</span>
+                    <span className="mono text-[11px] text-[var(--color-text)]">
+                      {(voiceTempDraft ?? voiceTemp).toFixed(2)} {((voiceTempDraft ?? voiceTemp) <= 0.16 ? `(${t("voice.monolithic")})` : (voiceTempDraft ?? voiceTemp) >= 0.28 ? `(${t("voice.lively")})` : `(${t("voice.balanced")})`)}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.10}
+                    max={0.36}
+                    step={0.02}
+                    value={voiceTempDraft ?? voiceTemp}
+                    onChange={(e) => setVoiceTempDraft(parseFloat(e.target.value))}
+                    onPointerUp={async () => {
+                      if (voiceTempDraft != null) {
+                        setVoiceTemp(voiceTempDraft);
+                        await api.setSelection("voice_temp", voiceTempDraft.toFixed(2));
+                        setVoiceTempDraft(null);
+                      }
+                    }}
+                    className="w-full accent-[var(--color-accent)]"
+                  />
+                  <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.stabilityHint")}</div>
+                </div>
+
+                <div className="pt-2">
+                  <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none" title={t("voice.seedLockHint")}>
+                    <input
+                      type="checkbox"
+                      checked={seedLock}
+                      onChange={async (e) => {
+                        const val = e.target.checked;
+                        setSeedLock(val);
+                        await api.setSelection("seed_lock", val ? "1" : "0");
+                      }}
+                      className="accent-[var(--color-accent)] w-3.5 h-3.5"
+                    />
+                    <span className="text-[var(--color-text)] font-medium">{t("voice.seedLock")}</span>
+                  </label>
+                  <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.seedLockHint")}</div>
+                </div>
 
                 <button onClick={doRegenAll} disabled={regenId !== null} title={t("voice.regenAll")}
                   className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">

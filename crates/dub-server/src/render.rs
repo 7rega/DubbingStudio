@@ -917,6 +917,19 @@ fn build_dub(
         .and_then(|v| v.as_str())
         .map(|v| v != "0")
         .unwrap_or(true);
+    // Настраиваемая температура / стабильность голоса: дефолт 0.20 (0.08..0.45)
+    let user_voice_temp: f64 = crate::models::load_selection(&paths.models_root)
+        .get("voice_temp")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.20)
+        .clamp(0.08, 0.45);
+    // Фиксация сида персонажей (Speaker Seed Lock): дефолт true
+    let seed_lock = crate::models::load_selection(&paths.models_root)
+        .get("seed_lock")
+        .and_then(|v| v.as_str())
+        .map(|v| v != "0")
+        .unwrap_or(true);
     // ПАРАЛЛЕЛЬНЫЙ ПРЕ-СИНТЕЗ облачного TTS: OpenRouter держит десятки конкурентных запросов, поэтому все
     // сегменты к синтезу гоним в N потоков (настройка or_concurrency) ДО последовательной укладки — она
     // потом просто подхватит уже готовые seg-файлы (network-latency больше не по одному). Провал сегмента ->
@@ -1095,8 +1108,23 @@ fn build_dub(
             } else {
                 1.0
             };
-            let base_temp = if rate_ratio > 1.12 { 0.18 } else if rate_ratio < 0.88 { 0.32 } else { 0.30 };
+            let base_temp = if rate_ratio > 1.12 {
+                (user_voice_temp * 0.85).clamp(0.08, 0.40)
+            } else if rate_ratio < 0.88 {
+                (user_voice_temp * 1.15).clamp(0.08, 0.40)
+            } else {
+                user_voice_temp
+            };
             let base_ras_rep = if rate_ratio > 1.12 { ",\"ras_win_max_num_repeat\":1" } else { "" };
+
+            let spk_seed_base: u64 = if seed_lock {
+                let n: u64 = s.speaker.as_deref().unwrap_or("0").parse::<u64>().unwrap_or_else(|_| {
+                    s.speaker.as_deref().unwrap_or("0").bytes().fold(42u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
+                });
+                (n + 1) * 77777 + 42
+            } else {
+                (fi as u64) * 1000
+            };
 
             let mut attempt = 0usize;
             let mut retried = false;
@@ -1104,8 +1132,8 @@ fn build_dub(
             let mut best_bad: Option<(Vec<f32>, i32, f64)> = None;
             let (samples, sr) = loop {
                 // Лестница (ENGINES_FINDINGS §1.3/1.8: на КВАНТЕ temperature ВНИЗ 0.3→0.1, НЕ вверх;
-                // офиц. voice-clone примеры = 0.3): 0 — temp 0.3 + кап + RAS7; 1 — жёстче RAS (repeat=1),
-                // temp 0.2, seed; 2 — temp 0.1, top_p 0.9, seed; 3-4 — АЛЬТ-РЕФ спикера (0.3 / 0.15+RAS1).
+                // офиц. voice-clone примеры = 0.3): 0 — temp base + кап + RAS7; 1 — жёстче RAS (repeat=1),
+                // temp пониже, seed; 2 — temp минимальный, top_p 0.9, seed; 3-4 — АЛЬТ-РЕФ спикера.
                 let use_alt = attempt >= 3 && alt.is_some();
                 let (rw, rt): (&PathBuf, Option<&str>) = if use_alt {
                     let (p, t) = alt.unwrap();
@@ -1113,19 +1141,22 @@ fn build_dub(
                 } else {
                     (&ref_wav, ref_text.as_deref())
                 };
-                let seed = (fi as u64) * 1000 + attempt as u64;
+                let seed = spk_seed_base + attempt as u64;
                 let opts = match attempt {
                     0 | 3 => format!(
-                        "{{\"temperature\":{base_temp:.2},\"top_p\":0.95,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7{base_ras_rep},\"return_audio_in_tokens\":true}}"
+                        "{{\"temperature\":{base_temp:.2},\"top_p\":0.95,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7{base_ras_rep},\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
                     ),
                     1 => format!(
-                        "{{\"temperature\":0.20,\"top_p\":0.95,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
+                        "{{\"temperature\":{:.2},\"top_p\":0.95,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                        (base_temp * 0.85).clamp(0.08, 0.35)
                     ),
                     2 => format!(
-                        "{{\"temperature\":0.10,\"top_p\":0.90,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
+                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                        (base_temp * 0.65).clamp(0.08, 0.25)
                     ),
                     _ => format!(
-                        "{{\"temperature\":0.15,\"top_p\":0.90,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
+                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                        (base_temp * 0.75).clamp(0.08, 0.30)
                     ),
                 };
                 attempt += 1;
@@ -1269,8 +1300,8 @@ fn build_dub(
                 let tok_cap: u32 = ((((s.end - s.start).max(0.6) * 75.0 * 1.5).ceil() as u32) + 32).clamp(64, 2048);
                 for take_i in 1..=2u64 {
                     let take_path = wd.join(format!("seg_{sid}_take{take_i}.wav"));
-                    let seed = (fi as u64) * 10000 + take_i * 100 + 77;
-                    let temp = if take_i == 1 { 0.25 } else { 0.35 };
+                    let seed = if seed_lock { spk_seed_base + take_i * 100 + 77 } else { (fi as u64) * 10000 + take_i * 100 + 77 };
+                    let temp = if take_i == 1 { (user_voice_temp * 0.90).clamp(0.08, 0.40) } else { (user_voice_temp * 1.15).clamp(0.10, 0.45) };
                     let opts = format!(
                         "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
                     );
