@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -3480,6 +3480,8 @@ function Editor() {
   const [gainDraft, setGainDraft] = useState<number | null>(null);
   const [voGainDraft, setVoGainDraft] = useState<number | null>(null);   // черновик громкости оригинала (voiceover)
   const [blurSigmaDraft, setBlurSigmaDraft] = useState<number | null>(null); // черновик силы блюра
+  const [blurAlphaDraft, setBlurAlphaDraft] = useState<number | null>(null); // черновик затемнения/прозрачности блюра
+  const [isAligning, setIsAligning] = useState(false);               // индикатор автовыравнивания субтитров по вокалу
   const [showExportModal, setShowExportModal] = useState(false);
   const [editorTab, setEditorTab] = useState<"subs" | "gen">("subs");
   const [duckOn, setDuckOn] = useState(false);
@@ -4040,6 +4042,33 @@ function Editor() {
     } catch (e) { await surfaceErr(e); }
     finally { setRegenId(null); }
   }
+  async function doAlignProject() {                                   // автовыравнивание субтитров по звуковой волне вокала
+    if (isAligning || !p) return;
+    setIsAligning(true);
+    pushActivity(t("align.working"), "work");
+    try {
+      pushHistory(p);
+      const res = await api.alignProject(pid);
+      if (res && res.project) {
+        setProject(res.project);
+        setRendered(false);
+        bump();
+        const cnt = res.count ?? 0;
+        if (cnt > 0) {
+          pushActivity(t("align.success", { count: cnt }), "done");
+          playSfx("notify");
+        } else {
+          pushActivity(t("align.none"), "done");
+        }
+      }
+    } catch (e) {
+      console.error("Auto-align error:", e);
+      pushActivity(String(e), "error");
+      playSfx("error");
+    } finally {
+      setIsAligning(false);
+    }
+  }
   function playFull() {                                               // bottom-bar Play: play the whole dub from the playhead
     const a = audioRef.current;
     if (play) { setPlay(false); return; }
@@ -4396,6 +4425,22 @@ function Editor() {
                     <RotateCw size={12} className="text-amber-400" />
                   )}
                   <span>Пересинтез</span>
+                </button>
+
+                {/* Кнопка «Автовыравнивание субтитров по вокалу» */}
+                <button
+                  type="button"
+                  onClick={doAlignProject}
+                  disabled={isAligning}
+                  title={t("align.hint")}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--color-surface-2)] border border-cyan-500/40 hover:border-cyan-400 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
+                >
+                  {isAligning ? (
+                    <Loader2 size={12} className="animate-spin text-cyan-400" />
+                  ) : (
+                    <Magnet size={12} className="text-cyan-400" />
+                  )}
+                  <span>{isAligning ? t("align.working") : t("align.btn")}</span>
                 </button>
               </div>
 
@@ -5068,7 +5113,7 @@ function Editor() {
 
                 {/* Размытие оригинальных субтитров (блюр-подложка) */}
                 {!audioOnly && (
-                  <div className="pt-3 border-t border-[var(--color-border)]/50 space-y-2">
+                  <div className="pt-3 border-t border-[var(--color-border)]/50 space-y-2.5">
                     <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none" title={t("editor.subBlurHint")}>
                       <input
                         type="checkbox"
@@ -5079,45 +5124,90 @@ function Editor() {
                       <span className="font-medium text-[var(--color-text)]">{t("editor.subBlur")}</span>
                     </label>
                     {p.render.blur && (
-                      <div className="pl-5 space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
-                          <div className="flex items-center gap-1">
-                            <input
-                              type="number"
-                              min={5}
-                              max={150}
-                              value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
-                              onChange={(e) => {
-                                const val = parseInt(e.target.value);
-                                if (!isNaN(val)) setBlurSigmaDraft(val);
-                              }}
-                              onBlur={async () => {
-                                if (blurSigmaDraft != null) {
-                                  await branch("sub_blur", { on: p.render.blur, sigma: blurSigmaDraft });
-                                  setBlurSigmaDraft(null);
-                                }
-                              }}
-                              className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] text-right font-mono focus:border-[var(--color-accent)] focus:outline-none"
-                            />
-                            <span className="mono text-[11px] text-[var(--color-muted)]">σ</span>
+                      <div className="pl-5 space-y-2.5">
+                        {/* Сила размытия (sigma) */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={5}
+                                max={150}
+                                value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  if (!isNaN(val)) setBlurSigmaDraft(val);
+                                }}
+                                onBlur={async () => {
+                                  if (blurSigmaDraft != null) {
+                                    await branch("sub_blur", { on: p.render.blur, sigma: blurSigmaDraft });
+                                    setBlurSigmaDraft(null);
+                                  }
+                                }}
+                                className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] text-right font-mono focus:border-[var(--color-accent)] focus:outline-none"
+                              />
+                              <span className="mono text-[11px] text-[var(--color-muted)]">σ</span>
+                            </div>
                           </div>
+                          <input
+                            type="range"
+                            min={5}
+                            max={150}
+                            step={5}
+                            value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
+                            onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
+                            onPointerUp={async () => {
+                              if (blurSigmaDraft != null) {
+                                await branch("sub_blur", { on: p.render.blur, sigma: blurSigmaDraft });
+                                setBlurSigmaDraft(null);
+                              }
+                            }}
+                            className="w-full accent-[var(--color-accent)] cursor-pointer"
+                          />
                         </div>
-                        <input
-                          type="range"
-                          min={5}
-                          max={150}
-                          step={5}
-                          value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
-                          onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
-                          onPointerUp={async () => {
-                            if (blurSigmaDraft != null) {
-                              await branch("sub_blur", { on: p.render.blur, sigma: blurSigmaDraft });
-                              setBlurSigmaDraft(null);
-                            }
-                          }}
-                          className="w-full accent-[var(--color-accent)] cursor-pointer"
-                        />
+
+                        {/* Затемнение / Прозрачность подложки (alpha) */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] text-[var(--color-muted)]">{t("editor.blurOpacity")}</span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={Math.round((blurAlphaDraft ?? ((p.render as any).blur_alpha ?? (p.render.extra?.blur_alpha as number) ?? 0.55)) * 100)}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  if (!isNaN(val)) setBlurAlphaDraft(Math.min(100, Math.max(0, val)) / 100);
+                                }}
+                                onBlur={async () => {
+                                  if (blurAlphaDraft != null) {
+                                    await branch("sub_blur", { on: p.render.blur, alpha: blurAlphaDraft });
+                                    setBlurAlphaDraft(null);
+                                  }
+                                }}
+                                className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] text-right font-mono focus:border-[var(--color-accent)] focus:outline-none"
+                              />
+                              <span className="mono text-[11px] text-[var(--color-muted)]">%</span>
+                            </div>
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={Math.round((blurAlphaDraft ?? ((p.render as any).blur_alpha ?? (p.render.extra?.blur_alpha as number) ?? 0.55)) * 100)}
+                            onChange={(e) => setBlurAlphaDraft(parseInt(e.target.value) / 100)}
+                            onPointerUp={async () => {
+                              if (blurAlphaDraft != null) {
+                                await branch("sub_blur", { on: p.render.blur, alpha: blurAlphaDraft });
+                                setBlurAlphaDraft(null);
+                              }
+                            }}
+                            className="w-full accent-[var(--color-accent)] cursor-pointer"
+                          />
+                        </div>
                       </div>
                     )}
                   </div>

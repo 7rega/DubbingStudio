@@ -225,8 +225,9 @@ export default function PreviewCanvas({
     ? project.captions.sub_y
     : (project.captions.sub_style?.shadow_dir != null ? vh - 100 : Math.round(vh * 0.88));
   const ss: Partial<SubStyle> = project.captions.sub_style || {};
-  const presetName = String((project.captions.preset as { name?: string })?.name || "boxed");
-  const preset = PRESET_LOOKS[presetName] || PRESET_LOOKS.boxed;
+  const rawPresetName = String((project.captions.preset as { name?: string })?.name || "").trim();
+  const isOriginalPreset = !rawPresetName || rawPresetName === "original" || rawPresetName === "match";
+  const preset = !isOriginalPreset && PRESET_LOOKS[rawPresetName] ? PRESET_LOOKS[rawPresetName] : null;
 
   const centerGuide = (nx: number, wPx: number) =>
     setGuide(Math.abs(nx + wPx / 2 - disp.w / 2) < 8 ? disp.w / 2 : null);
@@ -256,8 +257,8 @@ export default function PreviewCanvas({
 
   const effectiveFont = preset?.font || ss.font || "Montserrat";
   const effectiveColor = preset?.color || ss.color || "#FFFFFF";
-  const effectiveBold = preset?.bold ?? ss.bold;
-  const effectiveUppercase = preset?.uppercase ?? ss.uppercase;
+  const effectiveBold = preset ? (preset.bold ?? false) : (ss.bold ?? true);
+  const effectiveUppercase = preset ? (preset.uppercase ?? false) : (ss.uppercase ?? false);
   const hasPlate = preset ? preset.plate !== "none" : !!ss.plate;
   const plateColor = preset?.plate_c || ss.plate_color || "rgba(0,0,0,0.75)";
   const plateType = preset?.plate || (ss.plate ? "box" : "none");
@@ -277,8 +278,9 @@ export default function PreviewCanvas({
   const lineCount = activeSegText ? Math.max(1, Math.ceil(activeSegText.length / 42) + (activeSegText.includes("\n") ? 1 : 0)) : 1;
   const autoBlurH = Math.max(subFontSize * 1.85, lineCount * subFontSize * 1.35 + 12 * sy);
 
-  const isOriginalPreset = !preset || presetName === "original" || presetName === "match";
   const shouldRenderAutoSubBlur = project.render.blur && isOriginalPreset && !!activeSegText;
+  const blurAlpha = (project.render as any).blur_alpha ?? (project.render.extra?.blur_alpha as number) ?? 0.55;
+  const blurSigma = project.render.blur_sigma || 60;
 
   const textShadowCSS = (() => {
     const parts: string[] = [];
@@ -321,7 +323,19 @@ export default function PreviewCanvas({
             {disp.w > 0 && (
               <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
                 {shouldRenderAutoSubBlur && (
-                  <div style={{ position: "absolute", left: `${disp.w * 0.05}px`, top: `${Math.max(0, subY * sy - autoBlurH * 0.5)}px`, width: `${disp.w * 0.9}px`, height: `${autoBlurH}px`, backdropFilter: `blur(${Math.max(8, (project.render.blur_sigma || 60) * 0.35)}px) brightness(0.75)`, backgroundColor: "rgba(0, 0, 0, 0.55)", borderRadius: `${8 * sy}px`, boxShadow: "0 4px 20px rgba(0,0,0,0.5)" }} />
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: `${disp.w * 0.05}px`,
+                      top: `${Math.max(0, subY * sy - autoBlurH * 0.5)}px`,
+                      width: `${disp.w * 0.9}px`,
+                      height: `${autoBlurH}px`,
+                      backdropFilter: `blur(${Math.max(4, blurSigma * 0.35 * sy)}px) brightness(${Math.max(0.2, 1.0 - blurAlpha * 0.45)})`,
+                      backgroundColor: `rgba(0, 0, 0, ${blurAlpha})`,
+                      borderRadius: `${8 * sy}px`,
+                      boxShadow: blurAlpha > 0.1 ? `0 4px 20px rgba(0,0,0,${blurAlpha * 0.8})` : undefined,
+                    }}
+                  />
                 )}
                 {activeBlurs.map((b, i) => {
                   const bx0 = Math.max(0, b.x - 2);
@@ -329,7 +343,7 @@ export default function PreviewCanvas({
                   const bw = Math.min(vw - bx0, b.w + 4);
                   const bh = Math.min(vh - by0, b.h + 4);
                   return (
-                    <div key={`live-blur-${i}`} style={{ position: "absolute", left: `${bx0 * sx}px`, top: `${by0 * sy}px`, width: `${bw * sx}px`, height: `${bh * sy}px`, backgroundColor: b.fill || "rgba(0,0,0,0.40)", backdropFilter: b.fill ? undefined : `blur(${Math.max(8, (project.render.blur_sigma || 60) * 0.35 * sy)}px)`, borderRadius: `${3 * sx}px` }} />
+                    <div key={`live-blur-${i}`} style={{ position: "absolute", left: `${bx0 * sx}px`, top: `${by0 * sy}px`, width: `${bw * sx}px`, height: `${bh * sy}px`, backgroundColor: b.fill || "rgba(0,0,0,0.40)", backdropFilter: b.fill ? undefined : `blur(${Math.max(8, blurSigma * 0.35 * sy)}px)`, borderRadius: `${3 * sx}px` }} />
                   );
                 })}
                 {activeTitles.map((ti, i) => {

@@ -2617,7 +2617,12 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         return Json(proj).into_response();
     }
 
-    let audio_file = ["ref_vocals16.wav", "audio_hq.wav"]
+    let audio_file = [
+        "stems/vocals.wav",
+        "vocals16.wav",
+        "ref_vocals16.wav",
+        "audio_hq.wav",
+    ]
         .iter()
         .map(|f| d.join(f))
         .find(|p| p.is_file())
@@ -2688,7 +2693,11 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
     }).await;
 
     match res {
-        Ok((_count, fresh_proj)) => Json(fresh_proj).into_response(),
+        Ok((count, fresh_proj)) => Json(serde_json::json!({
+            "ok": true,
+            "count": count,
+            "project": fresh_proj,
+        })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

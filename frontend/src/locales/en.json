@@ -70,7 +70,9 @@
     "subBlur": "Blur original text (blur mask)",
     "subBlurHint": "Blur original burned-in subtitles and place new translated text on top",
     "blurStrength": "Blur strength (sigma)",
-    "blurStrengthHint": "Blur intensity for subtitles mask (sigma)"
+    "blurStrengthHint": "Blur intensity for subtitles mask (sigma)",
+    "blurOpacity": "Mask opacity",
+    "blurOpacityHint": "Darkness / opacity level of the blurred subtitle mask"
   },
   "mode": {
     "subtitles": "Subtitles",
@@ -221,7 +223,14 @@
   },
   "preset": {
     "title": "Preset",
-    "original": "Match original"
+    "original": "As original"
+  },
+  "align": {
+    "btn": "Auto-align",
+    "hint": "Automatically snap subtitle boundaries to vocal waveform speech spans",
+    "success": "Aligned subtitles to vocals: {{count}}",
+    "none": "Subtitles are already aligned to vocals",
+    "working": "Aligning..."
   },
   "files": {
     "title": "Files",
