@@ -2631,6 +2631,30 @@ function MultiTrackTimeline({
   const [rawPeaksBgm, setRawPeaksBgm] = useState<number[]>([]);
   const [rawPeaksDub, setRawPeaksDub] = useState<number[]>([]);
 
+  // Viewport Culling: отслеживаем видимую область скролла таймлайна
+  const [timelineScrollLeft, setTimelineScrollLeft] = useState(0);
+  const [timelineClientWidth, setTimelineClientWidth] = useState(1200);
+
+  const handleTimelineScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    setTimelineScrollLeft(e.currentTarget.scrollLeft);
+    setTimelineClientWidth(e.currentTarget.clientWidth);
+  };
+
+  // Viewport Culling: отбираем только плашки субтитров в пределах видимости (±1500px запас)
+  const visibleSegments = useMemo(() => {
+    if (segments.length <= 60) return segments;
+    const viewStartT = Math.max(0, (timelineScrollLeft - 1500) / zoom);
+    const viewEndT = Math.min(total, (timelineScrollLeft + timelineClientWidth + 1500) / zoom);
+    return segments.filter((seg) => {
+      return (
+        (seg.end >= viewStartT && seg.start <= viewEndT) ||
+        seg.id === draggingSeg?.id ||
+        seg.id === loopSegId ||
+        (scrub >= seg.start && scrub <= seg.end)
+      );
+    });
+  }, [segments, timelineScrollLeft, timelineClientWidth, zoom, total, draggingSeg?.id, loopSegId, scrub]);
+
   useEffect(() => {
     api.waveform(pid).then((r) => setRawPeaksMaster(r.peaks || [])).catch(() => {});
     api.waveformTrack(pid, "vocals").then((r) => setRawPeaksVocals(r.peaks || [])).catch(() => {});
@@ -2903,7 +2927,9 @@ function MultiTrackTimeline({
     for (let i = 0; i < n; i++) {
       const pk = peaks[i];
       if (pk < 0.005) continue; // тишину пропускаем — экономит вес SVG
-      const bh = Math.max(1.5, Math.min(h - 2, pk * (h - 4)));
+      // Мягкий логарифмический подъем (Power curve 0.72) — приподнимает тихие согласные и начала слов
+      const boosted = Math.pow(pk, 0.72);
+      const bh = Math.max(2, Math.min(h - 2, boosted * (h - 4)));
       const x = (i / n) * totalPx;
       const y = (h - bh) / 2;
       d += `M${x.toFixed(1)},${y.toFixed(1)}h${barW.toFixed(1)}v${bh.toFixed(1)}h-${barW.toFixed(1)}Z `;
@@ -2971,8 +2997,8 @@ function MultiTrackTimeline({
             ДОРОЖКИ
           </div>
 
-          {/* Track 1 Header: 🎙️ Дубляж */}
-          <div className="h-[38px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
+          {/* Track 1 Header: 🎙️ Дубляж (48px) */}
+          <div className="h-[48px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
             <span className={`font-medium truncate flex items-center gap-1.5 ${trackState.dub ? "text-emerald-400 font-semibold" : "text-[var(--color-muted)]"}`} title="Дубляж (TTS)">
               <Mic size={12} className="shrink-0" /> Дубляж
             </span>
@@ -2986,8 +3012,8 @@ function MultiTrackTimeline({
             </button>
           </div>
 
-          {/* Track 2 Header: 🎵 Фон / Музыка */}
-          <div className="h-[36px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
+          {/* Track 2 Header: 🎵 Фон / Музыка (48px) */}
+          <div className="h-[48px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
             <span className={`font-medium truncate flex items-center gap-1.5 ${trackState.bgm ? "text-purple-400 font-semibold" : "text-[var(--color-muted)]"}`} title="Фоновая музыка (Instrumental)">
               <Music size={12} className="shrink-0" /> Фон
             </span>
@@ -3001,8 +3027,8 @@ function MultiTrackTimeline({
             </button>
           </div>
 
-          {/* Track 3 Header: 🗣️ Вокал */}
-          <div className="h-[38px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
+          {/* Track 3 Header: 🗣️ Вокал (48px) */}
+          <div className="h-[48px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
             <span className={`font-medium truncate flex items-center gap-1.5 ${trackState.vocals ? "text-cyan-400 font-semibold" : "text-[var(--color-muted)]"}`} title="Оригинальный чистый вокал">
               <Users size={12} className="shrink-0" /> Вокал
             </span>
@@ -3056,7 +3082,8 @@ function MultiTrackTimeline({
             const tAt = Math.max(0, Math.min(total, (clickX / totalPx) * total));
             setContextMenu({ x: e.clientX, y: e.clientY, tAt });
           }}
-          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[208px] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-black/20"
+          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[240px] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-black/20"
+          onScroll={handleTimelineScroll}
         >
           <div ref={trackRef} className="relative h-full" style={{ width: `${totalPx}px` }}>
             {/* Top Time Ruler (22px) */}
@@ -3076,24 +3103,24 @@ function MultiTrackTimeline({
               })}
             </div>
 
-            {/* Track 1: 🎙️ Дубляж Canvas (38px) */}
-            <div className="h-[38px] border-b border-[var(--color-border)]/40 relative bg-emerald-950/10">
-              {renderWaveform(peaksDub, "#10b981", 38)}
+            {/* Track 1: 🎙️ Дубляж Canvas (48px) */}
+            <div className="h-[48px] border-b border-[var(--color-border)]/40 relative bg-emerald-950/10">
+              {renderWaveform(peaksDub, "#10b981", 48)}
             </div>
 
-            {/* Track 2: 🎵 Фон / Музыка Canvas (36px) */}
-            <div className="h-[36px] border-b border-[var(--color-border)]/40 relative bg-purple-950/10">
-              {renderWaveform(peaksBgm, "#a855f7", 36)}
+            {/* Track 2: 🎵 Фон / Музыка Canvas (48px) */}
+            <div className="h-[48px] border-b border-[var(--color-border)]/40 relative bg-purple-950/10">
+              {renderWaveform(peaksBgm, "#a855f7", 48)}
             </div>
 
-            {/* Track 3: 🗣️ Вокал оригинала Canvas (38px) with Phrase Delimiters */}
-            <div className="h-[38px] border-b border-[var(--color-border)]/40 relative bg-cyan-950/10">
-              {renderWaveform(peaksVocals, "#06b6d4", 38, true)}
+            {/* Track 3: 🗣️ Вокал оригинала Canvas (48px) with Phrase Delimiters */}
+            <div className="h-[48px] border-b border-[var(--color-border)]/40 relative bg-cyan-950/10">
+              {renderWaveform(peaksVocals, "#06b6d4", 48, true)}
             </div>
 
             {/* Track 4: 💬 Субтитры Blocks (74px) with generous pb-6 for scrollbar clearance */}
             <div className="h-[74px] relative pb-6">
-              {segments.map((seg) => {
+              {visibleSegments.map((seg) => {
                 const leftPx = seg.start * zoom;
                 const widthPx = Math.max(42, (seg.end - seg.start) * zoom);
                 const isActive = scrub >= seg.start && scrub <= seg.end;
@@ -3499,6 +3526,18 @@ function Editor() {
   const [trackState, setTrackState] = useState<{ dub: boolean; bgm: boolean; vocals: boolean }>({ dub: true, bgm: true, vocals: false });
   const playSpeed = 1.0;
   const [loopSegId, setLoopSegId] = useState<string | null>(null);
+
+  // Виртуализация списка субтитров (50 карточек в DOM)
+  const [subsScrollTop, setSubsScrollTop] = useState(0);
+  const subsScrollRaf = useRef<number | null>(null);
+  const handleSubsScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const top = e.currentTarget.scrollTop;
+    if (subsScrollRaf.current !== null) return;
+    subsScrollRaf.current = requestAnimationFrame(() => {
+      setSubsScrollTop(top);
+      subsScrollRaf.current = null;
+    });
+  };
 
   const playEndRef = useRef<number>(Infinity);                        // stop time for single-phrase playback (Infinity = full)
   const [dubRev, setDubRev] = useState(0);                            // dub-audio cache-buster — bumped ONLY when the dub track is re-rendered (regen/export), NOT on every edit, so live edits don't reload <audio> mid-playback
@@ -4539,7 +4578,7 @@ function Editor() {
             </div>
 
             {/* Скролл-тело списка субтитров */}
-            <div data-kb-scroll className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4">
+            <div data-kb-scroll onScroll={handleSubsScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4">
               {lane === "subs" && (
                 <div className="space-y-2">
                   {(() => {
@@ -4607,104 +4646,140 @@ function Editor() {
                       </div>
                     );
                   })()}
-                  {p.segments.map((seg, idx) => {
-                    const on = isActive(seg);
+                  {(() => {
+                    const VIRTUAL_WINDOW = 50;
+                    const CARD_HEIGHT = 120;
+                    const totalSegs = p.segments.length;
+
+                    let startIndex = 0;
+                    let endIndex = totalSegs;
+                    let topSpacer = 0;
+                    let bottomSpacer = 0;
+
+                    if (totalSegs > VIRTUAL_WINDOW) {
+                      const approxIdx = Math.floor(subsScrollTop / CARD_HEIGHT);
+                      startIndex = Math.max(0, Math.min(approxIdx - 15, totalSegs - VIRTUAL_WINDOW));
+
+                      // Если активная реплика есть (при воспроизведении или клике на таймлайне),
+                      // гарантируем, что она обязательно попадает в окно 50 отображаемых карточек
+                      const activeIdx = activeId ? p.segments.findIndex((s) => s.id === activeId) : -1;
+                      if (activeIdx >= 0 && (activeIdx < startIndex || activeIdx >= startIndex + VIRTUAL_WINDOW)) {
+                        startIndex = Math.max(0, Math.min(activeIdx - 20, totalSegs - VIRTUAL_WINDOW));
+                      }
+
+                      endIndex = Math.min(totalSegs, startIndex + VIRTUAL_WINDOW);
+                      topSpacer = startIndex * CARD_HEIGHT;
+                      bottomSpacer = (totalSegs - endIndex) * CARD_HEIGHT;
+                    }
+
+                    const visibleSegments = totalSegs > VIRTUAL_WINDOW ? p.segments.slice(startIndex, endIndex) : p.segments;
+
                     return (
-                      <div key={seg.id} ref={on ? activeRef : undefined}
-                        onDragOver={(e) => { e.preventDefault(); }}
-                        onDrop={(e) => { e.preventDefault(); dropSeg(seg.id); }}
-                        onClick={() => { setRendered(false); setScrub(seg.start); }}
-                        className={`rounded-xl p-2 border-l-2 transition-colors cursor-pointer ${dragSegId === seg.id ? "opacity-30 border-dashed border-[var(--color-accent)]" : ""} ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${on ? "bg-[var(--color-surface-2)] border-[var(--color-accent)]" : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"}`}>
-                        <div className="flex items-center justify-between gap-1">
-                          <div className="flex items-center gap-1 flex-1 min-w-0">
-                            <button type="button" draggable
-                              onDragStart={(e) => { e.dataTransfer.setData("text/plain", seg.id); setDragSegId(seg.id); }}
-                              onClick={(e) => e.stopPropagation()}
-                              title="Перетащить фразу (Drag & Drop)"
-                              className="cursor-grab active:cursor-grabbing text-[var(--color-muted)] hover:text-[var(--color-accent)] p-0.5 rounded shrink-0">
-                              <GripVertical size={13} />
-                            </button>
-                            <span className="mono px-1.5 py-0.5 rounded bg-[var(--color-surface)] text-[9px] font-bold text-[var(--color-muted)] border border-[var(--color-border)] shrink-0 opacity-70">#{idx + 1}</span>
-                            <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "up"); }} disabled={idx === 0} title="Переместить вверх"
-                              className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronUp size={13} /></button>
-                            <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "down"); }} disabled={idx === p.segments.length - 1} title="Переместить вниз"
-                              className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronDown size={13} /></button>
-                            <button onClick={(e) => { e.stopPropagation(); setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; }); }}
-                              className={`grid place-items-center w-3.5 h-3.5 rounded shrink-0 border transition-colors ${selSegs.has(seg.id) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>
-                              {selSegs.has(seg.id) && <Check size={10} />}</button>
-                            {seg.speaker != null && <span className="mono px-1 py-0.5 rounded bg-[var(--color-overlay)] text-[9px] font-semibold text-[var(--color-muted)] shrink-0">SPK {seg.speaker}</span>}
-                            <span className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"}`}>{fmtT(seg.start)} → {fmtT(seg.end)}</span>
-                          </div>
-                          <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
-                            {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
-                            <button onClick={(e) => { e.stopPropagation(); playSeg(seg); }} title={t("seg.play")}
-                              className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><Play size={13} /></button>
-                            <button onClick={(e) => { e.stopPropagation(); doRegen(seg.id); }} disabled={regenId !== null} title={t("seg.regen")}
-                              className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                              {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); doKeepSeg(seg.id); }} disabled={regenId !== null} title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
-                              className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}><Music size={13} /></button>
-                            <button onClick={(e) => { e.stopPropagation(); doHideSeg(seg.id); }} disabled={regenId !== null} title={seg.hidden ? t("seg.show") : t("seg.hide")}
-                              className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                              {seg.hidden ? <EyeOff size={13} /> : <Eye size={13} />}</button>
-                            <button onClick={(e) => { e.stopPropagation(); doDelSeg(seg.id); }} disabled={regenId !== null} title={t("seg.del")}
-                              className="p-0.5 text-[var(--color-muted)] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
-                          </div>
-                        </div>
-                        <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
-                        <AutoGrowTextarea
-                          id={`seg-txt-${seg.id}`}
-                          value={seg.tgt_text}
-                          onChange={(e) => patchSeg(seg.id, e.target.value)}
-                          onSplit={(textarea) => handleSplitAtTextCursor(seg, textarea)}
-                          onKeyDown={(e) => {
-                            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                              e.preventDefault();
-                              handleSplitAtTextCursor(seg, e.currentTarget);
-                            }
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
-                          title="ПКМ — теги эмоций и эффектов, Ctrl+Enter — разрезать фразу"
-                          className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors"
-                        />
-                        {on && (
-                          <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
-                            <Clock size={11} className="text-[var(--color-muted)] shrink-0" />
-                            <input type="number" step={0.1} min={0} defaultValue={seg.start.toFixed(2)} key={`st${seg.id}-${seg.start}`}
-                              onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.start) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, start: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
-                              className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
-                            <ArrowRight size={11} className="text-[var(--color-muted)] shrink-0" />
-                            <input type="number" step={0.1} min={0} defaultValue={seg.end.toFixed(2)} key={`en${seg.id}-${seg.end}`}
-                              onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.end) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, end: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
-                              className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
-                            <span className="text-[10px] text-[var(--color-muted)]">{t("seg.seconds")}</span>
-                          </div>
-                        )}
-                        {(on || selSegs.has(seg.id)) && !seg.keep_original && (
-                          <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.speakerHint")}>
-                            <Users size={11} className="text-[var(--color-muted)] shrink-0" />
-                            <select value={seg.speaker ?? ""}
-                              onChange={async (e) => {
-                                let val = e.target.value;
-                                if (val === "__new__") {
-                                  const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
-                                  val = String(nums.length ? Math.max(...nums) + 1 : 1);
-                                }
-                                setRendered(false);
-                                try { setProject(await api.patch(pid, { op: "segment", id: seg.id, speaker: val })); bump(); } catch (err) { await surfaceErr(err); }
-                              }}
-                              className="flex-1 min-w-0 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none transition-colors">
-                              {seg.speaker == null && <option value="">—</option>}
-                              {speakers.map((s) => <option key={s} value={s}>SPK {s}</option>)}
-                              <option value="__new__">＋ {t("seg.newSpeaker")}</option>
-                            </select>
-                          </div>
-                        )}
-                      </div>
+                      <>
+                        {topSpacer > 0 && <div style={{ height: `${topSpacer}px` }} className="w-full pointer-events-none shrink-0" />}
+                        {visibleSegments.map((seg, i) => {
+                          const idx = startIndex + i;
+                          const on = isActive(seg);
+                          return (
+                            <div key={seg.id} ref={on ? activeRef : undefined}
+                              onDragOver={(e) => { e.preventDefault(); }}
+                              onDrop={(e) => { e.preventDefault(); dropSeg(seg.id); }}
+                              onClick={() => { setRendered(false); setScrub(seg.start); }}
+                              className={`rounded-xl p-2 border-l-2 transition-colors cursor-pointer ${dragSegId === seg.id ? "opacity-30 border-dashed border-[var(--color-accent)]" : ""} ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${on ? "bg-[var(--color-surface-2)] border-[var(--color-accent)]" : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"}`}>
+                              <div className="flex items-center justify-between gap-1">
+                                <div className="flex items-center gap-1 flex-1 min-w-0">
+                                  <button type="button" draggable
+                                    onDragStart={(e) => { e.dataTransfer.setData("text/plain", seg.id); setDragSegId(seg.id); }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    title="Перетащить фразу (Drag & Drop)"
+                                    className="cursor-grab active:cursor-grabbing text-[var(--color-muted)] hover:text-[var(--color-accent)] p-0.5 rounded shrink-0">
+                                    <GripVertical size={13} />
+                                  </button>
+                                  <span className="mono px-1.5 py-0.5 rounded bg-[var(--color-surface)] text-[9px] font-bold text-[var(--color-muted)] border border-[var(--color-border)] shrink-0 opacity-70">#{idx + 1}</span>
+                                  <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "up"); }} disabled={idx === 0} title="Переместить вверх"
+                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronUp size={13} /></button>
+                                  <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "down"); }} disabled={idx === p.segments.length - 1} title="Переместить вниз"
+                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronDown size={13} /></button>
+                                  <button onClick={(e) => { e.stopPropagation(); setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; }); }}
+                                    className={`grid place-items-center w-3.5 h-3.5 rounded shrink-0 border transition-colors ${selSegs.has(seg.id) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>
+                                    {selSegs.has(seg.id) && <Check size={10} />}</button>
+                                  {seg.speaker != null && <span className="mono px-1 py-0.5 rounded bg-[var(--color-overlay)] text-[9px] font-semibold text-[var(--color-muted)] shrink-0">SPK {seg.speaker}</span>}
+                                  <span className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"}`}>{fmtT(seg.start)} → {fmtT(seg.end)}</span>
+                                </div>
+                                <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
+                                  {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
+                                  <button onClick={(e) => { e.stopPropagation(); playSeg(seg); }} title={t("seg.play")}
+                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><Play size={13} /></button>
+                                  <button onClick={(e) => { e.stopPropagation(); doRegen(seg.id); }} disabled={regenId !== null} title={t("seg.regen")}
+                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
+                                    {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
+                                  </button>
+                                  <button onClick={(e) => { e.stopPropagation(); doKeepSeg(seg.id); }} disabled={regenId !== null} title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
+                                    className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}><Music size={13} /></button>
+                                  <button onClick={(e) => { e.stopPropagation(); doHideSeg(seg.id); }} disabled={regenId !== null} title={seg.hidden ? t("seg.show") : t("seg.hide")}
+                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
+                                    {seg.hidden ? <EyeOff size={13} /> : <Eye size={13} />}</button>
+                                  <button onClick={(e) => { e.stopPropagation(); doDelSeg(seg.id); }} disabled={regenId !== null} title={t("seg.del")}
+                                    className="p-0.5 text-[var(--color-muted)] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
+                                </div>
+                              </div>
+                              <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
+                              <AutoGrowTextarea
+                                id={`seg-txt-${seg.id}`}
+                                value={seg.tgt_text}
+                                onChange={(e) => patchSeg(seg.id, e.target.value)}
+                                onSplit={(textarea) => handleSplitAtTextCursor(seg, textarea)}
+                                onKeyDown={(e) => {
+                                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                                    e.preventDefault();
+                                    handleSplitAtTextCursor(seg, e.currentTarget);
+                                  }
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
+                                title="ПКМ — теги эмоций и эффектов, Ctrl+Enter — разрезать фразу"
+                                className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors"
+                              />
+                              {on && (
+                                <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
+                                  <Clock size={11} className="text-[var(--color-muted)] shrink-0" />
+                                  <input type="number" step={0.1} min={0} defaultValue={seg.start.toFixed(2)} key={`st${seg.id}-${seg.start}`}
+                                    onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.start) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, start: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
+                                    className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
+                                  <ArrowRight size={11} className="text-[var(--color-muted)] shrink-0" />
+                                  <input type="number" step={0.1} min={0} defaultValue={seg.end.toFixed(2)} key={`en${seg.id}-${seg.end}`}
+                                    onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.end) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, end: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
+                                    className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
+                                  <span className="text-[10px] text-[var(--color-muted)]">{t("seg.seconds")}</span>
+                                </div>
+                              )}
+                              {(on || selSegs.has(seg.id)) && !seg.keep_original && (
+                                <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.speakerHint")}>
+                                  <Users size={11} className="text-[var(--color-muted)] shrink-0" />
+                                  <select value={seg.speaker ?? ""}
+                                    onChange={async (e) => {
+                                      let val = e.target.value;
+                                      if (val === "__new__") {
+                                        const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
+                                        val = String(nums.length ? Math.max(...nums) + 1 : 1);
+                                      }
+                                      setRendered(false);
+                                      try { setProject(await api.patch(pid, { op: "segment", id: seg.id, speaker: val })); bump(); } catch (err) { await surfaceErr(err); }
+                                    }}
+                                    className="flex-1 min-w-0 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none transition-colors">
+                                    {seg.speaker == null && <option value="">—</option>}
+                                    {speakers.map((s) => <option key={s} value={s}>SPK {s}</option>)}
+                                    <option value="__new__">＋ {t("seg.newSpeaker")}</option>
+                                  </select>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {bottomSpacer > 0 && <div style={{ height: `${bottomSpacer}px` }} className="w-full pointer-events-none shrink-0" />}
+                      </>
                     );
-                  })}
+                  })()}
                   <button onClick={addSeg} disabled={regenId !== null} title={t("seg.addHint")}
                     className="w-full mt-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
                     <Plus size={14} />{t("seg.add")}
@@ -6229,18 +6304,17 @@ function TranscriptView() {
   };
 
   async function switchMode(k: string) {
-    if (k === "transcribe" || reanalyzing) return;                  // уже в транскрипте / ре-анализ уже идёт
-    setReanalyzing(true);
-    const mode = k === "subtitles" ? "nodub" : k === "funny" ? "dub" : k;   // dub|voiceover|nodub
+    if (k === "transcribe" || reanalyzing) return;
+    const mode = k === "subtitles" ? "nodub" : k === "funny" ? "dub" : k; // dub|voiceover|nodub
+    // Мгновенное оптимистичное переключение в UI (0 мс задержки)
+    setProject({ ...p, mode });
+    setStage("editor");
     try {
       const patched = await api.patch(pid, { op: "mode", value: mode });
       setProject(patched);
-      setStage("editor");
     } catch (err) {
       console.error("Ошибка смены режима:", err);
-      setProject({ ...p, mode });
-      setStage("editor");
-    } finally { setReanalyzing(false); }
+    }
   }
 
   async function runTranslation() {
