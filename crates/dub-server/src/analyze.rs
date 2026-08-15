@@ -797,7 +797,15 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     }
 
     // F0 Gender Consistency: авто-коррекция привязки спикеров по фундаментальной высоте тона
-    crate::f0::fix_cross_gender_segments(&mut segments, &asr_wav);
+    crate::f0::fix_cross_gender_segments(&mut segments, &asr_wav, args.num_speakers);
+
+    let unique_spks: std::collections::HashSet<&str> = segments
+        .iter()
+        .filter_map(|s| s.speaker.as_deref())
+        .collect();
+    if !unique_spks.is_empty() {
+        n_spk = unique_spks.len();
+    }
 
     emit(
         progress,

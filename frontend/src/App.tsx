@@ -1198,6 +1198,7 @@ function DropZone() {
   const setSlotsMSaved = (v: string[]) => { setSlotsM(v); localStorage.setItem("dub-voice-slots-m", JSON.stringify(v)); };
   const setSlotsFSaved = (v: string[]) => { setSlotsF(v); localStorage.setItem("dub-voice-slots-f", JSON.stringify(v)); };
   const [voiceLib, setVoiceLib] = useState<string[]>([]);                        // имена голосов из GET /voices (для селектов слотов)
+  const [mainTranscribeSpeakers, setMainTranscribeSpeakers] = useState<number>(0); // выбор спикеров для режима транскрипции на главном экране
   useEffect(() => { api.voices().then((r) => setVoiceLib(r.voices)).catch(() => {}); }, []);
   const [preview, setPreview] = useState<string | null>(null);                  // objectURL превью выбранного видео (первый кадр)
   const audioOnly = !!file && isAudioFile(file);                                // вход без видео -> режим «только аудио»
@@ -1356,7 +1357,8 @@ function DropZone() {
       // Готовый кастинг из библиотеки применяем только когда кастинг реально включён (та же видимость, что у галки).
       const effCastingRef = effCasting ? castingRef : "";
       const effContentType = effCasting ? contentType : "real";
-      const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType);
+      const effNumSpeakers = audio === "transcribe" ? mainTranscribeSpeakers : 0;
+      const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers);
       await api.watchJob(job_id, (e) => { if (e.type === "progress") s.setProgress(e.stage || "", e.msg || "", e.pct ?? null); });
       if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain });   // громкость оригинала со старта -> рендер ниже подхватит
       // Блюр-подложка под субтитрами — опция дубляжа/субтитров (дефолт вкл). Патчим, когда сабы вжигаются.
@@ -1633,6 +1635,31 @@ function DropZone() {
                     )}
                   </Accordion>
                 )}
+                {/* СПИКЕРЫ ТРАНСКРИПЦИИ (#115): авто или заданное число */}
+                {audio === "transcribe" && (
+                  <Accordion title={t("transcribe.numSpeakers")} subtitle={mainTranscribeSpeakers === 0 ? t("transcribe.spkAuto") : `${mainTranscribeSpeakers} ${t("transcribe.spkShort")}`}>
+                    <div className="space-y-2">
+                      <select
+                        value={mainTranscribeSpeakers}
+                        onChange={(e) => setMainTranscribeSpeakers(parseInt(e.target.value) || 0)}
+                        className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+                      >
+                        <option value={0}>{t("transcribe.spkAuto")}</option>
+                        <option value={1}>{t("transcribe.spkSolo")}</option>
+                        <option value={2}>{t("transcribe.spkDialog")}</option>
+                        <option value={3}>3 {t("transcribe.spkShort")}</option>
+                        <option value={4}>4 {t("transcribe.spkShort")}</option>
+                        <option value={5}>5 {t("transcribe.spkShort")}</option>
+                        <option value={6}>6 {t("transcribe.spkShort")}</option>
+                        <option value={7}>7 {t("transcribe.spkShort")}</option>
+                        <option value={8}>8 {t("transcribe.spkShort")}</option>
+                      </select>
+                      <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+                        {t("transcribe.numSpeakersHint")}
+                      </div>
+                    </div>
+                  </Accordion>
+                )}
                 {/* ДОПОЛНИТЕЛЬНО: стиль перевода / оригинал-дорожка / детекция текста / шуточный ремикс / громкость оригинала. */}
                 {showAdvanced && (
                   <Accordion title={t("accordion.advanced")}>
@@ -1800,7 +1827,7 @@ function DropZone() {
       <input ref={inputRef} type="file" accept={MEDIA_ACCEPT} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); }} />
       <input ref={batchRef} type="file" multiple accept={MEDIA_ACCEPT} className="hidden"
-        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; s.setStage("batch"); } }} />
+        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; s.setStage("batch"); } }} />
 
       {/* Модальное окно "Все проекты" со скроллом и поиском */}
       {allProjectsModal && (
@@ -4356,13 +4383,13 @@ function Editor() {
 
                 <button
                   type="button"
-                  onClick={() => setTrackState({ dub: false, bgm: true, vocals: true })}
+                  onClick={() => setTrackState({ dub: false, bgm: false, vocals: true })}
                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
-                    trackState.vocals && !trackState.dub
+                    trackState.vocals && !trackState.dub && !trackState.bgm
                       ? "bg-cyan-500 text-black font-semibold shadow-sm"
                       : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
                   }`}
-                  title="Вокал оригинала"
+                  title="Только чистый оригинальный голос (без музыки)"
                 >
                   <Users size={12} />
                   <span>Вокал</span>
@@ -5890,8 +5917,8 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
 }
 
 // Пакетная обработка: DropZone кладёт выбранные файлы + настройки сюда, BatchView читает (без раздувания стора).
-const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; funnyOn: boolean; funny: string; voGain: number; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[] } =
-  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, funnyOn: false, funny: "", voGain: -12, trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [] };
+const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; funnyOn: boolean; funny: string; voGain: number; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number } =
+  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, funnyOn: false, funny: "", voGain: -12, trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0 };
 
 type BatchItem = { name: string; status: "queued" | "analyzing" | "rendering" | "done" | "error"; pid: string | null; pct: number; msg?: string; detail?: string };
 
@@ -5901,7 +5928,7 @@ function BatchView() {
   const { t } = useTranslation();
   const setStage = useStore((s) => s.setStage);
   const filesRef = useRef<File[]>(batchState.files);
-  const { tgt, src, audio, subs, burn, detectText, funnyOn, funny, voGain, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF } = batchState;
+  const { tgt, src, audio, subs, burn, detectText, funnyOn, funny, voGain, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
   const [items, setItems] = useState<BatchItem[]>(() => filesRef.current.map((f) => ({ name: f.name, status: "queued", pid: null, pct: 0 })));
   const [running, setRunning] = useState(false);
   const [doneN, setDoneN] = useState(0);
@@ -5929,8 +5956,9 @@ function BatchView() {
         // субтитры/бёрн/OCR off (нет видео) -> на выходе озвученный WAV.
         const fSubs = ao ? "none" : eSubs;
         const fBurn = ao ? false : audio === "transcribe" ? true : burn;
+        const effNumSpeakers = audio === "transcribe" ? transcribeSpeakers : 0;
         // Стиль перевода (#112) — параметром analyze (patch до analyze невозможен: project.json ещё нет).
-        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, false, trStyle);
+        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, false, trStyle, false, "", "auto", effNumSpeakers);
         await api.watchJob(job_id, (e) => { if (e.type === "progress") upd({ pct: e.pct ?? 0, detail: e.msg || undefined }); });
         if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain });   // громкость оригинала со старта -> общий для всех проектов батча
         // Сохранить оригинальную дорожку (#113): 2-я дорожка при mux. Только dub/voiceover, не аудио-файл.

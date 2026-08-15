@@ -111,11 +111,15 @@ impl WhisperAsr {
         }
     }
 
-    /// Авто-выбор пути: короткий файл (< PAR_MIN_DUR) — монолитный прогон КАК РАНЬШЕ (паритет);
-    /// длинный — параллельные окна (N сабпроцессов whisper-faster на CPU-ядра, см. run_words_windowed).
+    /// Авто-выбор пути:
+    /// - Для GPU (device == "cuda"): ВСЕГДА монолитный прогон (1 процесс на весь файл).
+    ///   CTranslate2/WhisperXXL нативно обрабатывает поток любой длины, избегая VRAM-конфликтов
+    ///   нескольких процессов и накладных расходов на перезапуски.
+    /// - Для CPU (device == "cpu"): короткий файл (< PAR_MIN_DUR) — монолитный прогон;
+    ///   длинный (>= PAR_MIN_DUR) — параллельные окна (N сабпроцессов на CPU-ядра).
     fn run_words_auto(&self, wav: &Path, lang: &str) -> Result<Vec<Word>, AsrError> {
         let dur = wav_duration_secs(wav).unwrap_or(0.0);
-        if dur < PAR_MIN_DUR {
+        if self.device == "cuda" || dur < PAR_MIN_DUR {
             return self.run_words(wav, lang, None);
         }
         self.run_words_windowed(wav, lang)
@@ -153,14 +157,11 @@ impl WhisperAsr {
 
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
         // Для CUDA каждый процесс грузит модель в себя в VRAM (large-v3 ≈ 3Гб). И если GPU уже нагружен
-        // видео-процессом - 2 потока; для CPU - до PAR_MAX_WORKERS.
-        // XXL --batched уже параллелит через Silero VAD окна пачками внутри одного процесса,
-        // второй CUDA-процесс только дублирует загрузку модели в VRAM → OOM на 8Гб картах.
+        // видео-процессом - строго 1 поток во избежание OOM; для CPU - до PAR_MAX_WORKERS.
         // Исключение: чистый large-v3 слишком тяжелый, 4 копии вызовут OOM в RAM (12+ Гб) и дикий троттлинг кэша.
         let is_heavy = self.model.contains("large") && !self.model.contains("turbo");
-        let is_xxl_bin = self.bin.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.to_ascii_lowercase().contains("xxl"));
         let max_workers = if self.device == "cuda" {
-            if is_xxl_bin { 1 } else { 2 }
+            1
         } else {
             if is_heavy { 2 } else { PAR_MAX_WORKERS }
         };
