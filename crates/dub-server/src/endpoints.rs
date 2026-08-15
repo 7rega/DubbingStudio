@@ -241,8 +241,8 @@ pub async fn put_project(
     }
 }
 
-// ─── GET /projects/{pid}/waveform?n=600 ─────────────────────────────────────
-// Даунсэмпл-пики аудио (ffmpeg s16le 8kHz), кэш waveform.json. CPU, вне GPU-воркера. Порт app.py.
+// ─── GET /projects/{pid}/waveform?track=vocals|bgm|dub|master&n=600 ──────────
+// Даунсэмпл-пики аудио (ffmpeg s16le 8kHz), кэш waveform_[track].json. CPU, вне GPU-воркера.
 pub async fn waveform(
     State(st): State<AppState>,
     AxPath(pid): AxPath<String>,
@@ -252,7 +252,14 @@ pub async fn waveform(
         Ok(d) => d,
         Err(resp) => return resp,
     };
-    let cache = dir.join("waveform.json");
+    let track = q.get("track").map(|s| s.as_str()).unwrap_or("master");
+    let cache_name = match track {
+        "vocals" => "waveform_vocals.json",
+        "bgm" | "instrumental" => "waveform_bgm.json",
+        "dub" => "waveform_dub.json",
+        _ => "waveform.json",
+    };
+    let cache = dir.join(cache_name);
     if let Ok(txt) = std::fs::read_to_string(&cache) {
         return ([("content-type", "application/json")], txt).into_response();
     }
@@ -261,9 +268,31 @@ pub async fn waveform(
         Err(resp) => return resp,
     };
     let n: usize = q.get("n").and_then(|v| v.parse().ok()).unwrap_or(600);
-    let video = PathBuf::from(&proj.meta.video);
+
+    // Выбираем соответствующий аудиофайл под запрошенный трек
+    let target_file: PathBuf = match track {
+        "vocals" => {
+            let p1 = dir.join("stems/vocals.wav");
+            let p2 = dir.join("vocals16.wav");
+            let p3 = dir.join("vocals16_clean.wav");
+            if p1.is_file() { p1 } else if p2.is_file() { p2 } else if p3.is_file() { p3 } else { PathBuf::from(&proj.meta.video) }
+        }
+        "bgm" | "instrumental" => {
+            let p1 = dir.join("stems/instrumental.wav");
+            let p2 = dir.join("bgm.wav");
+            if p1.is_file() { p1 } else if p2.is_file() { p2 } else { PathBuf::from(&proj.meta.video) }
+        }
+        "dub" => {
+            let p1 = dir.join("dub_audio.m4a");
+            let p2 = dir.join("output.mp4");
+            let p3 = dir.join("output.wav");
+            if p1.is_file() { p1 } else if p2.is_file() { p2 } else if p3.is_file() { p3 } else { PathBuf::from(&proj.meta.video) }
+        }
+        _ => PathBuf::from(&proj.meta.video),
+    };
+
     let peaks =
-        tokio::task::spawn_blocking(move || crate::wavio::waveform_peaks(&video, n))
+        tokio::task::spawn_blocking(move || crate::wavio::waveform_peaks(&target_file, n))
             .await
             .unwrap_or_default();
     let empty = peaks.is_empty();

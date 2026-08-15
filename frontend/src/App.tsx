@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2 } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -2496,8 +2496,22 @@ function CastingPanel({ pid, characters, voices, onChange }: {
   );
 }
 
-// Профессиональный масштабируемый и скроллируемый таймлайн (в стиле ElevenLabs / NLE)
-function InteractiveTimeline({
+// ─── Профессиональный 4-дорожечный таймлайн (MultiTrackTimeline) ───────────
+// Дорожка 1: 🎙️ Дубляж (TTS)
+// Дорожка 2: 🎵 Фон / Музыка (Instrumental)
+// Дорожка 3: 🗣️ Вокал оригинала (Clean Vocals)
+// Дорожка 4: 💬 Субтитры (Интерактивные плашки с цветом спикеров и drag-and-trim)
+
+const SPK_BG_COLORS = [
+  "bg-emerald-600/25 border-emerald-500/70 text-emerald-200 hover:border-emerald-400",
+  "bg-blue-600/25 border-blue-500/70 text-blue-200 hover:border-blue-400",
+  "bg-purple-600/25 border-purple-500/70 text-purple-200 hover:border-purple-400",
+  "bg-amber-600/25 border-amber-500/70 text-amber-200 hover:border-amber-400",
+  "bg-rose-600/25 border-rose-500/70 text-rose-200 hover:border-rose-400",
+  "bg-cyan-600/25 border-cyan-500/70 text-cyan-200 hover:border-cyan-400",
+];
+
+function MultiTrackTimeline({
   pid,
   duration,
   scrub,
@@ -2506,6 +2520,14 @@ function InteractiveTimeline({
   onSeek,
   onPlaySeg,
   setProject,
+  trackMutes,
+  setTrackMutes,
+  trackSolos,
+  setTrackSolos,
+  audioMode: _audioMode,
+  setAudioMode,
+  loopSegId,
+  setLoopSegId,
 }: {
   pid: string;
   duration: number;
@@ -2515,6 +2537,14 @@ function InteractiveTimeline({
   onSeek: (t: number) => void;
   onPlaySeg: (seg: Project["segments"][number]) => void;
   setProject: (p: Project) => void;
+  trackMutes: { dub: boolean; bgm: boolean; vocals: boolean };
+  setTrackMutes: React.Dispatch<React.SetStateAction<{ dub: boolean; bgm: boolean; vocals: boolean }>>;
+  trackSolos: { dub: boolean; bgm: boolean; vocals: boolean };
+  setTrackSolos: React.Dispatch<React.SetStateAction<{ dub: boolean; bgm: boolean; vocals: boolean }>>;
+  audioMode: "mix" | "dub" | "vocals";
+  setAudioMode: (m: "mix" | "dub" | "vocals") => void;
+  loopSegId: string | null;
+  setLoopSegId: (id: string | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -2549,11 +2579,10 @@ function InteractiveTimeline({
   };
 
   const getT = (clientX: number) => {
-    if (!containerRef.current) return 0;
-    const rect = containerRef.current.getBoundingClientRect();
-    const scrollLeft = containerRef.current.scrollLeft;
-    const x = clientX - rect.left + scrollLeft;
-    return Math.max(0, Math.min(total, x / zoom));
+    if (!trackRef.current) return 0;
+    const rect = trackRef.current.getBoundingClientRect();
+    const x = clientX - rect.left;
+    return Math.max(0, Math.min(total, (x / totalPx) * total));
   };
 
   const handlePointerDown = (
@@ -2572,9 +2601,15 @@ function InteractiveTimeline({
     });
   };
 
-  const [peaks, setPeaks] = useState<number[]>([]);
+  // Multi-track waveforms
+  const [peaksDub, setPeaksDub] = useState<number[]>([]);
+  const [peaksBgm, setPeaksBgm] = useState<number[]>([]);
+  const [peaksVocals, setPeaksVocals] = useState<number[]>([]);
+
   useEffect(() => {
-    api.waveform(pid).then((r) => setPeaks(r.peaks || [])).catch(() => {});
+    api.waveformTrack(pid, "dub").then((r) => setPeaksDub(r.peaks || [])).catch(() => {});
+    api.waveformTrack(pid, "bgm").then((r) => setPeaksBgm(r.peaks || [])).catch(() => {});
+    api.waveformTrack(pid, "vocals").then((r) => setPeaksVocals(r.peaks || [])).catch(() => {});
   }, [pid]);
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -2598,13 +2633,14 @@ function InteractiveTimeline({
 
     const SNAP_THRESH = 0.15;
 
-    // 1. Прилипание к вспышкам волновой дорожки (Waveform Snapping)
-    if (peaks.length > 0 && total > 0) {
-      const step = total / peaks.length;
+    // 1. Прилипание к вспышкам волновой дорожки вокала (Waveform Snapping)
+    const targetPeaks = peaksVocals.length ? peaksVocals : peaksDub;
+    if (targetPeaks.length > 0 && total > 0) {
+      const step = total / targetPeaks.length;
       const sIdx = Math.max(0, Math.floor((newStart - 0.2) / step));
-      const eIdx = Math.min(peaks.length - 1, Math.ceil((newStart + 0.2) / step));
+      const eIdx = Math.min(targetPeaks.length - 1, Math.ceil((newStart + 0.2) / step));
       for (let i = sIdx; i <= eIdx; i++) {
-        if (peaks[i] > 0.08) {
+        if (targetPeaks[i] > 0.08) {
           const peakT = i * step;
           if (draggingSeg.type === "move" || draggingSeg.type === "resize-left") {
             if (Math.abs(newStart - peakT) < SNAP_THRESH) {
@@ -2616,9 +2652,9 @@ function InteractiveTimeline({
         }
       }
       const esIdx = Math.max(0, Math.floor((newEnd - 0.2) / step));
-      const eeIdx = Math.min(peaks.length - 1, Math.ceil((newEnd + 0.2) / step));
+      const eeIdx = Math.min(targetPeaks.length - 1, Math.ceil((newEnd + 0.2) / step));
       for (let i = esIdx; i <= eeIdx; i++) {
-        if (peaks[i] > 0.08) {
+        if (targetPeaks[i] > 0.08) {
           const peakT = i * step;
           if (draggingSeg.type === "move" || draggingSeg.type === "resize-right") {
             if (Math.abs(newEnd - peakT) < SNAP_THRESH) {
@@ -2669,7 +2705,6 @@ function InteractiveTimeline({
     }
   };
 
-  const { t } = useTranslation();
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tAt: number; seg?: Project["segments"][number] } | null>(null);
 
   useEffect(() => {
@@ -2695,6 +2730,7 @@ function InteractiveTimeline({
         end,
         speaker,
         src_text: "",
+        tgt_text: "",
       });
       setProject(fresh);
       useStore.getState().bump();
@@ -2715,22 +2751,118 @@ function InteractiveTimeline({
     } catch { /* ignore */ }
   };
 
+  const handleSplitSegment = async (seg: Project["segments"][number], splitT: number) => {
+    const cur = useStore.getState().project;
+    if (!cur) return;
+    const t = Math.max(seg.start + 0.1, Math.min(seg.end - 0.1, Math.round(splitT * 100) / 100));
+    const ratio = (t - seg.start) / Math.max(0.1, seg.end - seg.start);
+    const srcWords = (seg.src_text || "").trim().split(/\s+/);
+    const tgtWords = (seg.tgt_text || "").trim().split(/\s+/);
+    const srcSplitIdx = Math.max(1, Math.min(srcWords.length - 1, Math.round(srcWords.length * ratio)));
+    const tgtSplitIdx = Math.max(1, Math.min(tgtWords.length - 1, Math.round(tgtWords.length * ratio)));
+
+    const s1_src = srcWords.slice(0, srcSplitIdx).join(" ");
+    const s2_src = srcWords.slice(srcSplitIdx).join(" ");
+    const s1_tgt = tgtWords.slice(0, tgtSplitIdx).join(" ");
+    const s2_tgt = tgtWords.slice(tgtSplitIdx).join(" ");
+
+    useStore.getState().pushHistory(cur);
+    useStore.getState().setRendered(false);
+    try {
+      await api.patch(pid, { op: "segment", id: seg.id, start: seg.start, end: t, src_text: s1_src, tgt_text: s1_tgt });
+      const fresh = await api.patch(pid, {
+        op: "add_segment",
+        id: `u${Date.now().toString(36)}`,
+        start: t,
+        end: seg.end,
+        speaker: seg.speaker ?? "0",
+        src_text: s2_src,
+        tgt_text: s2_tgt,
+      });
+      setProject(fresh);
+      useStore.getState().bump();
+      playSfx("notify");
+    } catch { /* ignore */ }
+  };
+
+  const handleMergeNext = async (seg: Project["segments"][number]) => {
+    const cur = useStore.getState().project;
+    if (!cur) return;
+    const idx = cur.segments.findIndex((s) => s.id === seg.id);
+    if (idx < 0 || idx >= cur.segments.length - 1) return;
+    const next = cur.segments[idx + 1];
+    const mergedSrc = `${seg.src_text} ${next.src_text}`.trim();
+    const mergedTgt = `${seg.tgt_text} ${next.tgt_text}`.trim();
+    useStore.getState().pushHistory(cur);
+    useStore.getState().setRendered(false);
+    try {
+      await api.patch(pid, { op: "segment", id: seg.id, end: next.end, src_text: mergedSrc, tgt_text: mergedTgt });
+      const fresh = await api.patch(pid, { op: "del_segments", ids: [next.id] });
+      setProject(fresh);
+      useStore.getState().bump();
+      playSfx("notify");
+    } catch { /* ignore */ }
+  };
+
   const fmtTime = (s: number) =>
     `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}.${String(Math.floor((s % 1) * 10))}`;
 
+  const toggleMute = (track: "dub" | "bgm" | "vocals") => {
+    setTrackMutes((prev) => ({ ...prev, [track]: !prev[track] }));
+  };
+
+  const toggleSolo = (track: "dub" | "bgm" | "vocals") => {
+    setTrackSolos((prev) => {
+      const next = !prev[track];
+      if (next) {
+        if (track === "dub") setAudioMode("dub");
+        else if (track === "vocals") setAudioMode("vocals");
+        return { dub: track === "dub", bgm: track === "bgm", vocals: track === "vocals" };
+      } else {
+        setAudioMode("mix");
+        return { dub: false, bgm: false, vocals: false };
+      }
+    });
+  };
+
+  // Render waveform bar SVG helper
+  const renderWaveform = (peaks: number[], color: string, h: number) => {
+    if (!peaks.length) return null;
+    const bw = totalPx / peaks.length;
+    return (
+      <svg width={totalPx} height={h} className="block pointer-events-none w-full h-full">
+        {peaks.map((pk, i) => {
+          const bh = Math.max(2, Math.min(h - 2, pk * (h - 4)));
+          const played = (i / peaks.length) * total <= scrub;
+          return (
+            <rect
+              key={i}
+              x={(i / peaks.length) * totalPx}
+              y={(h - bh) / 2}
+              width={Math.max(1, bw - 0.5)}
+              height={bh}
+              fill={color}
+              opacity={played ? 0.9 : 0.4}
+            />
+          );
+        })}
+      </svg>
+    );
+  };
+
   return (
-    <div className="flex flex-col gap-1 w-full">
-      {/* Zoom Toolbar */}
+    <div className="flex flex-col gap-1.5 w-full select-none">
+      {/* Zoom & Track Legend Header */}
       <div className="flex items-center justify-between px-1 text-[11px] text-[var(--color-muted)]">
         <span className="font-semibold flex items-center gap-1.5">
-          <AudioLines size={13} className="text-[var(--color-accent)]" />
-          Таймлайн аудио и субтитров
+          <Layers size={13} className="text-[var(--color-accent)]" />
+          Мультитрек таймлайн
         </span>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setZoom((z) => Math.max(20, z - 15))}
             title="Отдалить (Zoom Out)"
-            className="p-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)]"
+            className="p-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors"
           >
             <ZoomOut size={13} />
           </button>
@@ -2738,131 +2870,260 @@ function InteractiveTimeline({
           <button
             onClick={() => setZoom((z) => Math.min(300, z + 15))}
             title="Приблизить (Zoom In)"
-            className="p-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)]"
+            className="p-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors"
           >
             <ZoomIn size={13} />
           </button>
         </div>
       </div>
 
-      {/* Scrollable Track Canvas Container */}
-      <div
-        ref={containerRef}
-        onWheel={handleWheel}
-        onPointerDown={(e) => {
-          if (e.button !== 0 || (e.target as HTMLElement).closest("[data-seg-block]")) return;
-          isTimelineDragging.current = true;
-          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-          onSeek(getT(e.clientX));
-        }}
-        onPointerMove={(e) => {
-          if (isTimelineDragging.current) {
-            onSeek(getT(e.clientX));
-          }
-        }}
-        onPointerUp={(e) => {
-          if (isTimelineDragging.current) {
-            isTimelineDragging.current = false;
-            try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
-          }
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          if (!trackRef.current) return;
-          const rect = trackRef.current.getBoundingClientRect();
-          const clickX = e.clientX - rect.left;
-          const tAt = Math.max(0, Math.min(total, (clickX / totalPx) * total));
-          setContextMenu({ x: e.clientX, y: e.clientY, tAt });
-        }}
-        className="relative w-full h-[114px] bg-[var(--color-surface-2)]/60 border border-[var(--color-border)] rounded-xl overflow-x-auto overflow-y-hidden select-none cursor-pointer touch-none"
-      >
-        <div ref={trackRef} className="relative h-full" style={{ width: `${totalPx}px` }}>
-          {/* Top Row: Waveform Background */}
-          <div className="absolute top-1.5 left-0 right-0 h-[50px] pointer-events-none">
-            <WaveformTimeline pid={pid} duration={duration} scrub={scrub} segments={segments} gainDb={0} onSeek={onSeek} />
+      {/* 4-Track DAW / NLE Container */}
+      <div className="flex w-full bg-[var(--color-surface-2)]/60 border border-[var(--color-border)] rounded-xl overflow-hidden shadow-inner">
+        {/* Left Sticky Track Headers (~110px) */}
+        <div className="w-[115px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)]/80 flex flex-col z-20">
+          {/* Time Ruler spacer */}
+          <div className="h-[20px] border-b border-[var(--color-border)] px-2 flex items-center text-[9px] font-bold text-[var(--color-muted)]">
+            ДОРОЖКИ
           </div>
 
-          {/* Bottom Row: Segment Audio & Subtitle Blocks */}
-          {segments.map((seg) => {
-            const leftPx = seg.start * zoom;
-            const widthPx = Math.max(36, (seg.end - seg.start) * zoom);
-            const isActive = scrub >= seg.start && scrub <= seg.end;
-            return (
-              <div
-                key={seg.id}
-                data-seg-block="true"
-                style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
-                onPointerDown={(e) => handlePointerDown(e, seg, "move")}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
-                }}
-                className={`absolute top-[56px] h-[48px] rounded-lg border flex items-center justify-between px-1 text-[11px] cursor-grab active:cursor-grabbing transition-colors shadow-md ${
-                  isActive
-                    ? "bg-[var(--color-accent)]/30 border-[var(--color-accent)] text-[var(--color-text)] ring-2 ring-[var(--color-accent)]/80 backdrop-blur"
-                    : "bg-[var(--color-surface-2)]/95 border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)]/70"
-                }`}
+          {/* Track 1 Header: 🎙️ Дубляж */}
+          <div className="h-[36px] border-b border-[var(--color-border)]/60 px-2 flex items-center justify-between text-[10.5px]">
+            <span className="font-medium text-emerald-400 truncate flex items-center gap-1" title="Дубляж (TTS)">
+              <Mic size={11} className="shrink-0" /> Дубляж
+            </span>
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => toggleMute("dub")}
+                title="Заглушить дубляж (Mute)"
+                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackMutes.dub ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
               >
-                {/* Left Trim Handle */}
-                <div
-                  onPointerDown={(e) => handlePointerDown(e, seg, "resize-left")}
-                  className="w-2 h-full bg-white/20 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-l-md flex items-center justify-center text-[8px] opacity-60 hover:opacity-100"
-                  title="Изменить начало"
-                >
-                  │
-                </div>
+                M
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleSolo("dub")}
+                title="Соло дубляж"
+                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackSolos.dub ? "bg-emerald-500/30 text-emerald-300 border border-emerald-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+              >
+                S
+              </button>
+            </div>
+          </div>
 
-                {/* Content: Play Button + Text + Speaker Badge */}
-                <div className="flex items-center gap-1.5 min-w-0 flex-1 px-1 overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onPlaySeg(seg);
-                    }}
-                    title="Прослушать фразу"
-                    className="p-1 rounded-md bg-[var(--color-accent)] text-[var(--color-on-accent)] shrink-0 hover:scale-105 transition-transform"
+          {/* Track 2 Header: 🎵 Фон / Музыка */}
+          <div className="h-[34px] border-b border-[var(--color-border)]/60 px-2 flex items-center justify-between text-[10.5px]">
+            <span className="font-medium text-purple-400 truncate flex items-center gap-1" title="Фоновая музыка (Instrumental)">
+              <Music size={11} className="shrink-0" /> Фон
+            </span>
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => toggleMute("bgm")}
+                title="Заглушить фоновую музыку (Mute)"
+                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackMutes.bgm ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+              >
+                M
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleSolo("bgm")}
+                title="Соло музыка"
+                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackSolos.bgm ? "bg-purple-500/30 text-purple-300 border border-purple-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+              >
+                S
+              </button>
+            </div>
+          </div>
+
+          {/* Track 3 Header: 🗣️ Вокал */}
+          <div className="h-[36px] border-b border-[var(--color-border)]/60 px-2 flex items-center justify-between text-[10.5px]">
+            <span className="font-medium text-cyan-400 truncate flex items-center gap-1" title="Оригинальный вокал">
+              <Users size={11} className="shrink-0" /> Вокал
+            </span>
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => toggleMute("vocals")}
+                title="Заглушить вокал (Mute)"
+                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackMutes.vocals ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+              >
+                M
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleSolo("vocals")}
+                title="Соло вокал"
+                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackSolos.vocals ? "bg-cyan-500/30 text-cyan-300 border border-cyan-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+              >
+                S
+              </button>
+            </div>
+          </div>
+
+          {/* Track 4 Header: 💬 Субтитры */}
+          <div className="h-[48px] px-2 flex items-center justify-between text-[10.5px]">
+            <span className="font-medium text-[var(--color-accent)] truncate flex items-center gap-1">
+              <Captions size={11} className="shrink-0" /> Субтитры
+            </span>
+            <span className="mono text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-bold">
+              {segments.length}
+            </span>
+          </div>
+        </div>
+
+        {/* Right Scrollable Timeline Canvas */}
+        <div
+          ref={containerRef}
+          onWheel={handleWheel}
+          onPointerDown={(e) => {
+            if (e.button !== 0 || (e.target as HTMLElement).closest("[data-seg-block]")) return;
+            isTimelineDragging.current = true;
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            onSeek(getT(e.clientX));
+          }}
+          onPointerMove={(e) => {
+            if (isTimelineDragging.current) {
+              onSeek(getT(e.clientX));
+            }
+          }}
+          onPointerUp={(e) => {
+            if (isTimelineDragging.current) {
+              isTimelineDragging.current = false;
+              try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+            }
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            if (!trackRef.current) return;
+            const rect = trackRef.current.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const tAt = Math.max(0, Math.min(total, (clickX / totalPx) * total));
+            setContextMenu({ x: e.clientX, y: e.clientY, tAt });
+          }}
+          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[174px]"
+        >
+          <div ref={trackRef} className="relative h-full" style={{ width: `${totalPx}px` }}>
+            {/* Top Time Ruler (20px) */}
+            <div className="h-[20px] border-b border-[var(--color-border)] relative pointer-events-none">
+              {Array.from({ length: Math.ceil(total / 5) + 1 }).map((_, i) => {
+                const sec = i * 5;
+                if (sec > total) return null;
+                return (
+                  <div
+                    key={sec}
+                    className="absolute top-0 bottom-0 flex items-center border-l border-[var(--color-border)]/60 pl-1 text-[9px] mono text-[var(--color-muted)]/70"
+                    style={{ left: `${sec * zoom}px` }}
                   >
-                    <Play size={11} />
-                  </button>
-                  {seg.speaker != null && (
-                    <span className="mono text-[9px] px-1 py-0.5 rounded bg-[var(--color-overlay)] text-[var(--color-muted)] shrink-0">
-                      SPK {seg.speaker}
-                    </span>
-                  )}
-                  <span className="font-medium truncate text-[11px] flex-1 leading-snug">
-                    {seg.tgt_text || seg.src_text}
-                  </span>
-                </div>
+                    {fmtTime(sec)}
+                  </div>
+                );
+              })}
+            </div>
 
-                {/* Right Trim Handle */}
-                <div
-                  onPointerDown={(e) => handlePointerDown(e, seg, "resize-right")}
-                  className="w-2 h-full bg-white/20 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-r-md flex items-center justify-center text-[8px] opacity-60 hover:opacity-100"
-                  title="Изменить конец"
-                >
-                  │
-                </div>
-              </div>
-            );
-          })}
+            {/* Track 1: 🎙️ Дубляж Canvas (36px) */}
+            <div className="h-[36px] border-b border-[var(--color-border)]/40 relative bg-emerald-950/10">
+              {renderWaveform(peaksDub.length ? peaksDub : peaksVocals, "#10b981", 36)}
+            </div>
 
-          {/* Red Playhead Line */}
-          <div
-            className="absolute top-0 bottom-0 w-0.5 bg-[var(--color-accent)] z-20 pointer-events-none shadow-[0_0_8px_var(--color-accent)]"
-            style={{ left: `${scrub * zoom}px` }}
-          />
+            {/* Track 2: 🎵 Фон / Музыка Canvas (34px) */}
+            <div className="h-[34px] border-b border-[var(--color-border)]/40 relative bg-purple-950/10">
+              {renderWaveform(peaksBgm, "#a855f7", 34)}
+            </div>
+
+            {/* Track 3: 🗣️ Вокал оригинала Canvas (36px) */}
+            <div className="h-[36px] border-b border-[var(--color-border)]/40 relative bg-cyan-950/10">
+              {renderWaveform(peaksVocals.length ? peaksVocals : peaksDub, "#06b6d4", 36)}
+            </div>
+
+            {/* Track 4: 💬 Субтитры Blocks (48px) */}
+            <div className="h-[48px] relative">
+              {segments.map((seg) => {
+                const leftPx = seg.start * zoom;
+                const widthPx = Math.max(36, (seg.end - seg.start) * zoom);
+                const isActive = scrub >= seg.start && scrub <= seg.end;
+                const spkNum = parseInt(seg.speaker ?? "0", 10) || 0;
+                const spkClass = SPK_BG_COLORS[spkNum % SPK_BG_COLORS.length];
+                const isLoop = loopSegId === seg.id;
+
+                return (
+                  <div
+                    key={seg.id}
+                    data-seg-block="true"
+                    style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
+                    onPointerDown={(e) => handlePointerDown(e, seg, "move")}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
+                    }}
+                    className={`absolute top-[3px] h-[42px] rounded-lg border flex items-center justify-between px-1 text-[11px] cursor-grab active:cursor-grabbing transition-all shadow-sm ${spkClass} ${
+                      isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 shadow-md" : ""
+                    } ${isLoop ? "border-amber-400 ring-1 ring-amber-400" : ""}`}
+                  >
+                    {/* Left Trim Handle */}
+                    <div
+                      onPointerDown={(e) => handlePointerDown(e, seg, "resize-left")}
+                      className="w-2.5 h-full bg-white/15 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-l-md flex items-center justify-center text-[7px] opacity-60 hover:opacity-100 transition-colors"
+                      title="Изменить начало (Drag to Trim)"
+                    >
+                      │
+                    </div>
+
+                    {/* Content: Play Button + Text + Speaker Badge */}
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1 px-1 overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPlaySeg(seg);
+                        }}
+                        title="Прослушать фразу"
+                        className="p-1 rounded-md bg-[var(--color-accent)] text-[var(--color-on-accent)] shrink-0 hover:scale-105 transition-transform"
+                      >
+                        <Play size={10} />
+                      </button>
+                      {seg.speaker != null && (
+                        <span className="mono text-[8.5px] px-1 py-0.5 rounded bg-black/40 text-white/90 font-bold shrink-0">
+                          SPK {seg.speaker}
+                        </span>
+                      )}
+                      <span className="font-medium truncate text-[11px] flex-1 leading-snug text-white/95">
+                        {seg.tgt_text || seg.src_text}
+                      </span>
+                    </div>
+
+                    {/* Right Trim Handle */}
+                    <div
+                      onPointerDown={(e) => handlePointerDown(e, seg, "resize-right")}
+                      className="w-2.5 h-full bg-white/15 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-r-md flex items-center justify-center text-[7px] opacity-60 hover:opacity-100 transition-colors"
+                      title="Изменить конец (Drag to Trim)"
+                    >
+                      │
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Vertical Golden Playhead Line across all 4 tracks */}
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-amber-300 z-30 pointer-events-none shadow-[0_0_10px_rgba(251,191,36,0.9)]"
+              style={{ left: `${scrub * zoom}px` }}
+            >
+              <div className="w-2.5 h-2.5 -ml-1 -top-0 bg-amber-400 rounded-b-sm" />
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Right Click Context Menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-accent)] shadow-2xl p-1.5 min-w-[210px] anim-pop flex flex-col gap-1"
-          style={{ left: Math.min(window.innerWidth - 220, contextMenu.x), top: Math.min(window.innerHeight - 140, contextMenu.y) }}
+          className="fixed z-50 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-accent)] shadow-2xl p-1.5 min-w-[230px] anim-pop flex flex-col gap-1"
+          style={{ left: Math.min(window.innerWidth - 240, contextMenu.x), top: Math.min(window.innerHeight - 200, contextMenu.y) }}
           onClick={(e) => e.stopPropagation()}
         >
           {contextMenu.seg ? (
@@ -2874,9 +3135,45 @@ function InteractiveTimeline({
                 }}
                 className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
               >
-                <Play size={14} className="text-[var(--color-accent)] shrink-0" />
-                <span>{t("timeline.playPhrase")}</span>
+                <Play size={13} className="text-[var(--color-accent)] shrink-0" />
+                <span>Воспроизвести фразу</span>
               </button>
+
+              <button
+                onClick={() => {
+                  setLoopSegId(loopSegId === contextMenu.seg!.id ? null : contextMenu.seg!.id);
+                  onPlaySeg(contextMenu.seg!);
+                  setContextMenu(null);
+                }}
+                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+              >
+                <Repeat size={13} className="text-amber-400 shrink-0" />
+                <span>{loopSegId === contextMenu.seg!.id ? "Отключить зацикливание" : "Зациклить фразу (Loop)"}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  handleSplitSegment(contextMenu.seg!, contextMenu.tAt);
+                  setContextMenu(null);
+                }}
+                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+              >
+                <Scissors size={13} className="text-cyan-400 shrink-0" />
+                <span>Разрезать по курсору ({fmtTime(contextMenu.tAt)})</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  handleMergeNext(contextMenu.seg!);
+                  setContextMenu(null);
+                }}
+                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+              >
+                <Link size={13} className="text-indigo-400 shrink-0" />
+                <span>Склеить со следующей</span>
+              </button>
+
+              <div className="h-px bg-[var(--color-border)] my-0.5" />
 
               <button
                 onClick={() => {
@@ -2885,11 +3182,9 @@ function InteractiveTimeline({
                 }}
                 className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-danger,#ef4444)]/20 text-[var(--color-danger,#ef4444)] flex items-center gap-2 text-[12px] font-medium transition-colors"
               >
-                <Trash2 size={14} className="shrink-0" />
-                <span>{t("timeline.deletePhrase")}</span>
+                <Trash2 size={13} className="shrink-0" />
+                <span>Удалить фразу</span>
               </button>
-
-              <div className="h-px bg-[var(--color-border)] my-0.5" />
 
               <button
                 onClick={() => {
@@ -2898,8 +3193,8 @@ function InteractiveTimeline({
                 }}
                 className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
               >
-                <Plus size={14} className="text-[var(--color-accent)] shrink-0" />
-                <span>{t("timeline.addPhraseHere", { time: fmtTime(contextMenu.tAt) })}</span>
+                <Plus size={13} className="text-[var(--color-accent)] shrink-0" />
+                <span>Вставить фразу здесь ({fmtTime(contextMenu.tAt)})</span>
               </button>
             </>
           ) : (
@@ -2910,8 +3205,8 @@ function InteractiveTimeline({
               }}
               className="w-full text-left px-3 py-2 rounded-lg bg-[var(--color-surface)] hover:bg-[var(--color-accent)] hover:text-[var(--color-on-accent)] flex items-center gap-2 text-[12px] font-medium transition-colors group"
             >
-              <Plus size={14} className="text-[var(--color-accent)] group-hover:text-current shrink-0" />
-              <span>{t("timeline.addPhraseHere", { time: fmtTime(contextMenu.tAt) })}</span>
+              <Plus size={13} className="text-[var(--color-accent)] group-hover:text-current shrink-0" />
+              <span>Вставить новую фразу ({fmtTime(contextMenu.tAt)})</span>
             </button>
           )}
         </div>
@@ -3124,6 +3419,13 @@ function Editor() {
   const [audioErr, setAudioErr] = useState(false);
   const audioPlayingRef = useRef(false);
 
+  // Audio Monitoring, speed & multi-track states
+  const [audioMode, setAudioMode] = useState<"mix" | "dub" | "vocals">("mix");
+  const [trackMutes, setTrackMutes] = useState({ dub: false, bgm: false, vocals: false });
+  const [trackSolos, setTrackSolos] = useState({ dub: false, bgm: false, vocals: false });
+  const [playSpeed, setPlaySpeed] = useState<number>(1.0);
+  const [loopSegId, setLoopSegId] = useState<string | null>(null);
+
   const playEndRef = useRef<number>(Infinity);                        // stop time for single-phrase playback (Infinity = full)
   const [dubRev, setDubRev] = useState(0);                            // dub-audio cache-buster — bumped ONLY when the dub track is re-rendered (regen/export), NOT on every edit, so live edits don't reload <audio> mid-playback
 
@@ -3141,6 +3443,10 @@ function Editor() {
   }, [vol, dubRev]);   // применить громкость прослушки (скорость звука ВСЕГДА 1.0x)
 
   // Dub playback & timeline driver:
+  // Effective audio URL based on monitoring mode
+  const currentAudioSrc = (audioMode === "vocals") ? api.audioVocalsUrl(pid) : api.dubUrl(pid, dubRev);
+  const effectiveVol = (audioMode === "dub" && trackMutes.dub) || (audioMode === "vocals" && trackMutes.vocals) ? 0 : vol;
+
   useEffect(() => {
     const a = audioRef.current;
     if (!play) {
@@ -3150,8 +3456,8 @@ function Editor() {
     }
     setRendered(false);
     if (a && hasDubTrack) {
-      a.playbackRate = 1.0;
-      a.volume = vol;
+      a.playbackRate = playSpeed;
+      a.volume = effectiveVol;
       if (Math.abs(a.currentTime - scrub) > 0.1) {
         a.currentTime = scrub;
       }
@@ -3170,6 +3476,14 @@ function Editor() {
 
     const id = window.setInterval(() => {
       if (audioPlayingRef.current && a && !a.paused) {
+        if (loopSegId) {
+          const lSeg = p.segments.find((s) => s.id === loopSegId);
+          if (lSeg && a.currentTime >= lSeg.end) {
+            a.currentTime = lSeg.start;
+            setScrub(lSeg.start);
+            return;
+          }
+        }
         if (a.currentTime >= playEndRef.current) {
           a.pause();
           setPlay(false);
@@ -3179,7 +3493,7 @@ function Editor() {
       }
     }, 40);
     return () => window.clearInterval(id);
-  }, [play, hasDubTrack, vol]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [play, hasDubTrack, effectiveVol, playSpeed, loopSegId, currentAudioSrc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [regenId, setRegenId] = useState<string | null>(null);        // segment whose TTS is being re-generated
   const [remixText, setRemixText] = useState("");                     // funny-remix theme/instruction for Gemma
   const [remixing, setRemixing] = useState(false);
@@ -3774,7 +4088,7 @@ function Editor() {
             </div>
           </div>
 
-          {/* Панель управления плеером прямо под видео (Transport Bar) */}
+          {/* Панель управления плеером прямо под видео (Audio Monitoring & Transport Bar) */}
           <div className="shrink-0 px-3 py-2 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl flex flex-col gap-2 shadow-sm">
             {/* Верхняя строка: Ползунок перемотки видео */}
             <input
@@ -3787,10 +4101,12 @@ function Editor() {
               className="w-full h-1.5 accent-[var(--color-accent)] cursor-pointer"
             />
 
-            {/* Нижняя строка: Кнопка Play, регулятор громкости и счетчик времени */}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
+            {/* Нижняя строка: Транспорт, Селектор звука, Тайминг, Скорость и Громкость */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
+              {/* Слева: Кнопки навигации и воспроизведения */}
+              <div className="flex items-center gap-1.5">
                 <button
+                  type="button"
                   onClick={playFull}
                   title={play ? "Пауза (Пробел)" : "Воспроизвести (Пробел)"}
                   className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all shadow-sm shrink-0 ${
@@ -3802,21 +4118,150 @@ function Editor() {
                   {play ? <Pause size={15} fill="currentColor" /> : <Play size={15} className="ml-0.5" fill="currentColor" />}
                 </button>
 
-                <audio
-                  ref={audioRef}
-                  src={hasDubTrack ? api.dubUrl(pid, dubRev) : undefined}
-                  onEnded={() => setPlay(false)}
-                  onError={() => {
-                    console.warn("Audio element error, falling back to video audio");
-                    setAudioErr(true);
-                    audioPlayingRef.current = false;
+                {/* Шаг по фразам */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const prev = [...p.segments].reverse().find((s) => s.start < scrub - 0.2);
+                    if (prev) onSeek(prev.start);
                   }}
-                  preload="auto"
-                  className="hidden"
-                />
+                  title="Предыдущая фраза"
+                  className="p-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] text-[var(--color-muted)] hover:text-white transition-colors shrink-0"
+                >
+                  <SkipBack size={13} />
+                </button>
 
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = p.segments.find((s) => s.start > scrub + 0.1);
+                    if (next) onSeek(next.start);
+                  }}
+                  title="Следующая фраза"
+                  className="p-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] text-[var(--color-muted)] hover:text-white transition-colors shrink-0"
+                >
+                  <SkipForward size={13} />
+                </button>
+
+                {/* Зацикливание фразы (Loop) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (loopSegId) {
+                      setLoopSegId(null);
+                    } else {
+                      const curSeg = p.segments.find((s) => scrub >= s.start && scrub <= s.end) || p.segments[0];
+                      if (curSeg) {
+                        setLoopSegId(curSeg.id);
+                        onSeek(curSeg.start);
+                        if (!play) setPlay(true);
+                      }
+                    }
+                  }}
+                  title={loopSegId ? "Отключить повтор фразы" : "Зациклить текущую фразу (Loop)"}
+                  className={`p-1.5 rounded-lg border transition-colors shrink-0 ${
+                    loopSegId
+                      ? "bg-amber-400/20 border-amber-400 text-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.3)]"
+                      : "bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-muted)] hover:text-white"
+                  }`}
+                >
+                  <Repeat size={13} />
+                </button>
+              </div>
+
+              {/* По центру: Быстрый селектор источника звука (Audio Monitoring Presets) */}
+              <div className="inline-flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[11.5px] shrink-0 shadow-inner">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAudioMode("mix");
+                    setTrackSolos({ dub: false, bgm: false, vocals: false });
+                  }}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                    audioMode === "mix" && !trackSolos.dub && !trackSolos.vocals
+                      ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold shadow-sm"
+                      : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                  title="Финальный микс (Дубляж + Музыка)"
+                >
+                  <Disc size={12} />
+                  <span>Микс</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAudioMode("dub");
+                    setTrackSolos({ dub: true, bgm: false, vocals: false });
+                  }}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                    audioMode === "dub" || trackSolos.dub
+                      ? "bg-emerald-500 text-black font-semibold shadow-sm"
+                      : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                  title="Только чистый русский голос"
+                >
+                  <Mic size={12} />
+                  <span>Дубляж</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAudioMode("vocals");
+                    setTrackSolos({ dub: false, bgm: false, vocals: true });
+                  }}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                    audioMode === "vocals" || trackSolos.vocals
+                      ? "bg-cyan-500 text-black font-semibold shadow-sm"
+                      : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                  title="Только чистый оригинальный голос"
+                >
+                  <Users size={12} />
+                  <span>Вокал</span>
+                </button>
+              </div>
+
+              {/* Справа: Точный таймкод, Скорость (0.25x-2.0x) и Громкость */}
+              <div className="flex items-center gap-2 shrink-0">
+                {/* Точный таймкод с миллисекундами */}
+                <div className="mono text-[11px] tabnum px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg shadow-inner">
+                  <span className="text-[var(--color-accent)] font-semibold">
+                    {`${Math.floor(scrub / 60)}:${String(Math.floor(scrub % 60)).padStart(2, "0")}.${String(Math.floor((scrub % 1) * 1000)).padStart(3, "0")}`}
+                  </span>
+                  <span className="text-[var(--color-muted)]">
+                    {` / ${Math.floor((p.meta.duration || 0) / 60)}:${String(Math.floor((p.meta.duration || 0) % 60)).padStart(2, "0")}`}
+                  </span>
+                </div>
+
+                {/* Селектор скорости */}
+                <select
+                  value={playSpeed}
+                  onChange={(e) => {
+                    const s = parseFloat(e.target.value);
+                    setPlaySpeed(s);
+                    if (audioRef.current) audioRef.current.playbackRate = s;
+                  }}
+                  title="Скорость воспроизведения (0.25x - 2.0x)"
+                  className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2 py-1 text-[11px] font-bold text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none cursor-pointer"
+                >
+                  <option value={0.25}>0.25x</option>
+                  <option value={0.5}>0.5x</option>
+                  <option value={0.75}>0.75x</option>
+                  <option value={1.0}>1.0x</option>
+                  <option value={1.25}>1.25x</option>
+                  <option value={1.5}>1.5x</option>
+                  <option value={2.0}>2.0x</option>
+                </select>
+
+                {/* Громкость */}
                 <div className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg text-xs" title={t("play.volume")}>
-                  <Music size={13} className="text-[var(--color-muted)]" />
+                  {effectiveVol === 0 ? (
+                    <VolumeX size={13} className="text-red-400" />
+                  ) : (
+                    <Volume2 size={13} className="text-[var(--color-muted)]" />
+                  )}
                   <input
                     type="range"
                     min={0}
@@ -3829,22 +4274,30 @@ function Editor() {
                       if (audioRef.current) audioRef.current.volume = v;
                       localStorage.setItem("dub-vol", String(v));
                     }}
-                    className="w-16 accent-[var(--color-accent)] cursor-pointer"
+                    className="w-14 accent-[var(--color-accent)] cursor-pointer"
                   />
                 </div>
               </div>
-
-              <div className="mono text-[12px] tabnum px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg shadow-inner">
-                <span className="text-[var(--color-accent)] font-semibold">{fmtT(scrub)}</span>
-                <span className="text-[var(--color-muted)]"> / {fmtT(p.meta.duration || 0)}</span>
-              </div>
             </div>
+
+            <audio
+              ref={audioRef}
+              src={hasDubTrack ? currentAudioSrc : undefined}
+              onEnded={() => setPlay(false)}
+              onError={() => {
+                console.warn("Audio element error, falling back to video audio");
+                setAudioErr(true);
+                audioPlayingRef.current = false;
+              }}
+              preload="auto"
+              className="hidden"
+            />
           </div>
 
-          {/* Интерактивный таймлайн снизу (в стиле ElevenLabs / NLE): визуализация плашек фраз + перетаскивание / растягивание */}
+          {/* 4-дорожечный профессиональный таймлайн снизу */}
           {!audioOnly && (
             <div className="shrink-0 pb-1">
-              <InteractiveTimeline
+              <MultiTrackTimeline
                 pid={pid}
                 duration={p.meta.duration || 0}
                 scrub={scrub}
@@ -3853,6 +4306,14 @@ function Editor() {
                 onSeek={onSeek}
                 onPlaySeg={playSeg}
                 setProject={setProject}
+                trackMutes={trackMutes}
+                setTrackMutes={setTrackMutes}
+                trackSolos={trackSolos}
+                setTrackSolos={setTrackSolos}
+                audioMode={audioMode}
+                setAudioMode={setAudioMode}
+                loopSegId={loopSegId}
+                setLoopSegId={setLoopSegId}
               />
             </div>
           )}
