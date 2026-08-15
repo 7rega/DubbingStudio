@@ -2646,18 +2646,31 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         }
 
         if let Ok((samples, sr)) = wavio::read_mono_f32(&wav_path) {
-            let cfg = dub_asr::WindowConfig::default();
+            let mut cfg = dub_asr::WindowConfig::default();
+            cfg.frame_sec = 0.020; // 20мс кадр для высокой точности
+            cfg.rel_threshold = 0.06; // чувствительность к тихим словам вроде "Hey" и шёпоту
+            cfg.min_silence = 0.20; // 200мс пауза для разделения слов
+            cfg.min_speech = 0.08; // 80мс минимальная речь (не отсекает короткие междометия)
             let (env, _) = dub_asr::speech_envelope(&samples, sr, cfg.frame_sec);
             let spans = dub_asr::detect_active_spans(&env, cfg.frame_sec, &cfg);
             if !spans.is_empty() {
-                const MAX_DRIFT: f64 = 1.5;
                 let mut last_end = 0.0f64;
                 for seg in &mut proj.segments {
                     let s_center = (seg.start + seg.end) / 2.0;
-                    // Фильтруем спаны строго в локальной окрестности ±1.5с от текущего субтитра
+                    let seg_len = (seg.end - seg.start).max(0.1);
+                    // Адаптивный лимит дрейфа: короткие фразы не могут улететь дальше ±0.35..0.85с
+                    let max_drift = (seg_len * 0.6).clamp(0.35, 0.85);
+
+                    // Фильтруем спаны: обязательное физическое пересечение или очень близкое соседство
                     let local_spans: Vec<&(f64, f64)> = spans
                         .iter()
-                        .filter(|span| (span.0 - seg.start).abs() <= MAX_DRIFT || (span.1 - seg.end).abs() <= MAX_DRIFT || (span.0 <= seg.end && span.1 >= seg.start))
+                        .filter(|span| {
+                            let overlap = (span.1.min(seg.end) - span.0.max(seg.start)).max(0.0);
+                            if overlap > 0.01 {
+                                return true;
+                            }
+                            (span.0 - seg.start).abs() <= max_drift && (span.1 - seg.end).abs() <= max_drift
+                        })
                         .collect();
 
                     let best = local_spans.iter().max_by(|a, b| {
@@ -2673,10 +2686,17 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
                     });
 
                     if let Some(span) = best {
+                        let overlap = (span.1.min(seg.end) - span.0.max(seg.start)).max(0.0);
+                        let span_center = (span.0 + span.1) / 2.0;
+                        if overlap <= 0.0 && (span_center - s_center).abs() > max_drift {
+                            last_end = seg.end;
+                            continue;
+                        }
+
                         let new_start = (span.0 - 0.05).max(last_end).max(0.0);
                         let new_end = (span.1 + 0.05).max(new_start + 0.1);
-                        if (new_start - seg.start).abs() <= MAX_DRIFT && (new_end - seg.end).abs() <= MAX_DRIFT {
-                            if (seg.start - new_start).abs() > 0.03 || (seg.end - new_end).abs() > 0.03 {
+                        if (new_start - seg.start).abs() <= max_drift && (new_end - seg.end).abs() <= max_drift {
+                            if (seg.start - new_start).abs() > 0.02 || (seg.end - new_end).abs() > 0.02 {
                                 seg.start = (new_start * 100.0).round() / 100.0;
                                 seg.end = (new_end * 100.0).round() / 100.0;
                                 seg.dirty = true;

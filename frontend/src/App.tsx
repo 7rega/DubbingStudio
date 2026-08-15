@@ -3122,11 +3122,14 @@ function MultiTrackTimeline({
             <div className="h-[74px] relative pb-6">
               {visibleSegments.map((seg) => {
                 const leftPx = seg.start * zoom;
-                const widthPx = Math.max(42, (seg.end - seg.start) * zoom);
+                const rawWidthPx = (seg.end - seg.start) * zoom;
+                const widthPx = Math.max(14, rawWidthPx);
                 const isActive = scrub >= seg.start && scrub <= seg.end;
                 const spkNum = parseInt(seg.speaker ?? "0", 10) || 0;
                 const spkClass = SPK_BG_COLORS[spkNum % SPK_BG_COLORS.length];
                 const isLoop = loopSegId === seg.id;
+                const isCompact = widthPx < 55;
+                const isTiny = widthPx < 30;
 
                 return (
                   <div
@@ -3141,50 +3144,50 @@ function MultiTrackTimeline({
                       e.stopPropagation();
                       setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
                     }}
-                    className={`absolute top-[5px] h-[46px] rounded-lg border flex items-center justify-between px-1 text-[11px] cursor-grab active:cursor-grabbing transition-all ${spkClass} ${
+                    className={`group/seg absolute top-[5px] h-[46px] rounded-md border flex items-center justify-between text-[11px] cursor-grab active:cursor-grabbing transition-all overflow-hidden ${spkClass} ${
                       isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""
                     } ${isLoop ? "border-amber-400 ring-2 ring-amber-400" : ""}`}
                   >
-                    {/* Left Trim Handle */}
+                    {/* Left Trim Handle (sleek micro-handle on hover) */}
                     <div
                       onPointerDown={(e) => handlePointerDown(e, seg, "resize-left")}
-                      className="w-2.5 h-full bg-white/20 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-l-md flex items-center justify-center text-[7px] opacity-70 hover:opacity-100 transition-colors"
+                      className="w-1.5 h-full hover:w-2.5 bg-white/10 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 transition-all z-10"
                       title="Изменить начало (Drag to Trim)"
-                    >
-                      │
-                    </div>
+                    />
 
                     {/* Content: Play Button + Text + Speaker Badge */}
-                    <div className="flex items-center gap-1.5 min-w-0 flex-1 px-1 overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onPlaySeg(seg);
-                        }}
-                        title="Прослушать фразу"
-                        className="p-1 rounded-md bg-[var(--color-accent)] text-[var(--color-on-accent)] shrink-0 hover:scale-105 transition-transform"
-                      >
-                        <Play size={10} fill="currentColor" />
-                      </button>
-                      {seg.speaker != null && (
-                        <span className="mono text-[9px] px-1 py-0.5 rounded bg-black/50 text-white font-bold shrink-0 shadow-sm">
+                    <div className="flex items-center gap-1 min-w-0 flex-1 px-1 overflow-hidden pointer-events-none">
+                      {!isTiny && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onPlaySeg(seg);
+                          }}
+                          title="Прослушать фразу"
+                          className="p-1 rounded bg-[var(--color-accent)] text-[var(--color-on-accent)] shrink-0 hover:scale-105 transition-transform pointer-events-auto"
+                        >
+                          <Play size={9} fill="currentColor" />
+                        </button>
+                      )}
+                      {!isCompact && seg.speaker != null && (
+                        <span className="mono text-[8.5px] px-1 py-0.5 rounded bg-black/50 text-white font-bold shrink-0 shadow-sm">
                           SPK {seg.speaker}
                         </span>
                       )}
-                      <span className="font-medium truncate text-[11.5px] flex-1 leading-snug text-white drop-shadow-sm">
-                        {seg.tgt_text || seg.src_text}
-                      </span>
+                      {!isTiny && (
+                        <span className="font-medium truncate text-[11px] flex-1 leading-snug text-white drop-shadow-sm">
+                          {seg.tgt_text || seg.src_text}
+                        </span>
+                      )}
                     </div>
 
                     {/* Right Trim Handle */}
                     <div
                       onPointerDown={(e) => handlePointerDown(e, seg, "resize-right")}
-                      className="w-2.5 h-full bg-white/20 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-r-md flex items-center justify-center text-[7px] opacity-70 hover:opacity-100 transition-colors"
+                      className="w-1.5 h-full hover:w-2.5 bg-white/10 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 transition-all z-10"
                       title="Изменить конец (Drag to Trim)"
-                    >
-                      │
-                    </div>
+                    />
                   </div>
                 );
               })}
