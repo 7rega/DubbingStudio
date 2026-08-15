@@ -182,6 +182,10 @@ export const api = {
   originalUrl: (pid: string, t: number) => `${BASE}/projects/${pid}/original?t=${t}`,
   sourceVideoUrl: (pid: string) => `${BASE}/projects/${pid}/source-video`,
   waveform: (pid: string) => getJson<{ peaks: number[] }>(`/projects/${pid}/waveform`),
+  waveformTrack: (pid: string, track: "vocals" | "bgm" | "dub" | "master" = "master") => getJson<{ peaks: number[] }>(`/projects/${pid}/waveform?track=${track}`),
+  audioVocalsUrl: (pid: string) => `${BASE}/projects/${pid}/audio-vocals`,
+  audioBgmUrl: (pid: string) => `${BASE}/projects/${pid}/audio-bgm`,
+  audioDubCleanUrl: (pid: string) => `${BASE}/projects/${pid}/audio-dub-clean`,
   outputUrl: (pid: string) => `${BASE}/projects/${pid}/output`,
   openOutput: (pid: string) => fetch(`${BASE}/projects/${pid}/open`, { method: "POST" }).then(j<{ ok: boolean }>),   // открыть output.mp4 в системном плеере (нативный webview не открывает target=_blank)
   reveal: (pid: string, name: string) => postJson<{ ok: boolean }>(`/projects/${pid}/reveal`, { name }),   // показать файл в проводнике с выделением

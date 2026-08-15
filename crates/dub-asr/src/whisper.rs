@@ -111,9 +111,16 @@ impl WhisperAsr {
         }
     }
 
-    /// Авто-выбор пути: короткий файл (< PAR_MIN_DUR) — монолитный прогон КАК РАНЬШЕ (паритет);
-    /// длинный — параллельные окна (N сабпроцессов whisper-faster на CPU-ядра, см. run_words_windowed).
+    /// Авто-выбор пути:
+    /// - WhisperXXL: ВСЕГДА монолитный прогон (1 процесс на весь файл) без нарезки,
+    ///   использует нативный --batched + Silero VAD и пользовательские флаги из UI.
+    /// - Классический Faster-Whisper: короткий файл (< PAR_MIN_DUR) — монолитный прогон;
+    ///   длинный (>= PAR_MIN_DUR) — параллельные 5-минутные окна (2 потока на GPU, до PAR_MAX_WORKERS на CPU).
     fn run_words_auto(&self, wav: &Path, lang: &str) -> Result<Vec<Word>, AsrError> {
+        let is_xxl = self.bin.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.to_ascii_lowercase().contains("xxl"));
+        if is_xxl {
+            return self.run_words(wav, lang, None);
+        }
         let dur = wav_duration_secs(wav).unwrap_or(0.0);
         if dur < PAR_MIN_DUR {
             return self.run_words(wav, lang, None);
@@ -152,15 +159,11 @@ impl WhisperAsr {
         std::fs::create_dir_all(&tmp_dir).map_err(|e| AsrError::Io(e.to_string()))?;
 
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
-        // Для CUDA каждый процесс грузит модель в себя в VRAM (large-v3 ≈ 3Гб). И если GPU уже нагружен
-        // видео-процессом - 2 потока; для CPU - до PAR_MAX_WORKERS.
-        // XXL --batched уже параллелит через Silero VAD окна пачками внутри одного процесса,
-        // второй CUDA-процесс только дублирует загрузку модели в VRAM → OOM на 8Гб картах.
-        // Исключение: чистый large-v3 слишком тяжелый, 4 копии вызовут OOM в RAM (12+ Гб) и дикий троттлинг кэша.
+        // Для CUDA каждый процесс грузит модель в себя в VRAM (large-v3 ≈ 3Гб) - 2 потока;
+        // для CPU - до PAR_MAX_WORKERS (при тяжелой large-v3 - 2 воркера во избежание насыщения RAM).
         let is_heavy = self.model.contains("large") && !self.model.contains("turbo");
-        let is_xxl_bin = self.bin.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.to_ascii_lowercase().contains("xxl"));
         let max_workers = if self.device == "cuda" {
-            if is_xxl_bin { 1 } else { 2 }
+            2
         } else {
             if is_heavy { 2 } else { PAR_MAX_WORKERS }
         };
@@ -261,7 +264,8 @@ impl WhisperAsr {
             .arg("--compute_type").arg(&self.compute)
             .arg("--device").arg(&self.device)
             .arg("--word_timestamps").arg("True")
-            .arg("--beep_off");
+            .arg("--beep_off")
+            .arg("--print_progress");
         // Анти-галлюцинации (ENGINES_FINDINGS §3, arxiv 2501.11378: VAD до декодера = 0.2% галлюцинаций
         // против 21.3%; condition_on_previous_text тянет «Субтитры создавал…» через паузы; temp-fallback
         // на no_speech = петли). Флаги подтверждены по --help нашего XXL r245.4.
@@ -276,6 +280,10 @@ impl WhisperAsr {
                     }
                 }
             }
+        } else {
+            // Для классического faster-whisper (не XXL) жестко включаем Silero VAD и защиту от зацикливания
+            cmd.arg("--vad_filter").arg("True")
+                .arg("--condition_on_previous_text").arg("False");
         }
         // Явные CPU-потоки (флаг есть в v1.0.1): оконная параллель делит ядра между сабпроцессами.
         if let Some(n) = threads {
@@ -298,20 +306,20 @@ impl WhisperAsr {
         }
         let out = cmd.output().map_err(|e| AsrError::Parakeet(format!("whisper spawn: {e}")))?;
         if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stdout = String::from_utf8_lossy(&out.stdout);
             // АВТО-ФОЛБЭК cuda -> cpu: дефолт девайса теперь cuda (быстрее в разы на NVIDIA), но на
             // машине без CUDA/либ сабпроцесс падает — повторяем ОДИН раз на cpu с безопасным int8
             // (float16 на CPU роняет CTranslate2 — гард #41). device=="cpu" сюда не зайдёт (нет рекурсии).
             if self.device == "cuda" {
-                eprintln!("[whisper] CUDA failed for run_words, falling back to CPU/int8");
+                eprintln!("[whisper] CUDA failed (code {:?}), falling back to CPU/int8.\n[whisper] stderr: {}\n[whisper] stdout: {}", out.status.code(), stderr.trim(), stdout.trim());
                 let mut fb = self.clone();
                 fb.device = "cpu".into();
                 if matches!(fb.compute.as_str(), "float16" | "bfloat16" | "int8_float16" | "int8_bfloat16") {
                     fb.compute = "int8".into();
                 }
-                return fb.run_words(wav, lang, threads);
+                return fb.run_words_auto(wav, lang);
             }
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let stdout = String::from_utf8_lossy(&out.stdout);
             let mut tail: Vec<&str> = stderr.lines().chain(stdout.lines()).rev().take(10).collect();
             tail.reverse();
             return Err(AsrError::Parakeet(format!(
@@ -373,7 +381,8 @@ impl AsrEngine for WhisperAsr {
             .arg("--output_dir").arg(&out_dir)
             .arg("--compute_type").arg(&self.compute)
             .arg("--device").arg(&self.device)
-            .arg("--beep_off");
+            .arg("--beep_off")
+            .arg("--print_progress");
 
         let l = lang.trim();
         if !l.is_empty() && l != "auto" {

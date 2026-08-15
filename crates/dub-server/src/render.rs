@@ -722,15 +722,15 @@ fn build_dub(
             return None; // пак — фикс-голос юзера, эмоцию источника не переносим
         }
         let key = s.speaker.as_deref().unwrap_or("0");
-        if (s.end - s.start) < REF_MIN_AFTER_TRIM {
-            return None; // слишком коротко для отдельного рефа
+        if (s.end - s.start) < 1.0 {
+            return None; // слишком коротко (< 1.0с) для отдельного рефа
         }
         if !seg_is_clean(s, key, &segs) {
             return None; // оверлап чужого спикера -> не чистый эмоц-реф
         }
         let out = wd.join(format!("emoref_{sid}.wav"));
         // кап длины сверху ref_secs (не раздувать prefill-граф Higgs), как для identity-рефа.
-        let cap = paths.ref_secs.min(REF_IDEAL_HI).max(REF_MIN_AFTER_TRIM);
+        let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
         let end = s.end.min(s.start + cap);
         match media::trim(&vocals16, &out, s.start, end.max(s.start + 0.05), 16_000) {
             Ok(()) => Some(out),
@@ -943,6 +943,8 @@ fn build_dub(
             emit(progress, "tts", &format!("облачный TTS: пре-синтез готов ({ok} сегментов)"));
         }
     }
+    let dirty_total = dirty_count;
+    let mut synth_counter = 0usize;
     for &(fi, s) in segs.iter() {
         // Кэш-файл сегмента — ПО ЕГО ID, не по индексу fi. Кэш переиспользуется между рендерами (не-dirty
         // сегменты не ре-синтезируются). При индекс-имени удаление/перестановка сегмента сдвигает индексы —
@@ -974,6 +976,8 @@ fn build_dub(
         // (объявлен на уровне итерации: ниже гейтит и ASR-QC этого сегмента).
         let mut kept_original = false;
         if need_synth {
+            synth_counter += 1;
+            emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (сегмент #{})", fi + 1));
             if cloud_tts_on {
             // Облачный TTS: wav-байты OpenRouter пишем ПРЯМО в seg-файл (без декода/перекодировки).
             // Голос — из автокастинга по полу спикера (пусто -> дефолт настроек). Провал -> оригинал
@@ -1100,7 +1104,7 @@ fn build_dub(
                                 break (Vec::new(), 24_000);
                             }
                         }
-                        emit(progress, "tts", &format!("сегмент {fi}: {e} — регенерация ({}/{})", attempt + 1, MAX_TTS_ATTEMPTS));
+                        emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (сегмент #{}) — {e} (попытка {}/{})", fi + 1, attempt + 1, MAX_TTS_ATTEMPTS));
                         std::thread::sleep(Duration::from_millis(1000));
                         continue;
                     }
@@ -1117,14 +1121,16 @@ fn build_dub(
                             // избегая сброса на оригинальный вокал.
                             if let Some((sm, r, rng)) = best_bad.take() {
                                 emit(progress, "tts", &format!(
-                                    "⚠ сегмент {fi}: все {MAX_TTS_ATTEMPTS} попыток с дефектом ({kind}) — взята сгенерированная озвучка (размах {rng:.0} дБ)"
+                                    "⚠ сегмент #{}: все {MAX_TTS_ATTEMPTS} попыток с дефектом ({kind}) — взята сгенерированная озвучка (размах {rng:.0} дБ)",
+                                    fi + 1
                                 ));
                                 break (sm, r);
                             } else {
                                 media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
                                 kept_original = true;
                                 emit(progress, "tts", &format!(
-                                    "⚠ сегмент {fi}: {MAX_TTS_ATTEMPTS} попыток без звука — подставлен оригинал"
+                                    "⚠ сегмент #{}: {MAX_TTS_ATTEMPTS} попыток без звука — подставлен оригинал",
+                                    fi + 1
                                 ));
                                 break (Vec::new(), sr);
                             }
@@ -1132,7 +1138,7 @@ fn build_dub(
                         retried = true;
                         total_retries += 1;
                         let via = if attempt >= 3 { "альт-реф" } else { "temp-бамп" };
-                        emit(progress, "tts", &format!("сегмент {fi}: дефект синтеза ({kind}), регенерация ({via} {}/{})", attempt + 1, MAX_TTS_ATTEMPTS));
+                        emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (сегмент #{}) — дефект ({kind}), регенерация ({via} {}/{})", fi + 1, attempt + 1, MAX_TTS_ATTEMPTS));
                     }
                 }
             };

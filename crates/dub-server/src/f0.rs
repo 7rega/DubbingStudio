@@ -130,6 +130,152 @@ fn median(v: &mut [f64]) -> f64 {
     }
 }
 
+/// Минимальная длительность речи (сек) для надежного замера F0 сегмента.
+const MIN_VOICED_SEG_SEC: f64 = 0.5;
+
+/// Автоматическая корректировка спикеров в сегментах проекта на основе высоты тона (F0).
+/// Если реплика девушки (~210 Гц) ошибочно приписана мужчине (~120 Гц) (или наоборот),
+/// алгоритм переназначает фразу соответствующему спикеру нужного пола либо выделяет нового спикера.
+///
+/// max_speakers: 0 = авто (создание максимум 1 дополнительного спикера каждого пола при необходимости),
+/// 1 = монолог (гарантирует ровно 1 спикера "0"), 2..=8 = жесткий лимит числа спикеров.
+pub fn fix_cross_gender_segments(segs: &mut [dub_core::Segment], vocals_path: &std::path::Path, max_speakers: usize) {
+    use std::collections::{HashMap, HashSet};
+
+    if segs.is_empty() {
+        return;
+    }
+
+    // Принудительный монолог — никаких дополнительных спикеров и переназначений
+    if max_speakers == 1 {
+        for s in segs.iter_mut() {
+            s.speaker = Some("0".to_string());
+        }
+        return;
+    }
+
+    let (samples, sr) = match crate::wavio::read_mono_f32(vocals_path) {
+        Ok(res) => res,
+        Err(_) => return, // нет аудио — ничего не меняем
+    };
+    if samples.is_empty() || sr == 0 {
+        return;
+    }
+
+    // 1) Замеряем F0 для всех сегментов достаточной длины
+    let mut seg_f0s: HashMap<usize, f64> = HashMap::new();
+    for (idx, seg) in segs.iter().enumerate() {
+        let dur = seg.end - seg.start;
+        if dur < MIN_VOICED_SEG_SEC {
+            continue;
+        }
+        let start_sample = ((seg.start * sr as f64).round() as usize).min(samples.len());
+        let end_sample = ((seg.end * sr as f64).round() as usize).min(samples.len());
+        if end_sample <= start_sample + (sr as f64 * 0.2) as usize {
+            continue;
+        }
+        if let Some(f0) = median_f0(&samples[start_sample..end_sample], sr) {
+            seg_f0s.insert(idx, f0);
+        }
+    }
+
+    // 2) Вычисляем преобладающий пол для каждого спикера
+    let mut speaker_pitches: HashMap<String, Vec<f64>> = HashMap::new();
+    for (idx, seg) in segs.iter().enumerate() {
+        let spk = seg.speaker.clone().unwrap_or_else(|| "0".to_string());
+        if let Some(&f0) = seg_f0s.get(&idx) {
+            speaker_pitches.entry(spk).or_default().push(f0);
+        }
+    }
+
+    let mut speaker_gender: HashMap<String, Gender> = HashMap::new();
+    for (spk, mut pitches) in speaker_pitches {
+        if pitches.is_empty() {
+            continue;
+        }
+        let med = median(&mut pitches);
+        speaker_gender.insert(spk, gender_of(med));
+    }
+
+    if speaker_gender.is_empty() {
+        return;
+    }
+
+    // 3) Находим спикеров под каждый пол (для переназначения)
+    let mut male_speakers: Vec<String> = speaker_gender
+        .iter()
+        .filter(|&(_, &g)| g == Gender::Male)
+        .map(|(s, _)| s.clone())
+        .collect();
+    let mut female_speakers: Vec<String> = speaker_gender
+        .iter()
+        .filter(|&(_, &g)| g == Gender::Female)
+        .map(|(s, _)| s.clone())
+        .collect();
+
+    // Сортировка для детерминизма
+    male_speakers.sort();
+    female_speakers.sort();
+
+    // 4) Проверяем каждый сегмент на несовпадение пола со своим спикером
+    let mut next_spk_id = segs
+        .iter()
+        .filter_map(|s| s.speaker.as_deref())
+        .filter_map(|s| s.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1;
+
+    let mut current_unique: HashSet<String> = segs
+        .iter()
+        .filter_map(|s| s.speaker.clone())
+        .collect();
+
+    for (idx, seg) in segs.iter_mut().enumerate() {
+        let current_spk = seg.speaker.clone().unwrap_or_else(|| "0".to_string());
+        let current_spk_gender = match speaker_gender.get(&current_spk) {
+            Some(&g) => g,
+            None => continue,
+        };
+
+        if let Some(&f0) = seg_f0s.get(&idx) {
+            let seg_gender = gender_of(f0);
+            // Четкий порог для предотвращения ложных переключений на серых зонах / интонациях
+            let is_strongly_cross = match (current_spk_gender, seg_gender) {
+                (Gender::Male, Gender::Female) => f0 > 175.0,
+                (Gender::Female, Gender::Male) => f0 < 145.0,
+                _ => false,
+            };
+
+            if is_strongly_cross {
+                if seg_gender == Gender::Female {
+                    if let Some(target_spk) = female_speakers.first() {
+                        seg.speaker = Some(target_spk.clone());
+                    } else if max_speakers == 0 || current_unique.len() < max_speakers {
+                        let new_id = format!("{next_spk_id}");
+                        next_spk_id += 1;
+                        female_speakers.push(new_id.clone());
+                        speaker_gender.insert(new_id.clone(), Gender::Female);
+                        current_unique.insert(new_id.clone());
+                        seg.speaker = Some(new_id);
+                    }
+                } else if seg_gender == Gender::Male {
+                    if let Some(target_spk) = male_speakers.first() {
+                        seg.speaker = Some(target_spk.clone());
+                    } else if max_speakers == 0 || current_unique.len() < max_speakers {
+                        let new_id = format!("{next_spk_id}");
+                        next_spk_id += 1;
+                        male_speakers.push(new_id.clone());
+                        speaker_gender.insert(new_id.clone(), Gender::Male);
+                        current_unique.insert(new_id.clone());
+                        seg.speaker = Some(new_id);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +328,39 @@ mod tests {
     fn empty_and_zero_sr() {
         assert!(median_f0(&[], 16_000).is_none());
         assert!(median_f0(&sine(120.0, 0.5, 16_000), 0).is_none());
+    }
+
+    #[test]
+    fn fix_cross_gender_monologue_preserves_single_speaker() {
+        let mut segs = vec![
+            dub_core::Segment {
+                id: "s0".into(),
+                start: 0.0,
+                end: 2.0,
+                speaker: Some("0".into()),
+                src_text: "test".into(),
+                tgt_text: "".into(),
+                voice: None,
+                dirty: false,
+                ckpt: None,
+                extra: Default::default(),
+            },
+            dub_core::Segment {
+                id: "s1".into(),
+                start: 2.0,
+                end: 4.0,
+                speaker: Some("0".into()),
+                src_text: "test2".into(),
+                tgt_text: "".into(),
+                voice: None,
+                dirty: false,
+                ckpt: None,
+                extra: Default::default(),
+            },
+        ];
+        let p = std::path::Path::new("dummy.wav");
+        fix_cross_gender_segments(&mut segs, p, 1);
+        assert_eq!(segs[0].speaker.as_deref(), Some("0"));
+        assert_eq!(segs[1].speaker.as_deref(), Some("0"));
     }
 }

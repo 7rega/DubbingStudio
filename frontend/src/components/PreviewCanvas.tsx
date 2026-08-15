@@ -20,6 +20,7 @@ type Props = {
   playing?: boolean;
   vol?: number;
   audioMuted?: boolean;
+  playbackRate?: number;
   onTimeUpdate?: (currentTime: number) => void;
   onEnded?: () => void;
   onChanged: (fresh: Project) => void;
@@ -110,6 +111,7 @@ export default function PreviewCanvas({
   playing = false,
   vol = 1,
   audioMuted = true,
+  playbackRate = 1.0,
   onTimeUpdate,
   onEnded,
   onChanged,
@@ -133,14 +135,27 @@ export default function PreviewCanvas({
   const sx = disp.w / vw, sy = disp.h / vh;
   const previewSrc = rendered ? api.outputUrl(pid) : api.previewUrl(pid, scrub, rev);
 
+  // Синхронизация скорости видеоплеера и питча
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.playbackRate = playbackRate;
+    try {
+      (v as any).preservesPitch = true;
+      (v as any).mozPreservesPitch = true;
+      (v as any).webkitPreservesPitch = true;
+    } catch {}
+  }, [playbackRate]);
+
   // Синхронизация нативного видеоплеера при плее/паузе/перемотке (Pure HTML5 Video)
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
     v.muted = audioMuted;
     v.volume = vol;
+    v.playbackRate = playbackRate;
     if (playing) {
-      if (Math.abs(v.currentTime - scrub) > 0.1) {
+      if (Math.abs(v.currentTime - scrub) > 0.08) {
         v.currentTime = scrub;
       }
       const playPromise = v.play();
@@ -151,21 +166,29 @@ export default function PreviewCanvas({
       }
     } else {
       v.pause();
-      if (Math.abs(v.currentTime - scrub) > 0.04) {
+      if (Math.abs(v.currentTime - scrub) > 0.03) {
         v.currentTime = scrub;
       }
     }
-  }, [playing, audioMuted, vol]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [playing, audioMuted, vol, playbackRate]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Непрерывная синхронизация видео со скрабом (и на паузе, и при перемотке во время воспроизведения)
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
     v.muted = audioMuted;
     v.volume = vol;
-    if (!playing && Math.abs(v.currentTime - scrub) > 0.04) {
-      v.currentTime = scrub;
-    } else if (playing && Math.abs(v.currentTime - scrub) > 0.25) {
-      v.currentTime = scrub;
+    const diff = Math.abs(v.currentTime - scrub);
+    if (!playing) {
+      if (diff > 0.03) {
+        v.currentTime = scrub;
+      }
+    } else {
+      // При воспроизведении: если разница больше 180мс (пользователь мотнул ползунок/кликнул таймлайн),
+      // мгновенно перематываем видео на лету без остановки воспроизведения!
+      if (diff > 0.18) {
+        v.currentTime = scrub;
+      }
     }
   }, [scrub, playing, audioMuted, vol]);
 

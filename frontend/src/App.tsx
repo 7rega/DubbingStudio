@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2 } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -1198,6 +1198,7 @@ function DropZone() {
   const setSlotsMSaved = (v: string[]) => { setSlotsM(v); localStorage.setItem("dub-voice-slots-m", JSON.stringify(v)); };
   const setSlotsFSaved = (v: string[]) => { setSlotsF(v); localStorage.setItem("dub-voice-slots-f", JSON.stringify(v)); };
   const [voiceLib, setVoiceLib] = useState<string[]>([]);                        // имена голосов из GET /voices (для селектов слотов)
+  const [mainTranscribeSpeakers, setMainTranscribeSpeakers] = useState<number>(0); // выбор спикеров для режима транскрипции на главном экране
   useEffect(() => { api.voices().then((r) => setVoiceLib(r.voices)).catch(() => {}); }, []);
   const [preview, setPreview] = useState<string | null>(null);                  // objectURL превью выбранного видео (первый кадр)
   const audioOnly = !!file && isAudioFile(file);                                // вход без видео -> режим «только аудио»
@@ -1356,7 +1357,8 @@ function DropZone() {
       // Готовый кастинг из библиотеки применяем только когда кастинг реально включён (та же видимость, что у галки).
       const effCastingRef = effCasting ? castingRef : "";
       const effContentType = effCasting ? contentType : "real";
-      const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType);
+      const effNumSpeakers = audio === "transcribe" ? mainTranscribeSpeakers : 0;
+      const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers);
       await api.watchJob(job_id, (e) => { if (e.type === "progress") s.setProgress(e.stage || "", e.msg || "", e.pct ?? null); });
       if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain });   // громкость оригинала со старта -> рендер ниже подхватит
       // Блюр-подложка под субтитрами — опция дубляжа/субтитров (дефолт вкл). Патчим, когда сабы вжигаются.
@@ -1633,6 +1635,31 @@ function DropZone() {
                     )}
                   </Accordion>
                 )}
+                {/* СПИКЕРЫ ТРАНСКРИПЦИИ (#115): авто или заданное число */}
+                {audio === "transcribe" && (
+                  <Accordion title={t("transcribe.numSpeakers")} subtitle={mainTranscribeSpeakers === 0 ? t("transcribe.spkAuto") : `${mainTranscribeSpeakers} ${t("transcribe.spkShort")}`}>
+                    <div className="space-y-2">
+                      <select
+                        value={mainTranscribeSpeakers}
+                        onChange={(e) => setMainTranscribeSpeakers(parseInt(e.target.value) || 0)}
+                        className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-[12px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+                      >
+                        <option value={0}>{t("transcribe.spkAuto")}</option>
+                        <option value={1}>{t("transcribe.spkSolo")}</option>
+                        <option value={2}>{t("transcribe.spkDialog")}</option>
+                        <option value={3}>3 {t("transcribe.spkShort")}</option>
+                        <option value={4}>4 {t("transcribe.spkShort")}</option>
+                        <option value={5}>5 {t("transcribe.spkShort")}</option>
+                        <option value={6}>6 {t("transcribe.spkShort")}</option>
+                        <option value={7}>7 {t("transcribe.spkShort")}</option>
+                        <option value={8}>8 {t("transcribe.spkShort")}</option>
+                      </select>
+                      <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+                        {t("transcribe.numSpeakersHint")}
+                      </div>
+                    </div>
+                  </Accordion>
+                )}
                 {/* ДОПОЛНИТЕЛЬНО: стиль перевода / оригинал-дорожка / детекция текста / шуточный ремикс / громкость оригинала. */}
                 {showAdvanced && (
                   <Accordion title={t("accordion.advanced")}>
@@ -1800,7 +1827,7 @@ function DropZone() {
       <input ref={inputRef} type="file" accept={MEDIA_ACCEPT} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); }} />
       <input ref={batchRef} type="file" multiple accept={MEDIA_ACCEPT} className="hidden"
-        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; s.setStage("batch"); } }} />
+        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; s.setStage("batch"); } }} />
 
       {/* Модальное окно "Все проекты" со скроллом и поиском */}
       {allProjectsModal && (
@@ -2238,7 +2265,7 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   );
 }
 
-function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { onSplit?: (el: HTMLTextAreaElement) => void }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [menuState, setMenuState] = useState<HiggsContextMenuState | null>(null);
 
@@ -2273,15 +2300,18 @@ function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElemen
           el.dispatchEvent(new Event("input", { bubbles: true }));
         }
       },
+      onSplit: props.onSplit ? () => props.onSplit!(el) : undefined,
     });
   };
+
+  const { onSplit, ...textareaProps } = props;
 
   return (
     <>
       <textarea
         ref={ref}
         rows={1}
-        {...props}
+        {...textareaProps}
         onContextMenu={(e) => {
           handleContextMenu(e);
           if (props.onContextMenu) props.onContextMenu(e);
@@ -2496,8 +2526,22 @@ function CastingPanel({ pid, characters, voices, onChange }: {
   );
 }
 
-// Профессиональный масштабируемый и скроллируемый таймлайн (в стиле ElevenLabs / NLE)
-function InteractiveTimeline({
+// ─── Профессиональный 4-дорожечный таймлайн (MultiTrackTimeline) ───────────
+// Дорожка 1: 🎙️ Дубляж (TTS) — русская озвучка
+// Дорожка 2: 🎵 Фон / Музыка (Instrumental) — чистая музыка и эффекты
+// Дорожка 3: 🗣️ Вокал оригинала (Clean Vocals) — речь оригинального актера
+// Дорожка 4: 💬 Субтитры (Интерактивные плашки с цветом спикеров и drag-and-trim)
+
+const SPK_BG_COLORS = [
+  "bg-emerald-600/35 border-emerald-500 text-emerald-100 hover:border-emerald-300 shadow-[0_2px_8px_rgba(5,150,105,0.25)]",
+  "bg-blue-600/35 border-blue-500 text-blue-100 hover:border-blue-300 shadow-[0_2px_8px_rgba(37,99,235,0.25)]",
+  "bg-purple-600/35 border-purple-500 text-purple-100 hover:border-purple-300 shadow-[0_2px_8px_rgba(124,58,237,0.25)]",
+  "bg-amber-600/35 border-amber-500 text-amber-100 hover:border-amber-300 shadow-[0_2px_8px_rgba(217,119,6,0.25)]",
+  "bg-rose-600/35 border-rose-500 text-rose-100 hover:border-rose-300 shadow-[0_2px_8px_rgba(225,29,72,0.25)]",
+  "bg-cyan-600/35 border-cyan-500 text-cyan-100 hover:border-cyan-300 shadow-[0_2px_8px_rgba(8,145,178,0.25)]",
+];
+
+function MultiTrackTimeline({
   pid,
   duration,
   scrub,
@@ -2506,6 +2550,11 @@ function InteractiveTimeline({
   onSeek,
   onPlaySeg,
   setProject,
+  trackState,
+  setTrackState,
+  loopSegId,
+  setLoopSegId,
+  dubRev,
 }: {
   pid: string;
   duration: number;
@@ -2515,6 +2564,11 @@ function InteractiveTimeline({
   onSeek: (t: number) => void;
   onPlaySeg: (seg: Project["segments"][number]) => void;
   setProject: (p: Project) => void;
+  trackState: { dub: boolean; bgm: boolean; vocals: boolean };
+  setTrackState: React.Dispatch<React.SetStateAction<{ dub: boolean; bgm: boolean; vocals: boolean }>>;
+  loopSegId: string | null;
+  setLoopSegId: (id: string | null) => void;
+  dubRev?: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -2549,11 +2603,10 @@ function InteractiveTimeline({
   };
 
   const getT = (clientX: number) => {
-    if (!containerRef.current) return 0;
-    const rect = containerRef.current.getBoundingClientRect();
-    const scrollLeft = containerRef.current.scrollLeft;
-    const x = clientX - rect.left + scrollLeft;
-    return Math.max(0, Math.min(total, x / zoom));
+    if (!trackRef.current) return 0;
+    const rect = trackRef.current.getBoundingClientRect();
+    const x = clientX - rect.left;
+    return Math.max(0, Math.min(total, (x / totalPx) * total));
   };
 
   const handlePointerDown = (
@@ -2572,10 +2625,51 @@ function InteractiveTimeline({
     });
   };
 
-  const [peaks, setPeaks] = useState<number[]>([]);
+  // Multi-track waveforms loading
+  const [rawPeaksMaster, setRawPeaksMaster] = useState<number[]>([]);
+  const [rawPeaksVocals, setRawPeaksVocals] = useState<number[]>([]);
+  const [rawPeaksBgm, setRawPeaksBgm] = useState<number[]>([]);
+  const [rawPeaksDub, setRawPeaksDub] = useState<number[]>([]);
+
   useEffect(() => {
-    api.waveform(pid).then((r) => setPeaks(r.peaks || [])).catch(() => {});
-  }, [pid]);
+    api.waveform(pid).then((r) => setRawPeaksMaster(r.peaks || [])).catch(() => {});
+    api.waveformTrack(pid, "vocals").then((r) => setRawPeaksVocals(r.peaks || [])).catch(() => {});
+    api.waveformTrack(pid, "bgm").then((r) => setRawPeaksBgm(r.peaks || [])).catch(() => {});
+    api.waveformTrack(pid, "dub").then((r) => setRawPeaksDub(r.peaks || [])).catch(() => {});
+  }, [pid, dubRev]);
+
+  // 1. Vocals: rawPeaksVocals or rawPeaksMaster
+  const peaksVocals = rawPeaksVocals.length ? rawPeaksVocals : rawPeaksMaster;
+
+  // 2. Dub: clean synthesized dub speech strictly inside segments, flat silence outside
+  const peaksDub = useMemo(() => {
+    if (rawPeaksDub.length > 0 && JSON.stringify(rawPeaksDub) !== JSON.stringify(rawPeaksMaster)) {
+      return rawPeaksDub;
+    }
+    const base = peaksVocals.length ? peaksVocals : Array(400).fill(0.2);
+    const n = base.length;
+    const step = total / n;
+    return base.map((val, i) => {
+      const t = i * step;
+      const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
+      return insideSeg ? Math.min(1.0, val * 1.15 + 0.06) : 0.015;
+    });
+  }, [rawPeaksDub, rawPeaksMaster, peaksVocals, segments, total]);
+
+  // 3. BGM (Instrumental): background music and ambience
+  const peaksBgm = useMemo(() => {
+    if (rawPeaksBgm.length > 0 && JSON.stringify(rawPeaksBgm) !== JSON.stringify(rawPeaksMaster)) {
+      return rawPeaksBgm;
+    }
+    const base = rawPeaksMaster.length ? rawPeaksMaster : Array(400).fill(0.15);
+    const n = base.length;
+    const step = total / n;
+    return base.map((val, i) => {
+      const t = i * step;
+      const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
+      return insideSeg ? Math.max(0.04, val * 0.4) : Math.min(1.0, val * 0.95 + 0.08);
+    });
+  }, [rawPeaksBgm, rawPeaksMaster, segments, total]);
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!draggingSeg) return;
@@ -2596,33 +2690,25 @@ function InteractiveTimeline({
     const cur = useStore.getState().project;
     if (!cur) return;
 
-    const SNAP_THRESH = 0.15;
+    const SNAP_THRESH = 0.055; // Мягкий деликатный радиус притяжения (55мс / 1 столбик пика)
 
-    // 1. Прилипание к вспышкам волновой дорожки (Waveform Snapping)
-    if (peaks.length > 0 && total > 0) {
-      const step = total / peaks.length;
-      const sIdx = Math.max(0, Math.floor((newStart - 0.2) / step));
-      const eIdx = Math.min(peaks.length - 1, Math.ceil((newStart + 0.2) / step));
-      for (let i = sIdx; i <= eIdx; i++) {
-        if (peaks[i] > 0.08) {
-          const peakT = i * step;
+    // 1. Деликатное магнитное прилипание к пикам звука речи (шаг в 1 пик)
+    if (peaksVocals.length > 0 && total > 0) {
+      const step = total / peaksVocals.length;
+      for (let i = 0; i < peaksVocals.length; i++) {
+        const p = peaksVocals[i];
+        if (p > 0.035) {
+          const t = i * step;
           if (draggingSeg.type === "move" || draggingSeg.type === "resize-left") {
-            if (Math.abs(newStart - peakT) < SNAP_THRESH) {
-              newStart = Math.round(peakT * 100) / 100;
+            if (Math.abs(newStart - t) < SNAP_THRESH) {
+              newStart = Math.round(t * 100) / 100;
               if (draggingSeg.type === "move") newEnd = newStart + (draggingSeg.origEnd - draggingSeg.origStart);
               break;
             }
           }
-        }
-      }
-      const esIdx = Math.max(0, Math.floor((newEnd - 0.2) / step));
-      const eeIdx = Math.min(peaks.length - 1, Math.ceil((newEnd + 0.2) / step));
-      for (let i = esIdx; i <= eeIdx; i++) {
-        if (peaks[i] > 0.08) {
-          const peakT = i * step;
           if (draggingSeg.type === "move" || draggingSeg.type === "resize-right") {
-            if (Math.abs(newEnd - peakT) < SNAP_THRESH) {
-              newEnd = Math.round(peakT * 100) / 100;
+            if (Math.abs(newEnd - t) < SNAP_THRESH) {
+              newEnd = Math.round(t * 100) / 100;
               break;
             }
           }
@@ -2630,7 +2716,7 @@ function InteractiveTimeline({
       }
     }
 
-    // 2. Магнитное авто-прилипание к границам соседних субтитров
+    // 2. Мягкое авто-прилипание к границам соседних субтитров
     for (const s of cur.segments) {
       if (s.id === draggingSeg.id) continue;
       if (draggingSeg.type === "move" || draggingSeg.type === "resize-left") {
@@ -2669,7 +2755,6 @@ function InteractiveTimeline({
     }
   };
 
-  const { t } = useTranslation();
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tAt: number; seg?: Project["segments"][number] } | null>(null);
 
   useEffect(() => {
@@ -2695,6 +2780,7 @@ function InteractiveTimeline({
         end,
         speaker,
         src_text: "",
+        tgt_text: "",
       });
       setProject(fresh);
       useStore.getState().bump();
@@ -2715,22 +2801,152 @@ function InteractiveTimeline({
     } catch { /* ignore */ }
   };
 
+  const handleSplitSegment = async (seg: Project["segments"][number], splitT: number) => {
+    const cur = useStore.getState().project;
+    if (!cur) return;
+    const t = Math.max(seg.start + 0.1, Math.min(seg.end - 0.1, Math.round(splitT * 100) / 100));
+    const ratio = (t - seg.start) / Math.max(0.1, seg.end - seg.start);
+    const srcWords = (seg.src_text || "").trim().split(/\s+/);
+    const tgtWords = (seg.tgt_text || "").trim().split(/\s+/);
+    const srcSplitIdx = Math.max(1, Math.min(srcWords.length - 1, Math.round(srcWords.length * ratio)));
+    const tgtSplitIdx = Math.max(1, Math.min(tgtWords.length - 1, Math.round(tgtWords.length * ratio)));
+
+    const s1_src = srcWords.slice(0, srcSplitIdx).join(" ");
+    const s2_src = srcWords.slice(srcSplitIdx).join(" ");
+    const s1_tgt = tgtWords.slice(0, tgtSplitIdx).join(" ");
+    const s2_tgt = tgtWords.slice(tgtSplitIdx).join(" ");
+
+    useStore.getState().pushHistory(cur);
+    useStore.getState().setRendered(false);
+    try {
+      await api.patch(pid, { op: "segment", id: seg.id, start: seg.start, end: t, src_text: s1_src, tgt_text: s1_tgt });
+      const fresh = await api.patch(pid, {
+        op: "add_segment",
+        id: `u${Date.now().toString(36)}`,
+        start: t,
+        end: seg.end,
+        speaker: seg.speaker ?? "0",
+        src_text: s2_src,
+        tgt_text: s2_tgt,
+      });
+      setProject(fresh);
+      useStore.getState().bump();
+      playSfx("notify");
+    } catch { /* ignore */ }
+  };
+
+  const handleMergePrevious = async (seg: Project["segments"][number]) => {
+    const cur = useStore.getState().project;
+    if (!cur) return;
+    const idx = cur.segments.findIndex((s) => s.id === seg.id);
+    if (idx <= 0) return;
+    const prev = cur.segments[idx - 1];
+    const mergedSrc = `${prev.src_text} ${seg.src_text}`.trim();
+    const mergedTgt = `${prev.tgt_text} ${seg.tgt_text}`.trim();
+    useStore.getState().pushHistory(cur);
+    useStore.getState().setRendered(false);
+    try {
+      await api.patch(pid, { op: "segment", id: prev.id, end: seg.end, src_text: mergedSrc, tgt_text: mergedTgt });
+      const fresh = await api.patch(pid, { op: "del_segments", ids: [seg.id] });
+      setProject(fresh);
+      useStore.getState().bump();
+      playSfx("notify");
+    } catch { /* ignore */ }
+  };
+
+  const handleMergeNext = async (seg: Project["segments"][number]) => {
+    const cur = useStore.getState().project;
+    if (!cur) return;
+    const idx = cur.segments.findIndex((s) => s.id === seg.id);
+    if (idx < 0 || idx >= cur.segments.length - 1) return;
+    const next = cur.segments[idx + 1];
+    const mergedSrc = `${seg.src_text} ${next.src_text}`.trim();
+    const mergedTgt = `${seg.tgt_text} ${next.tgt_text}`.trim();
+    useStore.getState().pushHistory(cur);
+    useStore.getState().setRendered(false);
+    try {
+      await api.patch(pid, { op: "segment", id: seg.id, end: next.end, src_text: mergedSrc, tgt_text: mergedTgt });
+      const fresh = await api.patch(pid, { op: "del_segments", ids: [next.id] });
+      setProject(fresh);
+      useStore.getState().bump();
+      playSfx("notify");
+    } catch { /* ignore */ }
+  };
+
   const fmtTime = (s: number) =>
     `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}.${String(Math.floor((s % 1) * 10))}`;
 
+  // Toggle track with mutual exclusivity between Dub and Vocals
+  const toggleTrack = (track: "dub" | "bgm" | "vocals") => {
+    setTrackState((prev) => {
+      if (track === "dub") {
+        const nextDub = !prev.dub;
+        return { ...prev, dub: nextDub, vocals: nextDub ? false : prev.vocals };
+      }
+      if (track === "vocals") {
+        const nextVocals = !prev.vocals;
+        return { ...prev, vocals: nextVocals, dub: nextVocals ? false : prev.dub };
+      }
+      return { ...prev, bgm: !prev.bgm };
+    });
+  };
+
+  // Render waveform bar SVG helper
+  const renderWaveform = (peaks: number[], color: string, h: number, isVocalsTrack = false) => {
+    if (!peaks.length) return null;
+    const bw = totalPx / peaks.length;
+    return (
+      <svg width={totalPx} height={h} className="block pointer-events-none w-full h-full">
+        {/* Render phrase delimiters & background highlights on Vocals track */}
+        {isVocalsTrack &&
+          segments.map((s, idx) => {
+            const sx = s.start * zoom;
+            const ex = s.end * zoom;
+            const sw = Math.max(2, ex - sx);
+            const isAct = scrub >= s.start && scrub <= s.end;
+            return (
+              <g key={"vseg-" + idx}>
+                <rect x={sx} y={0} width={sw} height={h} fill="#06b6d4" opacity={isAct ? 0.22 : 0.08} />
+                <line x1={sx} y1={0} x2={sx} y2={h} stroke="#06b6d4" strokeWidth={1.5} opacity={0.7} strokeDasharray="3 2" />
+                <rect x={sx - 1} y={0} width={3} height={5} fill="#06b6d4" opacity={0.95} />
+                <line x1={ex} y1={0} x2={ex} y2={h} stroke="#06b6d4" strokeWidth={1.5} opacity={0.7} strokeDasharray="3 2" />
+                <rect x={ex - 2} y={h - 5} width={3} height={5} fill="#06b6d4" opacity={0.95} />
+              </g>
+            );
+          })}
+
+        {peaks.map((pk, i) => {
+          const bh = Math.max(2, Math.min(h - 2, pk * (h - 4)));
+          const played = (i / peaks.length) * total <= scrub;
+          return (
+            <rect
+              key={i}
+              x={(i / peaks.length) * totalPx}
+              y={(h - bh) / 2}
+              width={Math.max(1, bw - 0.5)}
+              height={bh}
+              fill={color}
+              opacity={played ? 0.95 : 0.45}
+            />
+          );
+        })}
+      </svg>
+    );
+  };
+
   return (
-    <div className="flex flex-col gap-1 w-full">
-      {/* Zoom Toolbar */}
+    <div className="flex flex-col gap-1.5 w-full select-none">
+      {/* Zoom & Track Legend Header */}
       <div className="flex items-center justify-between px-1 text-[11px] text-[var(--color-muted)]">
         <span className="font-semibold flex items-center gap-1.5">
-          <AudioLines size={13} className="text-[var(--color-accent)]" />
-          Таймлайн аудио и субтитров
+          <Layers size={13} className="text-[var(--color-accent)]" />
+          Мультитрек таймлайн
         </span>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setZoom((z) => Math.max(20, z - 15))}
             title="Отдалить (Zoom Out)"
-            className="p-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)]"
+            className="p-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors"
           >
             <ZoomOut size={13} />
           </button>
@@ -2738,184 +2954,338 @@ function InteractiveTimeline({
           <button
             onClick={() => setZoom((z) => Math.min(300, z + 15))}
             title="Приблизить (Zoom In)"
-            className="p-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)]"
+            className="p-1 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors"
           >
             <ZoomIn size={13} />
           </button>
         </div>
       </div>
 
-      {/* Scrollable Track Canvas Container */}
-      <div
-        ref={containerRef}
-        onWheel={handleWheel}
-        onPointerDown={(e) => {
-          if (e.button !== 0 || (e.target as HTMLElement).closest("[data-seg-block]")) return;
-          isTimelineDragging.current = true;
-          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-          onSeek(getT(e.clientX));
-        }}
-        onPointerMove={(e) => {
-          if (isTimelineDragging.current) {
-            onSeek(getT(e.clientX));
-          }
-        }}
-        onPointerUp={(e) => {
-          if (isTimelineDragging.current) {
-            isTimelineDragging.current = false;
-            try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
-          }
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          if (!trackRef.current) return;
-          const rect = trackRef.current.getBoundingClientRect();
-          const clickX = e.clientX - rect.left;
-          const tAt = Math.max(0, Math.min(total, (clickX / totalPx) * total));
-          setContextMenu({ x: e.clientX, y: e.clientY, tAt });
-        }}
-        className="relative w-full h-[114px] bg-[var(--color-surface-2)]/60 border border-[var(--color-border)] rounded-xl overflow-x-auto overflow-y-hidden select-none cursor-pointer touch-none"
-      >
-        <div ref={trackRef} className="relative h-full" style={{ width: `${totalPx}px` }}>
-          {/* Top Row: Waveform Background */}
-          <div className="absolute top-1.5 left-0 right-0 h-[50px] pointer-events-none">
-            <WaveformTimeline pid={pid} duration={duration} scrub={scrub} segments={segments} gainDb={0} onSeek={onSeek} />
+      {/* 4-Track DAW / NLE Container */}
+      <div className="flex w-full bg-[var(--color-surface-2)]/60 border border-[var(--color-border)] rounded-xl overflow-hidden shadow-inner">
+        {/* Left Sticky Track Headers (~130px) */}
+        <div className="w-[130px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)]/90 flex flex-col z-20">
+          {/* Time Ruler spacer */}
+          <div className="h-[22px] border-b border-[var(--color-border)] px-2.5 flex items-center text-[9px] font-bold text-[var(--color-muted)] tracking-wider">
+            ДОРОЖКИ
           </div>
 
-          {/* Bottom Row: Segment Audio & Subtitle Blocks */}
-          {segments.map((seg) => {
-            const leftPx = seg.start * zoom;
-            const widthPx = Math.max(36, (seg.end - seg.start) * zoom);
-            const isActive = scrub >= seg.start && scrub <= seg.end;
-            return (
-              <div
-                key={seg.id}
-                data-seg-block="true"
-                style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
-                onPointerDown={(e) => handlePointerDown(e, seg, "move")}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
-                }}
-                className={`absolute top-[56px] h-[48px] rounded-lg border flex items-center justify-between px-1 text-[11px] cursor-grab active:cursor-grabbing transition-colors shadow-md ${
-                  isActive
-                    ? "bg-[var(--color-accent)]/30 border-[var(--color-accent)] text-[var(--color-text)] ring-2 ring-[var(--color-accent)]/80 backdrop-blur"
-                    : "bg-[var(--color-surface-2)]/95 border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)]/70"
-                }`}
-              >
-                {/* Left Trim Handle */}
-                <div
-                  onPointerDown={(e) => handlePointerDown(e, seg, "resize-left")}
-                  className="w-2 h-full bg-white/20 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-l-md flex items-center justify-center text-[8px] opacity-60 hover:opacity-100"
-                  title="Изменить начало"
-                >
-                  │
-                </div>
+          {/* Track 1 Header: 🎙️ Дубляж */}
+          <div className="h-[38px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
+            <span className={`font-medium truncate flex items-center gap-1.5 ${trackState.dub ? "text-emerald-400 font-semibold" : "text-[var(--color-muted)]"}`} title="Дубляж (TTS)">
+              <Mic size={12} className="shrink-0" /> Дубляж
+            </span>
+            <button
+              type="button"
+              onClick={() => toggleTrack("dub")}
+              title={trackState.dub ? "Выключить дубляж" : "Включить дубляж"}
+              className={`p-1 rounded transition-colors ${trackState.dub ? "bg-emerald-500/30 text-emerald-300 border border-emerald-500/50 shadow-sm" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+            >
+              {trackState.dub ? <Volume2 size={12} /> : <VolumeX size={12} />}
+            </button>
+          </div>
 
-                {/* Content: Play Button + Text + Speaker Badge */}
-                <div className="flex items-center gap-1.5 min-w-0 flex-1 px-1 overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onPlaySeg(seg);
-                    }}
-                    title="Прослушать фразу"
-                    className="p-1 rounded-md bg-[var(--color-accent)] text-[var(--color-on-accent)] shrink-0 hover:scale-105 transition-transform"
+          {/* Track 2 Header: 🎵 Фон / Музыка */}
+          <div className="h-[36px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
+            <span className={`font-medium truncate flex items-center gap-1.5 ${trackState.bgm ? "text-purple-400 font-semibold" : "text-[var(--color-muted)]"}`} title="Фоновая музыка (Instrumental)">
+              <Music size={12} className="shrink-0" /> Фон
+            </span>
+            <button
+              type="button"
+              onClick={() => toggleTrack("bgm")}
+              title={trackState.bgm ? "Выключить музыку" : "Включить музыку"}
+              className={`p-1 rounded transition-colors ${trackState.bgm ? "bg-purple-500/30 text-purple-300 border border-purple-500/50 shadow-sm" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+            >
+              {trackState.bgm ? <Volume2 size={12} /> : <VolumeX size={12} />}
+            </button>
+          </div>
+
+          {/* Track 3 Header: 🗣️ Вокал */}
+          <div className="h-[38px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
+            <span className={`font-medium truncate flex items-center gap-1.5 ${trackState.vocals ? "text-cyan-400 font-semibold" : "text-[var(--color-muted)]"}`} title="Оригинальный чистый вокал">
+              <Users size={12} className="shrink-0" /> Вокал
+            </span>
+            <button
+              type="button"
+              onClick={() => toggleTrack("vocals")}
+              title={trackState.vocals ? "Выключить вокал" : "Включить вокал"}
+              className={`p-1 rounded transition-colors ${trackState.vocals ? "bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 shadow-sm" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+            >
+              {trackState.vocals ? <Volume2 size={12} /> : <VolumeX size={12} />}
+            </button>
+          </div>
+
+          {/* Track 4 Header: 💬 Субтитры */}
+          <div className="h-[74px] px-2.5 flex items-center justify-between text-[11px]">
+            <span className="font-medium text-[var(--color-accent)] truncate flex items-center gap-1.5">
+              <Captions size={12} className="shrink-0" /> Субтитры
+            </span>
+            <span className="mono text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-bold">
+              {segments.length}
+            </span>
+          </div>
+        </div>
+
+        {/* Right Scrollable Timeline Canvas with dedicated bottom scrollbar clearance */}
+        <div
+          ref={containerRef}
+          onWheel={handleWheel}
+          onPointerDown={(e) => {
+            if (e.button !== 0 || (e.target as HTMLElement).closest("[data-seg-block]")) return;
+            isTimelineDragging.current = true;
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            onSeek(getT(e.clientX));
+          }}
+          onPointerMove={(e) => {
+            if (isTimelineDragging.current) {
+              onSeek(getT(e.clientX));
+            }
+          }}
+          onPointerUp={(e) => {
+            if (isTimelineDragging.current) {
+              isTimelineDragging.current = false;
+              try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+            }
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            if (!trackRef.current) return;
+            const rect = trackRef.current.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const tAt = Math.max(0, Math.min(total, (clickX / totalPx) * total));
+            setContextMenu({ x: e.clientX, y: e.clientY, tAt });
+          }}
+          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[208px] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-black/20"
+        >
+          <div ref={trackRef} className="relative h-full" style={{ width: `${totalPx}px` }}>
+            {/* Top Time Ruler (22px) */}
+            <div className="h-[22px] border-b border-[var(--color-border)] relative pointer-events-none">
+              {Array.from({ length: Math.ceil(total / 5) + 1 }).map((_, i) => {
+                const sec = i * 5;
+                if (sec > total) return null;
+                return (
+                  <div
+                    key={sec}
+                    className="absolute top-0 bottom-0 flex items-center border-l border-[var(--color-border)]/60 pl-1 text-[9px] mono text-[var(--color-muted)]/70 font-semibold"
+                    style={{ left: `${sec * zoom}px` }}
                   >
-                    <Play size={11} />
-                  </button>
-                  {seg.speaker != null && (
-                    <span className="mono text-[9px] px-1 py-0.5 rounded bg-[var(--color-overlay)] text-[var(--color-muted)] shrink-0">
-                      SPK {seg.speaker}
-                    </span>
-                  )}
-                  <span className="font-medium truncate text-[11px] flex-1 leading-snug">
-                    {seg.tgt_text || seg.src_text}
-                  </span>
-                </div>
+                    {fmtTime(sec)}
+                  </div>
+                );
+              })}
+            </div>
 
-                {/* Right Trim Handle */}
-                <div
-                  onPointerDown={(e) => handlePointerDown(e, seg, "resize-right")}
-                  className="w-2 h-full bg-white/20 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-r-md flex items-center justify-center text-[8px] opacity-60 hover:opacity-100"
-                  title="Изменить конец"
-                >
-                  │
-                </div>
-              </div>
-            );
-          })}
+            {/* Track 1: 🎙️ Дубляж Canvas (38px) */}
+            <div className="h-[38px] border-b border-[var(--color-border)]/40 relative bg-emerald-950/10">
+              {renderWaveform(peaksDub, "#10b981", 38)}
+            </div>
 
-          {/* Red Playhead Line */}
-          <div
-            className="absolute top-0 bottom-0 w-0.5 bg-[var(--color-accent)] z-20 pointer-events-none shadow-[0_0_8px_var(--color-accent)]"
-            style={{ left: `${scrub * zoom}px` }}
-          />
+            {/* Track 2: 🎵 Фон / Музыка Canvas (36px) */}
+            <div className="h-[36px] border-b border-[var(--color-border)]/40 relative bg-purple-950/10">
+              {renderWaveform(peaksBgm, "#a855f7", 36)}
+            </div>
+
+            {/* Track 3: 🗣️ Вокал оригинала Canvas (38px) with Phrase Delimiters */}
+            <div className="h-[38px] border-b border-[var(--color-border)]/40 relative bg-cyan-950/10">
+              {renderWaveform(peaksVocals, "#06b6d4", 38, true)}
+            </div>
+
+            {/* Track 4: 💬 Субтитры Blocks (74px) with generous pb-6 for scrollbar clearance */}
+            <div className="h-[74px] relative pb-6">
+              {segments.map((seg) => {
+                const leftPx = seg.start * zoom;
+                const widthPx = Math.max(42, (seg.end - seg.start) * zoom);
+                const isActive = scrub >= seg.start && scrub <= seg.end;
+                const spkNum = parseInt(seg.speaker ?? "0", 10) || 0;
+                const spkClass = SPK_BG_COLORS[spkNum % SPK_BG_COLORS.length];
+                const isLoop = loopSegId === seg.id;
+
+                return (
+                  <div
+                    key={seg.id}
+                    data-seg-block="true"
+                    style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
+                    onPointerDown={(e) => handlePointerDown(e, seg, "move")}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
+                    }}
+                    className={`absolute top-[5px] h-[46px] rounded-lg border flex items-center justify-between px-1 text-[11px] cursor-grab active:cursor-grabbing transition-all ${spkClass} ${
+                      isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""
+                    } ${isLoop ? "border-amber-400 ring-2 ring-amber-400" : ""}`}
+                  >
+                    {/* Left Trim Handle */}
+                    <div
+                      onPointerDown={(e) => handlePointerDown(e, seg, "resize-left")}
+                      className="w-2.5 h-full bg-white/20 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-l-md flex items-center justify-center text-[7px] opacity-70 hover:opacity-100 transition-colors"
+                      title="Изменить начало (Drag to Trim)"
+                    >
+                      │
+                    </div>
+
+                    {/* Content: Play Button + Text + Speaker Badge */}
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1 px-1 overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPlaySeg(seg);
+                        }}
+                        title="Прослушать фразу"
+                        className="p-1 rounded-md bg-[var(--color-accent)] text-[var(--color-on-accent)] shrink-0 hover:scale-105 transition-transform"
+                      >
+                        <Play size={10} fill="currentColor" />
+                      </button>
+                      {seg.speaker != null && (
+                        <span className="mono text-[9px] px-1 py-0.5 rounded bg-black/50 text-white font-bold shrink-0 shadow-sm">
+                          SPK {seg.speaker}
+                        </span>
+                      )}
+                      <span className="font-medium truncate text-[11.5px] flex-1 leading-snug text-white drop-shadow-sm">
+                        {seg.tgt_text || seg.src_text}
+                      </span>
+                    </div>
+
+                    {/* Right Trim Handle */}
+                    <div
+                      onPointerDown={(e) => handlePointerDown(e, seg, "resize-right")}
+                      className="w-2.5 h-full bg-white/20 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-r-md flex items-center justify-center text-[7px] opacity-70 hover:opacity-100 transition-colors"
+                      title="Изменить конец (Drag to Trim)"
+                    >
+                      │
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Vertical Golden Playhead Line across all 4 tracks */}
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-amber-300 z-30 pointer-events-none shadow-[0_0_10px_rgba(251,191,36,0.9)]"
+              style={{ left: `${scrub * zoom}px` }}
+            >
+              <div className="w-3 h-3 -ml-1.25 -top-0 bg-amber-400 rounded-b-sm shadow-md" />
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Right Click Context Menu */}
-      {contextMenu && (
-        <div
-          className="fixed z-50 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-accent)] shadow-2xl p-1.5 min-w-[210px] anim-pop flex flex-col gap-1"
-          style={{ left: Math.min(window.innerWidth - 220, contextMenu.x), top: Math.min(window.innerHeight - 140, contextMenu.y) }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {contextMenu.seg ? (
-            <>
-              <button
-                onClick={() => {
-                  onPlaySeg(contextMenu.seg!);
-                  setContextMenu(null);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
-              >
-                <Play size={14} className="text-[var(--color-accent)] shrink-0" />
-                <span>{t("timeline.playPhrase")}</span>
-              </button>
+      {/* Right Click Context Menu (with smart viewport flip) */}
+      {contextMenu && (() => {
+        const isSimpleAdd = !contextMenu.seg;
+        const menuHeight = isSimpleAdd ? 44 : 240;
+        const isBottom = contextMenu.y > window.innerHeight - (menuHeight + 20);
+        const menuTop = isBottom
+          ? Math.max(10, contextMenu.y - menuHeight - 6)
+          : Math.min(window.innerHeight - menuHeight - 10, contextMenu.y + 4);
+        const menuLeft = Math.min(window.innerWidth - 250, Math.max(10, contextMenu.x));
 
-              <button
-                onClick={() => {
-                  handleDeleteSegment(contextMenu.seg!.id);
-                  setContextMenu(null);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-danger,#ef4444)]/20 text-[var(--color-danger,#ef4444)] flex items-center gap-2 text-[12px] font-medium transition-colors"
-              >
-                <Trash2 size={14} className="shrink-0" />
-                <span>{t("timeline.deletePhrase")}</span>
-              </button>
+        return (
+          <div
+            className="fixed z-50 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-accent)] shadow-2xl p-1.5 min-w-[240px] anim-pop flex flex-col gap-1 backdrop-blur-md"
+            style={{ left: menuLeft, top: menuTop }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {contextMenu.seg ? (
+              <>
+                <button
+                  onClick={() => {
+                    onPlaySeg(contextMenu.seg!);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Play size={13} className="text-[var(--color-accent)] shrink-0" />
+                  <span>Воспроизвести фразу</span>
+                </button>
 
-              <div className="h-px bg-[var(--color-border)] my-0.5" />
+                <button
+                  onClick={() => {
+                    setLoopSegId(loopSegId === contextMenu.seg!.id ? null : contextMenu.seg!.id);
+                    onPlaySeg(contextMenu.seg!);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Repeat size={13} className="text-amber-400 shrink-0" />
+                  <span>{loopSegId === contextMenu.seg!.id ? "Отключить повтор" : "Зациклить фразу (Loop)"}</span>
+                </button>
 
+                <button
+                  onClick={() => {
+                    handleSplitSegment(contextMenu.seg!, contextMenu.tAt);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Scissors size={13} className="text-cyan-400 shrink-0" />
+                  <span>Разрезать по курсору ({fmtTime(contextMenu.tAt)})</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleMergePrevious(contextMenu.seg!);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Link size={13} className="text-indigo-400 shrink-0" />
+                  <span>Склеить с предыдущей</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleMergeNext(contextMenu.seg!);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Link size={13} className="text-indigo-400 shrink-0" />
+                  <span>Склеить со следующей</span>
+                </button>
+
+                <div className="h-px bg-[var(--color-border)] my-0.5" />
+
+                <button
+                  onClick={() => {
+                    handleDeleteSegment(contextMenu.seg!.id);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-danger,#ef4444)]/20 text-[var(--color-danger,#ef4444)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Trash2 size={13} className="shrink-0" />
+                  <span>Удалить фразу</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleAddSegmentAt(contextMenu.tAt);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Plus size={13} className="text-[var(--color-accent)] shrink-0" />
+                  <span>Вставить фразу здесь ({fmtTime(contextMenu.tAt)})</span>
+                </button>
+              </>
+            ) : (
               <button
                 onClick={() => {
                   handleAddSegmentAt(contextMenu.tAt);
                   setContextMenu(null);
                 }}
-                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                className="w-full text-left px-3 py-2 rounded-lg bg-[var(--color-surface)] hover:bg-[var(--color-accent)] hover:text-[var(--color-on-accent)] flex items-center gap-2 text-[12px] font-medium transition-colors group"
               >
-                <Plus size={14} className="text-[var(--color-accent)] shrink-0" />
-                <span>{t("timeline.addPhraseHere", { time: fmtTime(contextMenu.tAt) })}</span>
+                <Plus size={13} className="text-[var(--color-accent)] group-hover:text-current shrink-0" />
+                <span>Вставить новую фразу ({fmtTime(contextMenu.tAt)})</span>
               </button>
-            </>
-          ) : (
-            <button
-              onClick={() => {
-                handleAddSegmentAt(contextMenu.tAt);
-                setContextMenu(null);
-              }}
-              className="w-full text-left px-3 py-2 rounded-lg bg-[var(--color-surface)] hover:bg-[var(--color-accent)] hover:text-[var(--color-on-accent)] flex items-center gap-2 text-[12px] font-medium transition-colors group"
-            >
-              <Plus size={14} className="text-[var(--color-accent)] group-hover:text-current shrink-0" />
-              <span>{t("timeline.addPhraseHere", { time: fmtTime(contextMenu.tAt) })}</span>
-            </button>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -3124,6 +3494,11 @@ function Editor() {
   const [audioErr, setAudioErr] = useState(false);
   const audioPlayingRef = useRef(false);
 
+  // Track states (Dub, BGM, Vocals toggle)
+  const [trackState, setTrackState] = useState<{ dub: boolean; bgm: boolean; vocals: boolean }>({ dub: true, bgm: true, vocals: false });
+  const playSpeed = 1.0;
+  const [loopSegId, setLoopSegId] = useState<string | null>(null);
+
   const playEndRef = useRef<number>(Infinity);                        // stop time for single-phrase playback (Infinity = full)
   const [dubRev, setDubRev] = useState(0);                            // dub-audio cache-buster — bumped ONLY when the dub track is re-rendered (regen/export), NOT on every edit, so live edits don't reload <audio> mid-playback
 
@@ -3133,14 +3508,46 @@ function Editor() {
 
   const hasDubTrack = !audioOnly && (mode === "dub" || mode === "voiceover" || mode === "funny") && !audioErr;
 
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = vol;
-      audioRef.current.playbackRate = 1.0;
-    }
-  }, [vol, dubRev]);   // применить громкость прослушки (скорость звука ВСЕГДА 1.0x)
+  // Effective audio URL based on active track combinations:
+  // 1. Dub + BGM -> api.dubUrl (Full mix)
+  // 2. Dub only (no BGM) -> api.audioDubCleanUrl (Pure Russian voice in silence)
+  // 3. Vocals + BGM -> api.sourceVideoUrl (Original film mix)
+  // 4. Vocals only (no BGM) -> api.audioVocalsUrl (Pure original voice, no music)
+  // 5. BGM only -> api.audioBgmUrl (Pure instrumental music, no voice)
+  const currentAudioSrc = useMemo(() => {
+    if (trackState.dub && trackState.bgm) return api.dubUrl(pid, dubRev);
+    if (trackState.dub && !trackState.bgm) return api.audioDubCleanUrl(pid);
+    if (trackState.vocals && !trackState.bgm) return api.audioVocalsUrl(pid);
+    if (trackState.vocals && trackState.bgm) return api.sourceVideoUrl(pid);
+    if (trackState.bgm) return api.audioBgmUrl(pid);
+    return api.dubUrl(pid, dubRev);
+  }, [trackState, pid, dubRev]);
 
-  // Dub playback & timeline driver:
+  const effectiveVol = useMemo(() => {
+    if (!trackState.dub && !trackState.bgm && !trackState.vocals) return 0;
+    return vol;
+  }, [vol, trackState]);
+
+  // Smooth speed updates with pitch preservation (no pitch shifting chipmunk / monster distortion)
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.playbackRate = playSpeed;
+    try {
+      (a as any).preservesPitch = true;
+      (a as any).mozPreservesPitch = true;
+      (a as any).webkitPreservesPitch = true;
+    } catch {}
+  }, [playSpeed]);
+
+  // Volume update without restarting playback
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.volume = effectiveVol;
+  }, [effectiveVol]);
+
+  // Dub playback & timeline driver (Master Clock)
   useEffect(() => {
     const a = audioRef.current;
     if (!play) {
@@ -3150,11 +3557,9 @@ function Editor() {
     }
     setRendered(false);
     if (a && hasDubTrack) {
-      a.playbackRate = 1.0;
-      a.volume = vol;
-      if (Math.abs(a.currentTime - scrub) > 0.1) {
-        a.currentTime = scrub;
-      }
+      a.playbackRate = playSpeed;
+      a.volume = effectiveVol;
+      a.currentTime = scrub;
       a.play()
         .then(() => {
           audioPlayingRef.current = true;
@@ -3170,6 +3575,14 @@ function Editor() {
 
     const id = window.setInterval(() => {
       if (audioPlayingRef.current && a && !a.paused) {
+        if (loopSegId) {
+          const lSeg = p.segments.find((s) => s.id === loopSegId);
+          if (lSeg && a.currentTime >= lSeg.end) {
+            a.currentTime = lSeg.start;
+            setScrub(lSeg.start);
+            return;
+          }
+        }
         if (a.currentTime >= playEndRef.current) {
           a.pause();
           setPlay(false);
@@ -3179,7 +3592,93 @@ function Editor() {
       }
     }, 40);
     return () => window.clearInterval(id);
-  }, [play, hasDubTrack, vol]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [play, hasDubTrack, currentAudioSrc]);
+
+  // Text-cursor split helper (Ctrl+Enter in text area)
+  const handleSplitAtTextCursor = async (seg: Project["segments"][number], textarea: HTMLTextAreaElement) => {
+    const pos = textarea.selectionStart;
+    const text = seg.tgt_text || "";
+    if (pos <= 0 || pos >= text.length) return;
+    const text1 = text.slice(0, pos).trim();
+    const text2 = text.slice(pos).trim();
+    if (!text1 || !text2) return;
+
+    const ratio = text1.length / Math.max(1, text.length);
+    const totalDur = seg.end - seg.start;
+    const splitT = Math.round((seg.start + totalDur * ratio) * 100) / 100;
+    const t = Math.max(seg.start + 0.1, Math.min(seg.end - 0.1, splitT));
+
+    const srcWords = (seg.src_text || "").trim().split(/\s+/);
+    const srcSplitIdx = Math.max(1, Math.min(srcWords.length - 1, Math.round(srcWords.length * ratio)));
+    const s1_src = srcWords.slice(0, srcSplitIdx).join(" ");
+    const s2_src = srcWords.slice(srcSplitIdx).join(" ");
+
+    pushHistory(p);
+    setRendered(false);
+    try {
+      await api.patch(pid, { op: "segment", id: seg.id, start: seg.start, end: t, src_text: s1_src, tgt_text: text1 });
+      const fresh = await api.patch(pid, {
+        op: "add_segment",
+        id: `u${Date.now().toString(36)}`,
+        start: t,
+        end: seg.end,
+        speaker: seg.speaker ?? "0",
+        src_text: s2_src,
+        tgt_text: text2,
+      });
+      setProject(fresh);
+      bump();
+      playSfx("notify");
+    } catch { /* ignore */ }
+  };
+
+  // Global Ctrl+K hotkey for splitting active segment at playhead
+  useEffect(() => {
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        e.preventDefault();
+        const activeSeg = p.segments.find((s) => scrub >= s.start && scrub <= s.end);
+        if (activeSeg) {
+          const t = Math.round(scrub * 100) / 100;
+          if (t > activeSeg.start + 0.1 && t < activeSeg.end - 0.1) {
+            const ratio = (t - activeSeg.start) / Math.max(0.1, activeSeg.end - activeSeg.start);
+            const srcWords = (activeSeg.src_text || "").trim().split(/\s+/);
+            const tgtWords = (activeSeg.tgt_text || "").trim().split(/\s+/);
+            const srcSplitIdx = Math.max(1, Math.min(srcWords.length - 1, Math.round(srcWords.length * ratio)));
+            const tgtSplitIdx = Math.max(1, Math.min(tgtWords.length - 1, Math.round(tgtWords.length * ratio)));
+
+            const s1_src = srcWords.slice(0, srcSplitIdx).join(" ");
+            const s2_src = srcWords.slice(srcSplitIdx).join(" ");
+            const s1_tgt = tgtWords.slice(0, tgtSplitIdx).join(" ");
+            const s2_tgt = tgtWords.slice(tgtSplitIdx).join(" ");
+
+            pushHistory(p);
+            setRendered(false);
+            api.patch(pid, { op: "segment", id: activeSeg.id, start: activeSeg.start, end: t, src_text: s1_src, tgt_text: s1_tgt })
+              .then(() => api.patch(pid, {
+                op: "add_segment",
+                id: `u${Date.now().toString(36)}`,
+                start: t,
+                end: activeSeg.end,
+                speaker: activeSeg.speaker ?? "0",
+                src_text: s2_src,
+                tgt_text: s2_tgt,
+              }))
+              .then((fresh) => {
+                setProject(fresh);
+                bump();
+                playSfx("notify");
+              })
+              .catch(() => {});
+          }
+        }
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKey);
+    return () => window.removeEventListener("keydown", handleGlobalKey);
+  }, [p.segments, scrub, pid]); // eslint-disable-line react-hooks/exhaustive-deps
   const [regenId, setRegenId] = useState<string | null>(null);        // segment whose TTS is being re-generated
   const [remixText, setRemixText] = useState("");                     // funny-remix theme/instruction for Gemma
   const [remixing, setRemixing] = useState(false);
@@ -3558,7 +4057,18 @@ function Editor() {
         originalName = r.projects.find((x) => x.pid === pid)?.video;
       } catch {}
     }
-    const name = originalName || baseName(p.meta.video || pid);
+    const rawBase = originalName || baseName(p.meta.video || pid);
+    let baseStem = rawBase.replace(/\.[^/.]+$/, "");
+    // Срезаем прошлые суффиксы, если они уже были
+    baseStem = baseStem.replace(/_(dub|voiceover|subtitles|remix)$/i, "");
+
+    const ext = p.audio?.container === "mkv" ? "mkv" : "mp4";
+    const modeSuffix = p.mode === "voiceover"
+      ? "voiceover"
+      : p.audio?.rewrite
+      ? "remix"
+      : (p.mode === "nodub" || p.mode === "transcribe" ? "subtitles" : "dub");
+    const name = `${baseStem}_${modeSuffix}.${ext}`;
 
     addExport({ id: exId, name, status: "rendering", msg: t("common.rendering"), pid });   // queue entry -> Files panel (no screen block)
     setRendering(true); pushActivity(`${t("export.proceed")}: ${name}`);
@@ -3566,7 +4076,7 @@ function Editor() {
       const { job_id } = await api.render(pid);
       await api.watchJob(job_id, (e) => { if (e.type === "progress") { updateExport(exId, { msg: e.msg || "" }); pushActivity(e.msg || "", "work"); } });
       
-      // Копируем готовый файл в папку Export внутри рабочей папки проекта с сохранением оригинального имени
+      // Копируем готовый файл в папку Export внутри рабочей папки проекта с суффиксом режима
       const exportDir = p.work_dir ? `${p.work_dir}/Export` : "Export";
       try {
         await api.saveOutput(pid, exportDir, name);
@@ -3774,7 +4284,7 @@ function Editor() {
             </div>
           </div>
 
-          {/* Панель управления плеером прямо под видео (Transport Bar) */}
+          {/* Панель управления плеером прямо под видео (Audio Monitoring & Transport Bar) */}
           <div className="shrink-0 px-3 py-2 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl flex flex-col gap-2 shadow-sm">
             {/* Верхняя строка: Ползунок перемотки видео */}
             <input
@@ -3787,10 +4297,12 @@ function Editor() {
               className="w-full h-1.5 accent-[var(--color-accent)] cursor-pointer"
             />
 
-            {/* Нижняя строка: Кнопка Play, регулятор громкости и счетчик времени */}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
+            {/* Нижняя строка: Транспорт, Селектор звука, Тайминг, Скорость и Громкость */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
+              {/* Слева: Кнопки навигации и воспроизведения */}
+              <div className="flex items-center gap-1.5">
                 <button
+                  type="button"
                   onClick={playFull}
                   title={play ? "Пауза (Пробел)" : "Воспроизвести (Пробел)"}
                   className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all shadow-sm shrink-0 ${
@@ -3802,21 +4314,129 @@ function Editor() {
                   {play ? <Pause size={15} fill="currentColor" /> : <Play size={15} className="ml-0.5" fill="currentColor" />}
                 </button>
 
-                <audio
-                  ref={audioRef}
-                  src={hasDubTrack ? api.dubUrl(pid, dubRev) : undefined}
-                  onEnded={() => setPlay(false)}
-                  onError={() => {
-                    console.warn("Audio element error, falling back to video audio");
-                    setAudioErr(true);
-                    audioPlayingRef.current = false;
+                {/* Шаг по фразам */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const prev = [...p.segments].reverse().find((s) => s.start < scrub - 0.2);
+                    if (prev) onSeek(prev.start);
                   }}
-                  preload="auto"
-                  className="hidden"
-                />
+                  title="Предыдущая фраза"
+                  className="p-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] text-[var(--color-muted)] hover:text-white transition-colors shrink-0"
+                >
+                  <SkipBack size={13} />
+                </button>
 
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = p.segments.find((s) => s.start > scrub + 0.1);
+                    if (next) onSeek(next.start);
+                  }}
+                  title="Следующая фраза"
+                  className="p-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] text-[var(--color-muted)] hover:text-white transition-colors shrink-0"
+                >
+                  <SkipForward size={13} />
+                </button>
+
+                {/* Разделитель */}
+                <div className="h-4 w-px bg-[var(--color-border)] mx-0.5 shrink-0" />
+
+                {/* Миниатюрная кнопка «Перегенерировать всю озвучку» */}
+                <button
+                  type="button"
+                  onClick={doRegenAll}
+                  disabled={regenId !== null}
+                  title="Перегенерировать всю озвучку проекта (TTS)"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--color-surface-2)] border border-amber-500/40 hover:border-amber-400 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
+                >
+                  {regenId === "__all__" ? (
+                    <Loader2 size={12} className="animate-spin text-amber-400" />
+                  ) : (
+                    <RotateCw size={12} className="text-amber-400" />
+                  )}
+                  <span>Пересинтез</span>
+                </button>
+              </div>
+
+              {/* По центру: Готовые пресеты дорожек (1 клик) */}
+              <div className="inline-flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[11.5px] shrink-0 shadow-inner">
+                <button
+                  type="button"
+                  onClick={() => setTrackState({ dub: true, bgm: true, vocals: false })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                    trackState.dub && trackState.bgm && !trackState.vocals
+                      ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold shadow-sm"
+                      : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                  title="Микс (Дубляж + Музыка)"
+                >
+                  <Disc size={12} />
+                  <span>Микс</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTrackState({ dub: true, bgm: false, vocals: false })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                    trackState.dub && !trackState.bgm && !trackState.vocals
+                      ? "bg-emerald-500 text-black font-semibold shadow-sm"
+                      : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                  title="Только чистый русский голос (без музыки)"
+                >
+                  <Mic size={12} />
+                  <span>Дубляж</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTrackState({ dub: false, bgm: false, vocals: true })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                    trackState.vocals && !trackState.dub && !trackState.bgm
+                      ? "bg-cyan-500 text-black font-semibold shadow-sm"
+                      : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                  title="Только чистый оригинальный голос (без музыки)"
+                >
+                  <Users size={12} />
+                  <span>Вокал</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTrackState({ dub: false, bgm: true, vocals: false })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                    !trackState.dub && !trackState.vocals && trackState.bgm
+                      ? "bg-purple-500 text-white font-semibold shadow-sm"
+                      : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                  title="Только фоновая музыка (без речи)"
+                >
+                  <Music size={12} />
+                  <span>Фон</span>
+                </button>
+              </div>
+
+              {/* Справа: Точный таймкод, Скорость (0.5x, 1.0x, 1.5x, 2.0x) и Громкость */}
+              <div className="flex items-center gap-2 shrink-0">
+                {/* Точный таймкод с миллисекундами */}
+                <div className="mono text-[11px] tabnum px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg shadow-inner">
+                  <span className="text-[var(--color-accent)] font-semibold">
+                    {`${Math.floor(scrub / 60)}:${String(Math.floor(scrub % 60)).padStart(2, "0")}.${String(Math.floor((scrub % 1) * 1000)).padStart(3, "0")}`}
+                  </span>
+                  <span className="text-[var(--color-muted)]">
+                    {` / ${Math.floor((p.meta.duration || 0) / 60)}:${String(Math.floor((p.meta.duration || 0) % 60)).padStart(2, "0")}`}
+                  </span>
+                </div>
+
+                {/* Громкость */}
                 <div className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg text-xs" title={t("play.volume")}>
-                  <Music size={13} className="text-[var(--color-muted)]" />
+                  {effectiveVol === 0 ? (
+                    <VolumeX size={13} className="text-red-400" />
+                  ) : (
+                    <Volume2 size={13} className="text-[var(--color-muted)]" />
+                  )}
                   <input
                     type="range"
                     min={0}
@@ -3829,22 +4449,30 @@ function Editor() {
                       if (audioRef.current) audioRef.current.volume = v;
                       localStorage.setItem("dub-vol", String(v));
                     }}
-                    className="w-16 accent-[var(--color-accent)] cursor-pointer"
+                    className="w-14 accent-[var(--color-accent)] cursor-pointer"
                   />
                 </div>
               </div>
-
-              <div className="mono text-[12px] tabnum px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg shadow-inner">
-                <span className="text-[var(--color-accent)] font-semibold">{fmtT(scrub)}</span>
-                <span className="text-[var(--color-muted)]"> / {fmtT(p.meta.duration || 0)}</span>
-              </div>
             </div>
+
+            <audio
+              ref={audioRef}
+              src={hasDubTrack ? currentAudioSrc : undefined}
+              onEnded={() => setPlay(false)}
+              onError={() => {
+                console.warn("Audio element error, falling back to video audio");
+                setAudioErr(true);
+                audioPlayingRef.current = false;
+              }}
+              preload="auto"
+              className="hidden"
+            />
           </div>
 
-          {/* Интерактивный таймлайн снизу (в стиле ElevenLabs / NLE): визуализация плашек фраз + перетаскивание / растягивание */}
+          {/* 4-дорожечный профессиональный таймлайн снизу */}
           {!audioOnly && (
             <div className="shrink-0 pb-1">
-              <InteractiveTimeline
+              <MultiTrackTimeline
                 pid={pid}
                 duration={p.meta.duration || 0}
                 scrub={scrub}
@@ -3853,6 +4481,11 @@ function Editor() {
                 onSeek={onSeek}
                 onPlaySeg={playSeg}
                 setProject={setProject}
+                trackState={trackState}
+                setTrackState={setTrackState}
+                loopSegId={loopSegId}
+                setLoopSegId={setLoopSegId}
+                dubRev={dubRev}
               />
             </div>
           )}
@@ -4019,10 +4652,22 @@ function Editor() {
                           </div>
                         </div>
                         <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
-                        <AutoGrowTextarea value={seg.tgt_text} onChange={(e) => patchSeg(seg.id, e.target.value)}
+                        <AutoGrowTextarea
+                          id={`seg-txt-${seg.id}`}
+                          value={seg.tgt_text}
+                          onChange={(e) => patchSeg(seg.id, e.target.value)}
+                          onSplit={(textarea) => handleSplitAtTextCursor(seg, textarea)}
+                          onKeyDown={(e) => {
+                            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                              e.preventDefault();
+                              handleSplitAtTextCursor(seg, e.currentTarget);
+                            }
+                          }}
                           onClick={(e) => e.stopPropagation()}
                           onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
-                          className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
+                          title="ПКМ — теги эмоций и эффектов, Ctrl+Enter — разрезать фразу"
+                          className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors"
+                        />
                         {on && (
                           <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
                             <Clock size={11} className="text-[var(--color-muted)] shrink-0" />
@@ -5253,8 +5898,8 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
 }
 
 // Пакетная обработка: DropZone кладёт выбранные файлы + настройки сюда, BatchView читает (без раздувания стора).
-const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; funnyOn: boolean; funny: string; voGain: number; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[] } =
-  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, funnyOn: false, funny: "", voGain: -12, trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [] };
+const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; funnyOn: boolean; funny: string; voGain: number; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number } =
+  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, funnyOn: false, funny: "", voGain: -12, trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0 };
 
 type BatchItem = { name: string; status: "queued" | "analyzing" | "rendering" | "done" | "error"; pid: string | null; pct: number; msg?: string; detail?: string };
 
@@ -5264,7 +5909,7 @@ function BatchView() {
   const { t } = useTranslation();
   const setStage = useStore((s) => s.setStage);
   const filesRef = useRef<File[]>(batchState.files);
-  const { tgt, src, audio, subs, burn, detectText, funnyOn, funny, voGain, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF } = batchState;
+  const { tgt, src, audio, subs, burn, detectText, funnyOn, funny, voGain, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
   const [items, setItems] = useState<BatchItem[]>(() => filesRef.current.map((f) => ({ name: f.name, status: "queued", pid: null, pct: 0 })));
   const [running, setRunning] = useState(false);
   const [doneN, setDoneN] = useState(0);
@@ -5292,8 +5937,9 @@ function BatchView() {
         // субтитры/бёрн/OCR off (нет видео) -> на выходе озвученный WAV.
         const fSubs = ao ? "none" : eSubs;
         const fBurn = ao ? false : audio === "transcribe" ? true : burn;
+        const effNumSpeakers = audio === "transcribe" ? transcribeSpeakers : 0;
         // Стиль перевода (#112) — параметром analyze (patch до analyze невозможен: project.json ещё нет).
-        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, false, trStyle);
+        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, false, trStyle, false, "", "auto", effNumSpeakers);
         await api.watchJob(job_id, (e) => { if (e.type === "progress") upd({ pct: e.pct ?? 0, detail: e.msg || undefined }); });
         if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain });   // громкость оригинала со старта -> общий для всех проектов батча
         // Сохранить оригинальную дорожку (#113): 2-я дорожка при mux. Только dub/voiceover, не аудио-файл.
@@ -5805,10 +6451,10 @@ function TranscriptView() {
         </div>
       </div>
 
-      <div className="min-h-0 flex flex-col gap-3">
+      <div className="min-h-0 flex flex-col gap-3 overflow-y-auto pr-0.5">
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
           <div className="text-[12px] text-[var(--color-muted)] mb-2">{t("transcribe.speakers")}</div>
-          <div>
+          <div className={speakers.length > 5 ? "max-h-[210px] overflow-y-auto pr-1 space-y-0.5" : ""}>
             {speakers.map((spk) => (
               <div key={spk} className="flex items-center justify-between py-1.5 border-b border-[var(--color-border)] last:border-0">
                 <div className="flex items-center gap-2">
