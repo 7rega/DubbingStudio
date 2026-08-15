@@ -155,7 +155,7 @@ export default function PreviewCanvas({
     v.volume = vol;
     v.playbackRate = playbackRate;
     if (playing) {
-      if (Math.abs(v.currentTime - scrub) > 0.1) {
+      if (Math.abs(v.currentTime - scrub) > 0.08) {
         v.currentTime = scrub;
       }
       const playPromise = v.play();
@@ -166,19 +166,29 @@ export default function PreviewCanvas({
       }
     } else {
       v.pause();
-      if (Math.abs(v.currentTime - scrub) > 0.04) {
+      if (Math.abs(v.currentTime - scrub) > 0.03) {
         v.currentTime = scrub;
       }
     }
   }, [playing, audioMuted, vol, playbackRate]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Непрерывная синхронизация видео со скрабом (и на паузе, и при перемотке во время воспроизведения)
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
     v.muted = audioMuted;
     v.volume = vol;
-    if (!playing && Math.abs(v.currentTime - scrub) > 0.04) {
-      v.currentTime = scrub;
+    const diff = Math.abs(v.currentTime - scrub);
+    if (!playing) {
+      if (diff > 0.03) {
+        v.currentTime = scrub;
+      }
+    } else {
+      // При воспроизведении: если разница больше 180мс (пользователь мотнул ползунок/кликнул таймлайн),
+      // мгновенно перематываем видео на лету без остановки воспроизведения!
+      if (diff > 0.18) {
+        v.currentTime = scrub;
+      }
     }
   }, [scrub, playing, audioMuted, vol]);
 
