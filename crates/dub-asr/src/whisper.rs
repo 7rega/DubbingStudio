@@ -263,7 +263,7 @@ impl WhisperAsr {
             .arg("--device").arg(&self.device)
             .arg("--word_timestamps").arg("True")
             .arg("--beep_off")
-            .arg("--print_progress").arg("False");
+            .arg("--print_progress");
         // Анти-галлюцинации (ENGINES_FINDINGS §3, arxiv 2501.11378: VAD до декодера = 0.2% галлюцинаций
         // против 21.3%; condition_on_previous_text тянет «Субтитры создавал…» через паузы; temp-fallback
         // на no_speech = петли). Флаги подтверждены по --help нашего XXL r245.4.
@@ -380,7 +380,7 @@ impl AsrEngine for WhisperAsr {
             .arg("--compute_type").arg(&self.compute)
             .arg("--device").arg(&self.device)
             .arg("--beep_off")
-            .arg("--print_progress").arg("False");
+            .arg("--print_progress");
 
         let l = lang.trim();
         if !l.is_empty() && l != "auto" {
