@@ -2421,13 +2421,25 @@ async fn dub_video(
     // (юзеры: «перегенерировать не работает, новое слышно только после Экспорта») -> берём НОВЕЙШИЙ по mtime.
     let output = find_output(&dir); // output.mp4/.mkv (видео) или output.wav (аудио-режим)
     let dub_audio = dir.join("dub_audio.m4a");
-    let mtime = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
-    let mut f = match (output.is_file(), dub_audio.is_file()) {
+    let final_audio = dir.join("final_audio.m4a");
+    let fresh_dub: Option<std::path::PathBuf> = match (dub_audio.is_file(), final_audio.is_file()) {
         (true, true) => {
-            if mtime(&dub_audio) > mtime(&output) { dub_audio } else { output }
+            let m1 = std::fs::metadata(&dub_audio).and_then(|m| m.modified()).ok();
+            let m2 = std::fs::metadata(&final_audio).and_then(|m| m.modified()).ok();
+            if m1 >= m2 { Some(dub_audio) } else { Some(final_audio) }
+        }
+        (true, false) => Some(dub_audio),
+        (false, true) => Some(final_audio),
+        (false, false) => None,
+    };
+    let mtime = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let mut f = match (output.is_file(), fresh_dub.is_some()) {
+        (true, true) => {
+            let fd = fresh_dub.unwrap();
+            if mtime(&fd) > mtime(&output) { fd } else { output }
         }
         (true, false) => output,
-        (false, true) => dub_audio,
+        (false, true) => fresh_dub.unwrap(),
         (false, false) => dir.join("analyzed.mp4"),
     };
     if !f.is_file() {
