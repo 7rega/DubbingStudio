@@ -2554,6 +2554,7 @@ function MultiTrackTimeline({
   setTrackState,
   loopSegId,
   setLoopSegId,
+  dubRev,
 }: {
   pid: string;
   duration: number;
@@ -2567,6 +2568,7 @@ function MultiTrackTimeline({
   setTrackState: React.Dispatch<React.SetStateAction<{ dub: boolean; bgm: boolean; vocals: boolean }>>;
   loopSegId: string | null;
   setLoopSegId: (id: string | null) => void;
+  dubRev?: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -2634,7 +2636,7 @@ function MultiTrackTimeline({
     api.waveformTrack(pid, "vocals").then((r) => setRawPeaksVocals(r.peaks || [])).catch(() => {});
     api.waveformTrack(pid, "bgm").then((r) => setRawPeaksBgm(r.peaks || [])).catch(() => {});
     api.waveformTrack(pid, "dub").then((r) => setRawPeaksDub(r.peaks || [])).catch(() => {});
-  }, [pid]);
+  }, [pid, dubRev]);
 
   // 1. Vocals: rawPeaksVocals or rawPeaksMaster
   const peaksVocals = rawPeaksVocals.length ? rawPeaksVocals : rawPeaksMaster;
@@ -4337,29 +4339,23 @@ function Editor() {
                   <SkipForward size={13} />
                 </button>
 
-                {/* Зацикливание фразы (Loop) */}
+                {/* Разделитель */}
+                <div className="h-4 w-px bg-[var(--color-border)] mx-0.5 shrink-0" />
+
+                {/* Миниатюрная кнопка «Перегенерировать всю озвучку» */}
                 <button
                   type="button"
-                  onClick={() => {
-                    if (loopSegId) {
-                      setLoopSegId(null);
-                    } else {
-                      const curSeg = p.segments.find((s) => scrub >= s.start && scrub <= s.end) || p.segments[0];
-                      if (curSeg) {
-                        setLoopSegId(curSeg.id);
-                        onSeek(curSeg.start);
-                        if (!play) setPlay(true);
-                      }
-                    }
-                  }}
-                  title={loopSegId ? "Отключить повтор фразы" : "Зациклить текущую фразу (Loop)"}
-                  className={`p-1.5 rounded-lg border transition-colors shrink-0 ${
-                    loopSegId
-                      ? "bg-amber-400/20 border-amber-400 text-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.3)]"
-                      : "bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-muted)] hover:text-white"
-                  }`}
+                  onClick={doRegenAll}
+                  disabled={regenId !== null}
+                  title="Перегенерировать всю озвучку проекта (TTS)"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--color-surface-2)] border border-amber-500/40 hover:border-amber-400 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
                 >
-                  <Repeat size={13} />
+                  {regenId === "__all__" ? (
+                    <Loader2 size={12} className="animate-spin text-amber-400" />
+                  ) : (
+                    <RotateCw size={12} className="text-amber-400" />
+                  )}
+                  <span>Пересинтез</span>
                 </button>
               </div>
 
@@ -4489,6 +4485,7 @@ function Editor() {
                 setTrackState={setTrackState}
                 loopSegId={loopSegId}
                 setLoopSegId={setLoopSegId}
+                dubRev={dubRev}
               />
             </div>
           )}

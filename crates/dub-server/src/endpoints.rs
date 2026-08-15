@@ -259,15 +259,12 @@ pub async fn waveform(
         "dub" => "waveform_dub.json",
         _ => "waveform.json",
     };
-    let cache = dir.join(cache_name);
-    if let Ok(txt) = std::fs::read_to_string(&cache) {
-        return ([("content-type", "application/json")], txt).into_response();
-    }
     let proj = match st.load_project(&pid) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
     let n: usize = q.get("n").and_then(|v| v.parse().ok()).unwrap_or(600);
+    let cache = dir.join(cache_name);
 
     // Выбираем соответствующий аудиофайл под запрошенный трек
     let target_file: Option<PathBuf> = match track {
@@ -291,6 +288,21 @@ pub async fn waveform(
         }
         _ => Some(PathBuf::from(&proj.meta.video)),
     };
+
+    // Если кэш существует и новее целевого аудиофайла — отдаём из кэша
+    if let Some(ref tf) = target_file {
+        if let (Ok(c_meta), Ok(t_meta)) = (cache.metadata(), tf.metadata()) {
+            if let (Ok(c_mtime), Ok(t_mtime)) = (c_meta.modified(), t_meta.modified()) {
+                if c_mtime >= t_mtime {
+                    if let Ok(txt) = std::fs::read_to_string(&cache) {
+                        return ([("content-type", "application/json")], txt).into_response();
+                    }
+                }
+            }
+        }
+    } else if let Ok(txt) = std::fs::read_to_string(&cache) {
+        return ([("content-type", "application/json")], txt).into_response();
+    }
 
     let peaks = if let Some(tf) = target_file {
         tokio::task::spawn_blocking(move || crate::wavio::waveform_peaks(&tf, n))
