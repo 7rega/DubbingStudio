@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, Headphones, SkipBack, SkipForward } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -2503,12 +2503,12 @@ function CastingPanel({ pid, characters, voices, onChange }: {
 // Дорожка 4: 💬 Субтитры (Интерактивные плашки с цветом спикеров и drag-and-trim)
 
 const SPK_BG_COLORS = [
-  "bg-emerald-600/25 border-emerald-500/70 text-emerald-200 hover:border-emerald-400",
-  "bg-blue-600/25 border-blue-500/70 text-blue-200 hover:border-blue-400",
-  "bg-purple-600/25 border-purple-500/70 text-purple-200 hover:border-purple-400",
-  "bg-amber-600/25 border-amber-500/70 text-amber-200 hover:border-amber-400",
-  "bg-rose-600/25 border-rose-500/70 text-rose-200 hover:border-rose-400",
-  "bg-cyan-600/25 border-cyan-500/70 text-cyan-200 hover:border-cyan-400",
+  "bg-emerald-600/30 border-emerald-500/80 text-emerald-100 hover:border-emerald-300 shadow-[0_2px_8px_rgba(5,150,105,0.2)]",
+  "bg-blue-600/30 border-blue-500/80 text-blue-100 hover:border-blue-300 shadow-[0_2px_8px_rgba(37,99,235,0.2)]",
+  "bg-purple-600/30 border-purple-500/80 text-purple-100 hover:border-purple-300 shadow-[0_2px_8px_rgba(124,58,237,0.2)]",
+  "bg-amber-600/30 border-amber-500/80 text-amber-100 hover:border-amber-300 shadow-[0_2px_8px_rgba(217,119,6,0.2)]",
+  "bg-rose-600/30 border-rose-500/80 text-rose-100 hover:border-rose-300 shadow-[0_2px_8px_rgba(225,29,72,0.2)]",
+  "bg-cyan-600/30 border-cyan-500/80 text-cyan-100 hover:border-cyan-300 shadow-[0_2px_8px_rgba(8,145,178,0.2)]",
 ];
 
 function MultiTrackTimeline({
@@ -2785,6 +2785,25 @@ function MultiTrackTimeline({
     } catch { /* ignore */ }
   };
 
+  const handleMergePrevious = async (seg: Project["segments"][number]) => {
+    const cur = useStore.getState().project;
+    if (!cur) return;
+    const idx = cur.segments.findIndex((s) => s.id === seg.id);
+    if (idx <= 0) return;
+    const prev = cur.segments[idx - 1];
+    const mergedSrc = `${prev.src_text} ${seg.src_text}`.trim();
+    const mergedTgt = `${prev.tgt_text} ${seg.tgt_text}`.trim();
+    useStore.getState().pushHistory(cur);
+    useStore.getState().setRendered(false);
+    try {
+      await api.patch(pid, { op: "segment", id: prev.id, end: seg.end, src_text: mergedSrc, tgt_text: mergedTgt });
+      const fresh = await api.patch(pid, { op: "del_segments", ids: [seg.id] });
+      setProject(fresh);
+      useStore.getState().bump();
+      playSfx("notify");
+    } catch { /* ignore */ }
+  };
+
   const handleMergeNext = async (seg: Project["segments"][number]) => {
     const cur = useStore.getState().project;
     if (!cur) return;
@@ -2842,7 +2861,7 @@ function MultiTrackTimeline({
               width={Math.max(1, bw - 0.5)}
               height={bh}
               fill={color}
-              opacity={played ? 0.9 : 0.4}
+              opacity={played ? 0.95 : 0.45}
             />
           );
         })}
@@ -2879,92 +2898,92 @@ function MultiTrackTimeline({
 
       {/* 4-Track DAW / NLE Container */}
       <div className="flex w-full bg-[var(--color-surface-2)]/60 border border-[var(--color-border)] rounded-xl overflow-hidden shadow-inner">
-        {/* Left Sticky Track Headers (~110px) */}
-        <div className="w-[115px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)]/80 flex flex-col z-20">
+        {/* Left Sticky Track Headers (~120px) */}
+        <div className="w-[125px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)]/90 flex flex-col z-20">
           {/* Time Ruler spacer */}
-          <div className="h-[20px] border-b border-[var(--color-border)] px-2 flex items-center text-[9px] font-bold text-[var(--color-muted)]">
+          <div className="h-[22px] border-b border-[var(--color-border)] px-2.5 flex items-center text-[9px] font-bold text-[var(--color-muted)] tracking-wider">
             ДОРОЖКИ
           </div>
 
           {/* Track 1 Header: 🎙️ Дубляж */}
-          <div className="h-[36px] border-b border-[var(--color-border)]/60 px-2 flex items-center justify-between text-[10.5px]">
-            <span className="font-medium text-emerald-400 truncate flex items-center gap-1" title="Дубляж (TTS)">
-              <Mic size={11} className="shrink-0" /> Дубляж
+          <div className="h-[38px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
+            <span className="font-medium text-emerald-400 truncate flex items-center gap-1.5" title="Дубляж (TTS)">
+              <Mic size={12} className="shrink-0" /> Дубляж
             </span>
-            <div className="flex items-center gap-0.5 shrink-0">
+            <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
                 onClick={() => toggleMute("dub")}
-                title="Заглушить дубляж (Mute)"
-                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackMutes.dub ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+                title={trackMutes.dub ? "Включить звук дубляжа" : "Заглушить дубляж (Mute)"}
+                className={`p-1 rounded transition-colors ${trackMutes.dub ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
               >
-                M
+                {trackMutes.dub ? <VolumeX size={11} /> : <Volume2 size={11} />}
               </button>
               <button
                 type="button"
                 onClick={() => toggleSolo("dub")}
-                title="Соло дубляж"
-                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackSolos.dub ? "bg-emerald-500/30 text-emerald-300 border border-emerald-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+                title={trackSolos.dub ? "Выключить соло дубляжа" : "Слушать только дубляж (Solo)"}
+                className={`p-1 rounded transition-colors ${trackSolos.dub ? "bg-emerald-500/30 text-emerald-300 border border-emerald-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
               >
-                S
+                <Headphones size={11} />
               </button>
             </div>
           </div>
 
           {/* Track 2 Header: 🎵 Фон / Музыка */}
-          <div className="h-[34px] border-b border-[var(--color-border)]/60 px-2 flex items-center justify-between text-[10.5px]">
-            <span className="font-medium text-purple-400 truncate flex items-center gap-1" title="Фоновая музыка (Instrumental)">
-              <Music size={11} className="shrink-0" /> Фон
+          <div className="h-[36px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
+            <span className="font-medium text-purple-400 truncate flex items-center gap-1.5" title="Фоновая музыка (Instrumental)">
+              <Music size={12} className="shrink-0" /> Фон
             </span>
-            <div className="flex items-center gap-0.5 shrink-0">
+            <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
                 onClick={() => toggleMute("bgm")}
-                title="Заглушить фоновую музыку (Mute)"
-                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackMutes.bgm ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+                title={trackMutes.bgm ? "Включить музыку" : "Заглушить музыку (Mute)"}
+                className={`p-1 rounded transition-colors ${trackMutes.bgm ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
               >
-                M
+                {trackMutes.bgm ? <VolumeX size={11} /> : <Volume2 size={11} />}
               </button>
               <button
                 type="button"
                 onClick={() => toggleSolo("bgm")}
-                title="Соло музыка"
-                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackSolos.bgm ? "bg-purple-500/30 text-purple-300 border border-purple-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+                title={trackSolos.bgm ? "Выключить соло музыки" : "Слушать только музыку (Solo)"}
+                className={`p-1 rounded transition-colors ${trackSolos.bgm ? "bg-purple-500/30 text-purple-300 border border-purple-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
               >
-                S
+                <Headphones size={11} />
               </button>
             </div>
           </div>
 
           {/* Track 3 Header: 🗣️ Вокал */}
-          <div className="h-[36px] border-b border-[var(--color-border)]/60 px-2 flex items-center justify-between text-[10.5px]">
-            <span className="font-medium text-cyan-400 truncate flex items-center gap-1" title="Оригинальный вокал">
-              <Users size={11} className="shrink-0" /> Вокал
+          <div className="h-[38px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
+            <span className="font-medium text-cyan-400 truncate flex items-center gap-1.5" title="Оригинальный чистый вокал">
+              <Users size={12} className="shrink-0" /> Вокал
             </span>
-            <div className="flex items-center gap-0.5 shrink-0">
+            <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
                 onClick={() => toggleMute("vocals")}
-                title="Заглушить вокал (Mute)"
-                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackMutes.vocals ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+                title={trackMutes.vocals ? "Включить вокал" : "Заглушить вокал (Mute)"}
+                className={`p-1 rounded transition-colors ${trackMutes.vocals ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
               >
-                M
+                {trackMutes.vocals ? <VolumeX size={11} /> : <Volume2 size={11} />}
               </button>
               <button
                 type="button"
                 onClick={() => toggleSolo("vocals")}
-                title="Соло вокал"
-                className={`px-1 py-0.5 rounded text-[9px] font-bold ${trackSolos.vocals ? "bg-cyan-500/30 text-cyan-300 border border-cyan-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+                title={trackSolos.vocals ? "Выключить соло вокала" : "Слушать только вокал (Solo)"}
+                className={`p-1 rounded transition-colors ${trackSolos.vocals ? "bg-cyan-500/30 text-cyan-300 border border-cyan-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
               >
-                S
+                <Headphones size={11} />
               </button>
             </div>
           </div>
 
           {/* Track 4 Header: 💬 Субтитры */}
-          <div className="h-[48px] px-2 flex items-center justify-between text-[10.5px]">
-            <span className="font-medium text-[var(--color-accent)] truncate flex items-center gap-1">
-              <Captions size={11} className="shrink-0" /> Субтитры
+          <div className="h-[60px] px-2.5 flex items-center justify-between text-[11px]">
+            <span className="font-medium text-[var(--color-accent)] truncate flex items-center gap-1.5">
+              <Captions size={12} className="shrink-0" /> Субтитры
             </span>
             <span className="mono text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-bold">
               {segments.length}
@@ -3001,18 +3020,18 @@ function MultiTrackTimeline({
             const tAt = Math.max(0, Math.min(total, (clickX / totalPx) * total));
             setContextMenu({ x: e.clientX, y: e.clientY, tAt });
           }}
-          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[174px]"
+          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[194px]"
         >
           <div ref={trackRef} className="relative h-full" style={{ width: `${totalPx}px` }}>
-            {/* Top Time Ruler (20px) */}
-            <div className="h-[20px] border-b border-[var(--color-border)] relative pointer-events-none">
+            {/* Top Time Ruler (22px) */}
+            <div className="h-[22px] border-b border-[var(--color-border)] relative pointer-events-none">
               {Array.from({ length: Math.ceil(total / 5) + 1 }).map((_, i) => {
                 const sec = i * 5;
                 if (sec > total) return null;
                 return (
                   <div
                     key={sec}
-                    className="absolute top-0 bottom-0 flex items-center border-l border-[var(--color-border)]/60 pl-1 text-[9px] mono text-[var(--color-muted)]/70"
+                    className="absolute top-0 bottom-0 flex items-center border-l border-[var(--color-border)]/60 pl-1 text-[9px] mono text-[var(--color-muted)]/70 font-semibold"
                     style={{ left: `${sec * zoom}px` }}
                   >
                     {fmtTime(sec)}
@@ -3021,26 +3040,26 @@ function MultiTrackTimeline({
               })}
             </div>
 
-            {/* Track 1: 🎙️ Дубляж Canvas (36px) */}
-            <div className="h-[36px] border-b border-[var(--color-border)]/40 relative bg-emerald-950/10">
-              {renderWaveform(peaksDub.length ? peaksDub : peaksVocals, "#10b981", 36)}
+            {/* Track 1: 🎙️ Дубляж Canvas (38px) */}
+            <div className="h-[38px] border-b border-[var(--color-border)]/40 relative bg-emerald-950/10">
+              {renderWaveform(peaksDub.length ? peaksDub : peaksVocals, "#10b981", 38)}
             </div>
 
-            {/* Track 2: 🎵 Фон / Музыка Canvas (34px) */}
-            <div className="h-[34px] border-b border-[var(--color-border)]/40 relative bg-purple-950/10">
-              {renderWaveform(peaksBgm, "#a855f7", 34)}
+            {/* Track 2: 🎵 Фон / Музыка Canvas (36px) */}
+            <div className="h-[36px] border-b border-[var(--color-border)]/40 relative bg-purple-950/10">
+              {renderWaveform(peaksBgm, "#a855f7", 36)}
             </div>
 
-            {/* Track 3: 🗣️ Вокал оригинала Canvas (36px) */}
-            <div className="h-[36px] border-b border-[var(--color-border)]/40 relative bg-cyan-950/10">
-              {renderWaveform(peaksVocals.length ? peaksVocals : peaksDub, "#06b6d4", 36)}
+            {/* Track 3: 🗣️ Вокал оригинала Canvas (38px) */}
+            <div className="h-[38px] border-b border-[var(--color-border)]/40 relative bg-cyan-950/10">
+              {renderWaveform(peaksVocals.length ? peaksVocals : peaksDub, "#06b6d4", 38)}
             </div>
 
-            {/* Track 4: 💬 Субтитры Blocks (48px) */}
-            <div className="h-[48px] relative">
+            {/* Track 4: 💬 Субтитры Blocks (60px) */}
+            <div className="h-[60px] relative pb-2">
               {segments.map((seg) => {
                 const leftPx = seg.start * zoom;
-                const widthPx = Math.max(36, (seg.end - seg.start) * zoom);
+                const widthPx = Math.max(42, (seg.end - seg.start) * zoom);
                 const isActive = scrub >= seg.start && scrub <= seg.end;
                 const spkNum = parseInt(seg.speaker ?? "0", 10) || 0;
                 const spkClass = SPK_BG_COLORS[spkNum % SPK_BG_COLORS.length];
@@ -3059,14 +3078,14 @@ function MultiTrackTimeline({
                       e.stopPropagation();
                       setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
                     }}
-                    className={`absolute top-[3px] h-[42px] rounded-lg border flex items-center justify-between px-1 text-[11px] cursor-grab active:cursor-grabbing transition-all shadow-sm ${spkClass} ${
-                      isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 shadow-md" : ""
-                    } ${isLoop ? "border-amber-400 ring-1 ring-amber-400" : ""}`}
+                    className={`absolute top-[5px] h-[48px] rounded-lg border flex items-center justify-between px-1 text-[11px] cursor-grab active:cursor-grabbing transition-all ${spkClass} ${
+                      isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""
+                    } ${isLoop ? "border-amber-400 ring-2 ring-amber-400" : ""}`}
                   >
                     {/* Left Trim Handle */}
                     <div
                       onPointerDown={(e) => handlePointerDown(e, seg, "resize-left")}
-                      className="w-2.5 h-full bg-white/15 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-l-md flex items-center justify-center text-[7px] opacity-60 hover:opacity-100 transition-colors"
+                      className="w-2.5 h-full bg-white/20 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-l-md flex items-center justify-center text-[7px] opacity-70 hover:opacity-100 transition-colors"
                       title="Изменить начало (Drag to Trim)"
                     >
                       │
@@ -3083,14 +3102,14 @@ function MultiTrackTimeline({
                         title="Прослушать фразу"
                         className="p-1 rounded-md bg-[var(--color-accent)] text-[var(--color-on-accent)] shrink-0 hover:scale-105 transition-transform"
                       >
-                        <Play size={10} />
+                        <Play size={10} fill="currentColor" />
                       </button>
                       {seg.speaker != null && (
-                        <span className="mono text-[8.5px] px-1 py-0.5 rounded bg-black/40 text-white/90 font-bold shrink-0">
+                        <span className="mono text-[9px] px-1 py-0.5 rounded bg-black/50 text-white font-bold shrink-0 shadow-sm">
                           SPK {seg.speaker}
                         </span>
                       )}
-                      <span className="font-medium truncate text-[11px] flex-1 leading-snug text-white/95">
+                      <span className="font-medium truncate text-[11.5px] flex-1 leading-snug text-white drop-shadow-sm">
                         {seg.tgt_text || seg.src_text}
                       </span>
                     </div>
@@ -3098,7 +3117,7 @@ function MultiTrackTimeline({
                     {/* Right Trim Handle */}
                     <div
                       onPointerDown={(e) => handlePointerDown(e, seg, "resize-right")}
-                      className="w-2.5 h-full bg-white/15 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-r-md flex items-center justify-center text-[7px] opacity-60 hover:opacity-100 transition-colors"
+                      className="w-2.5 h-full bg-white/20 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 rounded-r-md flex items-center justify-center text-[7px] opacity-70 hover:opacity-100 transition-colors"
                       title="Изменить конец (Drag to Trim)"
                     >
                       │
@@ -3113,104 +3132,121 @@ function MultiTrackTimeline({
               className="absolute top-0 bottom-0 w-0.5 bg-amber-300 z-30 pointer-events-none shadow-[0_0_10px_rgba(251,191,36,0.9)]"
               style={{ left: `${scrub * zoom}px` }}
             >
-              <div className="w-2.5 h-2.5 -ml-1 -top-0 bg-amber-400 rounded-b-sm" />
+              <div className="w-3 h-3 -ml-1.25 -top-0 bg-amber-400 rounded-b-sm shadow-md" />
             </div>
           </div>
         </div>
       </div>
 
-      {/* Right Click Context Menu */}
-      {contextMenu && (
-        <div
-          className="fixed z-50 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-accent)] shadow-2xl p-1.5 min-w-[230px] anim-pop flex flex-col gap-1"
-          style={{ left: Math.min(window.innerWidth - 240, contextMenu.x), top: Math.min(window.innerHeight - 200, contextMenu.y) }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {contextMenu.seg ? (
-            <>
-              <button
-                onClick={() => {
-                  onPlaySeg(contextMenu.seg!);
-                  setContextMenu(null);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
-              >
-                <Play size={13} className="text-[var(--color-accent)] shrink-0" />
-                <span>Воспроизвести фразу</span>
-              </button>
+      {/* Right Click Context Menu (with smart viewport flip) */}
+      {contextMenu && (() => {
+        const isBottom = contextMenu.y > window.innerHeight - 300;
+        const menuTop = isBottom ? Math.max(10, contextMenu.y - 275) : Math.min(window.innerHeight - 290, contextMenu.y);
+        const menuLeft = Math.min(window.innerWidth - 250, Math.max(10, contextMenu.x));
 
-              <button
-                onClick={() => {
-                  setLoopSegId(loopSegId === contextMenu.seg!.id ? null : contextMenu.seg!.id);
-                  onPlaySeg(contextMenu.seg!);
-                  setContextMenu(null);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
-              >
-                <Repeat size={13} className="text-amber-400 shrink-0" />
-                <span>{loopSegId === contextMenu.seg!.id ? "Отключить зацикливание" : "Зациклить фразу (Loop)"}</span>
-              </button>
+        return (
+          <div
+            className="fixed z-50 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-accent)] shadow-2xl p-1.5 min-w-[240px] anim-pop flex flex-col gap-1 backdrop-blur-md"
+            style={{ left: menuLeft, top: menuTop }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {contextMenu.seg ? (
+              <>
+                <button
+                  onClick={() => {
+                    onPlaySeg(contextMenu.seg!);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Play size={13} className="text-[var(--color-accent)] shrink-0" />
+                  <span>Воспроизвести фразу</span>
+                </button>
 
-              <button
-                onClick={() => {
-                  handleSplitSegment(contextMenu.seg!, contextMenu.tAt);
-                  setContextMenu(null);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
-              >
-                <Scissors size={13} className="text-cyan-400 shrink-0" />
-                <span>Разрезать по курсору ({fmtTime(contextMenu.tAt)})</span>
-              </button>
+                <button
+                  onClick={() => {
+                    setLoopSegId(loopSegId === contextMenu.seg!.id ? null : contextMenu.seg!.id);
+                    onPlaySeg(contextMenu.seg!);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Repeat size={13} className="text-amber-400 shrink-0" />
+                  <span>{loopSegId === contextMenu.seg!.id ? "Отключить повтор" : "Зациклить фразу (Loop)"}</span>
+                </button>
 
-              <button
-                onClick={() => {
-                  handleMergeNext(contextMenu.seg!);
-                  setContextMenu(null);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
-              >
-                <Link size={13} className="text-indigo-400 shrink-0" />
-                <span>Склеить со следующей</span>
-              </button>
+                <button
+                  onClick={() => {
+                    handleSplitSegment(contextMenu.seg!, contextMenu.tAt);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Scissors size={13} className="text-cyan-400 shrink-0" />
+                  <span>Разрезать по курсору ({fmtTime(contextMenu.tAt)})</span>
+                </button>
 
-              <div className="h-px bg-[var(--color-border)] my-0.5" />
+                <button
+                  onClick={() => {
+                    handleMergePrevious(contextMenu.seg!);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Link size={13} className="text-indigo-400 shrink-0" />
+                  <span>Склеить с предыдущей</span>
+                </button>
 
-              <button
-                onClick={() => {
-                  handleDeleteSegment(contextMenu.seg!.id);
-                  setContextMenu(null);
-                }}
-                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-danger,#ef4444)]/20 text-[var(--color-danger,#ef4444)] flex items-center gap-2 text-[12px] font-medium transition-colors"
-              >
-                <Trash2 size={13} className="shrink-0" />
-                <span>Удалить фразу</span>
-              </button>
+                <button
+                  onClick={() => {
+                    handleMergeNext(contextMenu.seg!);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Link size={13} className="text-indigo-400 shrink-0" />
+                  <span>Склеить со следующей</span>
+                </button>
 
+                <div className="h-px bg-[var(--color-border)] my-0.5" />
+
+                <button
+                  onClick={() => {
+                    handleDeleteSegment(contextMenu.seg!.id);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-danger,#ef4444)]/20 text-[var(--color-danger,#ef4444)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Trash2 size={13} className="shrink-0" />
+                  <span>Удалить фразу</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleAddSegmentAt(contextMenu.tAt);
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                >
+                  <Plus size={13} className="text-[var(--color-accent)] shrink-0" />
+                  <span>Вставить фразу здесь ({fmtTime(contextMenu.tAt)})</span>
+                </button>
+              </>
+            ) : (
               <button
                 onClick={() => {
                   handleAddSegmentAt(contextMenu.tAt);
                   setContextMenu(null);
                 }}
-                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
+                className="w-full text-left px-3 py-2 rounded-lg bg-[var(--color-surface)] hover:bg-[var(--color-accent)] hover:text-[var(--color-on-accent)] flex items-center gap-2 text-[12px] font-medium transition-colors group"
               >
-                <Plus size={13} className="text-[var(--color-accent)] shrink-0" />
-                <span>Вставить фразу здесь ({fmtTime(contextMenu.tAt)})</span>
+                <Plus size={13} className="text-[var(--color-accent)] group-hover:text-current shrink-0" />
+                <span>Вставить новую фразу ({fmtTime(contextMenu.tAt)})</span>
               </button>
-            </>
-          ) : (
-            <button
-              onClick={() => {
-                handleAddSegmentAt(contextMenu.tAt);
-                setContextMenu(null);
-              }}
-              className="w-full text-left px-3 py-2 rounded-lg bg-[var(--color-surface)] hover:bg-[var(--color-accent)] hover:text-[var(--color-on-accent)] flex items-center gap-2 text-[12px] font-medium transition-colors group"
-            >
-              <Plus size={13} className="text-[var(--color-accent)] group-hover:text-current shrink-0" />
-              <span>Вставить новую фразу ({fmtTime(contextMenu.tAt)})</span>
-            </button>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -3435,18 +3471,30 @@ function Editor() {
 
   const hasDubTrack = !audioOnly && (mode === "dub" || mode === "voiceover" || mode === "funny") && !audioErr;
 
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = vol;
-      audioRef.current.playbackRate = 1.0;
-    }
-  }, [vol, dubRev]);   // применить громкость прослушки (скорость звука ВСЕГДА 1.0x)
-
-  // Dub playback & timeline driver:
   // Effective audio URL based on monitoring mode
   const currentAudioSrc = (audioMode === "vocals") ? api.audioVocalsUrl(pid) : api.dubUrl(pid, dubRev);
   const effectiveVol = (audioMode === "dub" && trackMutes.dub) || (audioMode === "vocals" && trackMutes.vocals) ? 0 : vol;
 
+  // Smooth speed updates with pitch preservation (no pitch shifting chipmunk / monster distortion)
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.playbackRate = playSpeed;
+    try {
+      (a as any).preservesPitch = true;
+      (a as any).mozPreservesPitch = true;
+      (a as any).webkitPreservesPitch = true;
+    } catch {}
+  }, [playSpeed]);
+
+  // Volume update without restarting playback
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.volume = effectiveVol;
+  }, [effectiveVol]);
+
+  // Dub playback & timeline driver (Master Clock)
   useEffect(() => {
     const a = audioRef.current;
     if (!play) {
@@ -3458,9 +3506,7 @@ function Editor() {
     if (a && hasDubTrack) {
       a.playbackRate = playSpeed;
       a.volume = effectiveVol;
-      if (Math.abs(a.currentTime - scrub) > 0.1) {
-        a.currentTime = scrub;
-      }
+      a.currentTime = scrub;
       a.play()
         .then(() => {
           audioPlayingRef.current = true;
@@ -3493,7 +3539,93 @@ function Editor() {
       }
     }, 40);
     return () => window.clearInterval(id);
-  }, [play, hasDubTrack, effectiveVol, playSpeed, loopSegId, currentAudioSrc]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [play, hasDubTrack, currentAudioSrc]);
+
+  // Text-cursor split helper (Ctrl+Enter in text area)
+  const handleSplitAtTextCursor = async (seg: Project["segments"][number], textarea: HTMLTextAreaElement) => {
+    const pos = textarea.selectionStart;
+    const text = seg.tgt_text || "";
+    if (pos <= 0 || pos >= text.length) return;
+    const text1 = text.slice(0, pos).trim();
+    const text2 = text.slice(pos).trim();
+    if (!text1 || !text2) return;
+
+    const ratio = text1.length / Math.max(1, text.length);
+    const totalDur = seg.end - seg.start;
+    const splitT = Math.round((seg.start + totalDur * ratio) * 100) / 100;
+    const t = Math.max(seg.start + 0.1, Math.min(seg.end - 0.1, splitT));
+
+    const srcWords = (seg.src_text || "").trim().split(/\s+/);
+    const srcSplitIdx = Math.max(1, Math.min(srcWords.length - 1, Math.round(srcWords.length * ratio)));
+    const s1_src = srcWords.slice(0, srcSplitIdx).join(" ");
+    const s2_src = srcWords.slice(srcSplitIdx).join(" ");
+
+    pushHistory(p);
+    setRendered(false);
+    try {
+      await api.patch(pid, { op: "segment", id: seg.id, start: seg.start, end: t, src_text: s1_src, tgt_text: text1 });
+      const fresh = await api.patch(pid, {
+        op: "add_segment",
+        id: `u${Date.now().toString(36)}`,
+        start: t,
+        end: seg.end,
+        speaker: seg.speaker ?? "0",
+        src_text: s2_src,
+        tgt_text: text2,
+      });
+      setProject(fresh);
+      bump();
+      playSfx("notify");
+    } catch { /* ignore */ }
+  };
+
+  // Global Ctrl+K hotkey for splitting active segment at playhead
+  useEffect(() => {
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        e.preventDefault();
+        const activeSeg = p.segments.find((s) => scrub >= s.start && scrub <= s.end);
+        if (activeSeg) {
+          const t = Math.round(scrub * 100) / 100;
+          if (t > activeSeg.start + 0.1 && t < activeSeg.end - 0.1) {
+            const ratio = (t - activeSeg.start) / Math.max(0.1, activeSeg.end - activeSeg.start);
+            const srcWords = (activeSeg.src_text || "").trim().split(/\s+/);
+            const tgtWords = (activeSeg.tgt_text || "").trim().split(/\s+/);
+            const srcSplitIdx = Math.max(1, Math.min(srcWords.length - 1, Math.round(srcWords.length * ratio)));
+            const tgtSplitIdx = Math.max(1, Math.min(tgtWords.length - 1, Math.round(tgtWords.length * ratio)));
+
+            const s1_src = srcWords.slice(0, srcSplitIdx).join(" ");
+            const s2_src = srcWords.slice(srcSplitIdx).join(" ");
+            const s1_tgt = tgtWords.slice(0, tgtSplitIdx).join(" ");
+            const s2_tgt = tgtWords.slice(tgtSplitIdx).join(" ");
+
+            pushHistory(p);
+            setRendered(false);
+            api.patch(pid, { op: "segment", id: activeSeg.id, start: activeSeg.start, end: t, src_text: s1_src, tgt_text: s1_tgt })
+              .then(() => api.patch(pid, {
+                op: "add_segment",
+                id: `u${Date.now().toString(36)}`,
+                start: t,
+                end: activeSeg.end,
+                speaker: activeSeg.speaker ?? "0",
+                src_text: s2_src,
+                tgt_text: s2_tgt,
+              }))
+              .then((fresh) => {
+                setProject(fresh);
+                bump();
+                playSfx("notify");
+              })
+              .catch(() => {});
+          }
+        }
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKey);
+    return () => window.removeEventListener("keydown", handleGlobalKey);
+  }, [p.segments, scrub, pid]); // eslint-disable-line react-hooks/exhaustive-deps
   const [regenId, setRegenId] = useState<string | null>(null);        // segment whose TTS is being re-generated
   const [remixText, setRemixText] = useState("");                     // funny-remix theme/instruction for Gemma
   const [remixing, setRemixing] = useState(false);
@@ -4470,6 +4602,23 @@ function Editor() {
                               className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
                               {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
                             </button>
+                            <button onClick={(e) => {
+                                e.stopPropagation();
+                                const textarea = document.getElementById(`seg-txt-${seg.id}`) as HTMLTextAreaElement | null;
+                                if (textarea && textarea.selectionStart > 0 && textarea.selectionStart < (seg.tgt_text || "").length) {
+                                  handleSplitAtTextCursor(seg, textarea);
+                                } else {
+                                  const text = seg.tgt_text || "";
+                                  const mid = Math.floor(text.length / 2);
+                                  const spaceIdx = text.indexOf(" ", mid);
+                                  const splitPos = spaceIdx !== -1 ? spaceIdx : mid;
+                                  const fakeEl = { selectionStart: splitPos } as HTMLTextAreaElement;
+                                  handleSplitAtTextCursor(seg, fakeEl);
+                                }
+                              }} disabled={regenId !== null} title="Разрезать фразу (Ctrl+Enter в тексте)"
+                                className="p-0.5 text-[var(--color-muted)] hover:text-cyan-400 disabled:opacity-40 transition-colors">
+                                <Scissors size={13} />
+                              </button>
                             <button onClick={(e) => { e.stopPropagation(); doKeepSeg(seg.id); }} disabled={regenId !== null} title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
                               className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}><Music size={13} /></button>
                             <button onClick={(e) => { e.stopPropagation(); doHideSeg(seg.id); }} disabled={regenId !== null} title={seg.hidden ? t("seg.show") : t("seg.hide")}
@@ -4480,7 +4629,13 @@ function Editor() {
                           </div>
                         </div>
                         <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
-                        <AutoGrowTextarea value={seg.tgt_text} onChange={(e) => patchSeg(seg.id, e.target.value)}
+                        <AutoGrowTextarea id={`seg-txt-${seg.id}`} value={seg.tgt_text} onChange={(e) => patchSeg(seg.id, e.target.value)}
+                          onKeyDown={(e) => {
+                            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                              e.preventDefault();
+                              handleSplitAtTextCursor(seg, e.currentTarget);
+                            }
+                          }}
                           onClick={(e) => e.stopPropagation()}
                           onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
                           className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors" />

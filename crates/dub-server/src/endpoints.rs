@@ -270,31 +270,34 @@ pub async fn waveform(
     let n: usize = q.get("n").and_then(|v| v.parse().ok()).unwrap_or(600);
 
     // Выбираем соответствующий аудиофайл под запрошенный трек
-    let target_file: PathBuf = match track {
+    let target_file: Option<PathBuf> = match track {
         "vocals" => {
             let p1 = dir.join("stems/vocals.wav");
-            let p2 = dir.join("vocals16.wav");
-            let p3 = dir.join("vocals16_clean.wav");
-            if p1.is_file() { p1 } else if p2.is_file() { p2 } else if p3.is_file() { p3 } else { PathBuf::from(&proj.meta.video) }
+            let p2 = dir.join("vocals16_clean.wav");
+            let p3 = dir.join("vocals16.wav");
+            if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else if p3.is_file() { Some(p3) } else { None }
         }
         "bgm" | "instrumental" => {
             let p1 = dir.join("stems/instrumental.wav");
             let p2 = dir.join("bgm.wav");
-            if p1.is_file() { p1 } else if p2.is_file() { p2 } else { PathBuf::from(&proj.meta.video) }
+            if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else { None }
         }
         "dub" => {
             let p1 = dir.join("dub_audio.m4a");
             let p2 = dir.join("output.mp4");
             let p3 = dir.join("output.wav");
-            if p1.is_file() { p1 } else if p2.is_file() { p2 } else if p3.is_file() { p3 } else { PathBuf::from(&proj.meta.video) }
+            if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else if p3.is_file() { Some(p3) } else { None }
         }
-        _ => PathBuf::from(&proj.meta.video),
+        _ => Some(PathBuf::from(&proj.meta.video)),
     };
 
-    let peaks =
-        tokio::task::spawn_blocking(move || crate::wavio::waveform_peaks(&target_file, n))
+    let peaks = if let Some(tf) = target_file {
+        tokio::task::spawn_blocking(move || crate::wavio::waveform_peaks(&tf, n))
             .await
-            .unwrap_or_default();
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
     let empty = peaks.is_empty();
     let out = json!({ "peaks": peaks });
     if !empty {
