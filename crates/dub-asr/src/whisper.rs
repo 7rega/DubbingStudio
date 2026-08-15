@@ -262,7 +262,8 @@ impl WhisperAsr {
             .arg("--compute_type").arg(&self.compute)
             .arg("--device").arg(&self.device)
             .arg("--word_timestamps").arg("True")
-            .arg("--beep_off");
+            .arg("--beep_off")
+            .arg("--print_progress").arg("False");
         // Анти-галлюцинации (ENGINES_FINDINGS §3, arxiv 2501.11378: VAD до декодера = 0.2% галлюцинаций
         // против 21.3%; condition_on_previous_text тянет «Субтитры создавал…» через паузы; temp-fallback
         // на no_speech = петли). Флаги подтверждены по --help нашего XXL r245.4.
@@ -277,6 +278,10 @@ impl WhisperAsr {
                     }
                 }
             }
+        } else {
+            // Для классического faster-whisper (не XXL) жестко включаем Silero VAD и защиту от зацикливания
+            cmd.arg("--vad_filter").arg("True")
+                .arg("--condition_on_previous_text").arg("False");
         }
         // Явные CPU-потоки (флаг есть в v1.0.1): оконная параллель делит ядра между сабпроцессами.
         if let Some(n) = threads {
@@ -299,20 +304,20 @@ impl WhisperAsr {
         }
         let out = cmd.output().map_err(|e| AsrError::Parakeet(format!("whisper spawn: {e}")))?;
         if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stdout = String::from_utf8_lossy(&out.stdout);
             // АВТО-ФОЛБЭК cuda -> cpu: дефолт девайса теперь cuda (быстрее в разы на NVIDIA), но на
             // машине без CUDA/либ сабпроцесс падает — повторяем ОДИН раз на cpu с безопасным int8
             // (float16 на CPU роняет CTranslate2 — гард #41). device=="cpu" сюда не зайдёт (нет рекурсии).
             if self.device == "cuda" {
-                eprintln!("[whisper] CUDA failed for run_words, falling back to CPU/int8");
+                eprintln!("[whisper] CUDA failed (code {:?}), falling back to CPU/int8.\n[whisper] stderr: {}\n[whisper] stdout: {}", out.status.code(), stderr.trim(), stdout.trim());
                 let mut fb = self.clone();
                 fb.device = "cpu".into();
                 if matches!(fb.compute.as_str(), "float16" | "bfloat16" | "int8_float16" | "int8_bfloat16") {
                     fb.compute = "int8".into();
                 }
-                return fb.run_words(wav, lang, threads);
+                return fb.run_words_auto(wav, lang);
             }
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let stdout = String::from_utf8_lossy(&out.stdout);
             let mut tail: Vec<&str> = stderr.lines().chain(stdout.lines()).rev().take(10).collect();
             tail.reverse();
             return Err(AsrError::Parakeet(format!(
@@ -374,7 +379,8 @@ impl AsrEngine for WhisperAsr {
             .arg("--output_dir").arg(&out_dir)
             .arg("--compute_type").arg(&self.compute)
             .arg("--device").arg(&self.device)
-            .arg("--beep_off");
+            .arg("--beep_off")
+            .arg("--print_progress").arg("False");
 
         let l = lang.trim();
         if !l.is_empty() && l != "auto" {

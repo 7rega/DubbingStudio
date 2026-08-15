@@ -95,6 +95,7 @@ export interface HiggsContextMenuState {
   targetInput: HTMLInputElement | HTMLTextAreaElement | null;
   cursorPos: number;
   onInsert: (newText: string, newCursorPos: number) => void;
+  onSplit?: () => void;
 }
 
 function SubmenuPanel({
@@ -289,25 +290,49 @@ export function HiggsContextMenu({
         <div className="px-1 py-1 border-b border-[var(--color-border)]/60 space-y-0.5">
           <button
             onClick={handleCut}
-            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
           >
-            <Scissors size={14} className="text-[var(--color-muted)]" />
-            <span>{t("common.cut", "Вырезать")}</span>
+            <div className="flex items-center gap-2">
+              <Scissors size={14} className="text-[var(--color-muted)]" />
+              <span>{t("common.cut", "Вырезать")}</span>
+            </div>
+            <span className="mono text-[10px] text-[var(--color-muted)]">Ctrl+X</span>
           </button>
           <button
             onClick={handleCopy}
-            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
           >
-            <Copy size={14} className="text-[var(--color-muted)]" />
-            <span>{t("common.copy", "Копировать")}</span>
+            <div className="flex items-center gap-2">
+              <Copy size={14} className="text-[var(--color-muted)]" />
+              <span>{t("common.copy", "Копировать")}</span>
+            </div>
+            <span className="mono text-[10px] text-[var(--color-muted)]">Ctrl+C</span>
           </button>
           <button
             onClick={handlePaste}
-            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] text-[var(--color-text)] transition-colors text-left"
           >
-            <Clipboard size={14} className="text-[var(--color-muted)]" />
-            <span>{t("common.paste", "Вставить")}</span>
+            <div className="flex items-center gap-2">
+              <Clipboard size={14} className="text-[var(--color-muted)]" />
+              <span>{t("common.paste", "Вставить")}</span>
+            </div>
+            <span className="mono text-[10px] text-[var(--color-muted)]">Ctrl+V</span>
           </button>
+          {state.onSplit && (
+            <button
+              onClick={() => {
+                state.onSplit?.();
+                onClose();
+              }}
+              className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-cyan-500/20 text-cyan-300 transition-colors text-left"
+            >
+              <div className="flex items-center gap-2">
+                <Scissors size={14} className="text-cyan-400" />
+                <span className="font-medium">Разрезать фразу</span>
+              </div>
+              <span className="mono text-[10px] opacity-75">Ctrl+Enter</span>
+            </button>
+          )}
         </div>
 
         {/* Раздел тегов Higgs TTS */}

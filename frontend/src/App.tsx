@@ -2265,7 +2265,7 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   );
 }
 
-function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { onSplit?: (el: HTMLTextAreaElement) => void }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [menuState, setMenuState] = useState<HiggsContextMenuState | null>(null);
 
@@ -2300,15 +2300,18 @@ function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElemen
           el.dispatchEvent(new Event("input", { bubbles: true }));
         }
       },
+      onSplit: props.onSplit ? () => props.onSplit!(el) : undefined,
     });
   };
+
+  const { onSplit, ...textareaProps } = props;
 
   return (
     <>
       <textarea
         ref={ref}
         rows={1}
-        {...props}
+        {...textareaProps}
         onContextMenu={(e) => {
           handleContextMenu(e);
           if (props.onContextMenu) props.onContextMenu(e);
@@ -2685,17 +2688,15 @@ function MultiTrackTimeline({
     const cur = useStore.getState().project;
     if (!cur) return;
 
-    const SNAP_THRESH = 0.18;
+    const SNAP_THRESH = 0.055; // Мягкий деликатный радиус притяжения (55мс / 1 столбик пика)
 
-    // 1. Умное магнитное прилипание к началу (Onset) и концу (Offset) звука речи
+    // 1. Деликатное магнитное прилипание к пикам звука речи (шаг в 1 пик)
     if (peaksVocals.length > 0 && total > 0) {
       const step = total / peaksVocals.length;
-      for (let i = 0; i < peaksVocals.length - 1; i++) {
-        const p1 = peaksVocals[i];
-        const p2 = peaksVocals[i + 1];
-        // Onset: тишина переходит в речь
-        if (p1 < 0.06 && p2 >= 0.08) {
-          const t = (i + 1) * step;
+      for (let i = 0; i < peaksVocals.length; i++) {
+        const p = peaksVocals[i];
+        if (p > 0.035) {
+          const t = i * step;
           if (draggingSeg.type === "move" || draggingSeg.type === "resize-left") {
             if (Math.abs(newStart - t) < SNAP_THRESH) {
               newStart = Math.round(t * 100) / 100;
@@ -2703,10 +2704,6 @@ function MultiTrackTimeline({
               break;
             }
           }
-        }
-        // Offset: речь переходит в тишину
-        if (p1 >= 0.08 && p2 < 0.06) {
-          const t = i * step;
           if (draggingSeg.type === "move" || draggingSeg.type === "resize-right") {
             if (Math.abs(newEnd - t) < SNAP_THRESH) {
               newEnd = Math.round(t * 100) / 100;
@@ -2717,7 +2714,7 @@ function MultiTrackTimeline({
       }
     }
 
-    // 2. Магнитное авто-прилипание к границам соседних субтитров
+    // 2. Мягкое авто-прилипание к границам соседних субтитров
     for (const s of cur.segments) {
       if (s.id === draggingSeg.id) continue;
       if (draggingSeg.type === "move" || draggingSeg.type === "resize-left") {
@@ -3176,8 +3173,12 @@ function MultiTrackTimeline({
 
       {/* Right Click Context Menu (with smart viewport flip) */}
       {contextMenu && (() => {
-        const isBottom = contextMenu.y > window.innerHeight - 300;
-        const menuTop = isBottom ? Math.max(10, contextMenu.y - 275) : Math.min(window.innerHeight - 290, contextMenu.y);
+        const isSimpleAdd = !contextMenu.seg;
+        const menuHeight = isSimpleAdd ? 44 : 240;
+        const isBottom = contextMenu.y > window.innerHeight - (menuHeight + 20);
+        const menuTop = isBottom
+          ? Math.max(10, contextMenu.y - menuHeight - 6)
+          : Math.min(window.innerHeight - menuHeight - 10, contextMenu.y + 4);
         const menuLeft = Math.min(window.innerWidth - 250, Math.max(10, contextMenu.x));
 
         return (
@@ -3491,9 +3492,9 @@ function Editor() {
   const [audioErr, setAudioErr] = useState(false);
   const audioPlayingRef = useRef(false);
 
-  // Track states (Dub, BGM, Vocals toggle) & speed
+  // Track states (Dub, BGM, Vocals toggle)
   const [trackState, setTrackState] = useState<{ dub: boolean; bgm: boolean; vocals: boolean }>({ dub: true, bgm: true, vocals: false });
-  const [playSpeed, setPlaySpeed] = useState<number>(1.0);
+  const playSpeed = 1.0;
   const [loopSegId, setLoopSegId] = useState<string | null>(null);
 
   const playEndRef = useRef<number>(Infinity);                        // stop time for single-phrase playback (Infinity = full)
@@ -4054,7 +4055,18 @@ function Editor() {
         originalName = r.projects.find((x) => x.pid === pid)?.video;
       } catch {}
     }
-    const name = originalName || baseName(p.meta.video || pid);
+    const rawBase = originalName || baseName(p.meta.video || pid);
+    let baseStem = rawBase.replace(/\.[^/.]+$/, "");
+    // Срезаем прошлые суффиксы, если они уже были
+    baseStem = baseStem.replace(/_(dub|voiceover|subtitles|remix)$/i, "");
+
+    const ext = p.audio?.container === "mkv" ? "mkv" : "mp4";
+    const modeSuffix = p.mode === "voiceover"
+      ? "voiceover"
+      : p.audio?.rewrite
+      ? "remix"
+      : (p.mode === "nodub" || p.mode === "transcribe" ? "subtitles" : "dub");
+    const name = `${baseStem}_${modeSuffix}.${ext}`;
 
     addExport({ id: exId, name, status: "rendering", msg: t("common.rendering"), pid });   // queue entry -> Files panel (no screen block)
     setRendering(true); pushActivity(`${t("export.proceed")}: ${name}`);
@@ -4062,7 +4074,7 @@ function Editor() {
       const { job_id } = await api.render(pid);
       await api.watchJob(job_id, (e) => { if (e.type === "progress") { updateExport(exId, { msg: e.msg || "" }); pushActivity(e.msg || "", "work"); } });
       
-      // Копируем готовый файл в папку Export внутри рабочей папки проекта с сохранением оригинального имени
+      // Копируем готовый файл в папку Export внутри рабочей папки проекта с суффиксом режима
       const exportDir = p.work_dir ? `${p.work_dir}/Export` : "Export";
       try {
         await api.saveOutput(pid, exportDir, name);
@@ -4422,23 +4434,6 @@ function Editor() {
                   </span>
                 </div>
 
-                {/* Селектор скорости */}
-                <select
-                  value={playSpeed}
-                  onChange={(e) => {
-                    const s = parseFloat(e.target.value);
-                    setPlaySpeed(s);
-                    if (audioRef.current) audioRef.current.playbackRate = s;
-                  }}
-                  title="Скорость воспроизведения (0.5x - 2.0x)"
-                  className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2 py-1 text-[11px] font-bold text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none cursor-pointer"
-                >
-                  <option value={0.5}>0.5x</option>
-                  <option value={1.0}>1.0x</option>
-                  <option value={1.5}>1.5x</option>
-                  <option value={2.0}>2.0x</option>
-                </select>
-
                 {/* Громкость */}
                 <div className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg text-xs" title={t("play.volume")}>
                   {effectiveVol === 0 ? (
@@ -4650,23 +4645,6 @@ function Editor() {
                               className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
                               {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
                             </button>
-                            <button onClick={(e) => {
-                                e.stopPropagation();
-                                const textarea = document.getElementById(`seg-txt-${seg.id}`) as HTMLTextAreaElement | null;
-                                if (textarea && textarea.selectionStart > 0 && textarea.selectionStart < (seg.tgt_text || "").length) {
-                                  handleSplitAtTextCursor(seg, textarea);
-                                } else {
-                                  const text = seg.tgt_text || "";
-                                  const mid = Math.floor(text.length / 2);
-                                  const spaceIdx = text.indexOf(" ", mid);
-                                  const splitPos = spaceIdx !== -1 ? spaceIdx : mid;
-                                  const fakeEl = { selectionStart: splitPos } as HTMLTextAreaElement;
-                                  handleSplitAtTextCursor(seg, fakeEl);
-                                }
-                              }} disabled={regenId !== null} title="Разрезать фразу (Ctrl+Enter в тексте)"
-                                className="p-0.5 text-[var(--color-muted)] hover:text-cyan-400 disabled:opacity-40 transition-colors">
-                                <Scissors size={13} />
-                              </button>
                             <button onClick={(e) => { e.stopPropagation(); doKeepSeg(seg.id); }} disabled={regenId !== null} title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
                               className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}><Music size={13} /></button>
                             <button onClick={(e) => { e.stopPropagation(); doHideSeg(seg.id); }} disabled={regenId !== null} title={seg.hidden ? t("seg.show") : t("seg.hide")}
@@ -4677,7 +4655,11 @@ function Editor() {
                           </div>
                         </div>
                         <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
-                        <AutoGrowTextarea id={`seg-txt-${seg.id}`} value={seg.tgt_text} onChange={(e) => patchSeg(seg.id, e.target.value)}
+                        <AutoGrowTextarea
+                          id={`seg-txt-${seg.id}`}
+                          value={seg.tgt_text}
+                          onChange={(e) => patchSeg(seg.id, e.target.value)}
+                          onSplit={(textarea) => handleSplitAtTextCursor(seg, textarea)}
                           onKeyDown={(e) => {
                             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                               e.preventDefault();
@@ -4686,7 +4668,9 @@ function Editor() {
                           }}
                           onClick={(e) => e.stopPropagation()}
                           onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
-                          className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
+                          title="ПКМ — теги эмоций и эффектов, Ctrl+Enter — разрезать фразу"
+                          className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors"
+                        />
                         {on && (
                           <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
                             <Clock size={11} className="text-[var(--color-muted)] shrink-0" />
@@ -6470,10 +6454,10 @@ function TranscriptView() {
         </div>
       </div>
 
-      <div className="min-h-0 flex flex-col gap-3">
+      <div className="min-h-0 flex flex-col gap-3 overflow-y-auto pr-0.5">
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
           <div className="text-[12px] text-[var(--color-muted)] mb-2">{t("transcribe.speakers")}</div>
-          <div>
+          <div className={speakers.length > 5 ? "max-h-[210px] overflow-y-auto pr-1 space-y-0.5" : ""}>
             {speakers.map((spk) => (
               <div key={spk} className="flex items-center justify-between py-1.5 border-b border-[var(--color-border)] last:border-0">
                 <div className="flex items-center gap-2">
