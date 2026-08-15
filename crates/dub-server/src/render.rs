@@ -942,6 +942,7 @@ fn build_dub(
             let ok = crate::cloud_tts::synth_batch(&paths.models_root, jobs, conc);
             emit(progress, "tts", &format!("облачный TTS: пре-синтез готов ({ok} сегментов)"));
         }
+    }
     let dirty_total = dirty_count;
     let mut synth_counter = 0usize;
     for &(fi, s) in segs.iter() {
