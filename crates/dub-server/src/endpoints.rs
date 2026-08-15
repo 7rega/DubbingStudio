@@ -283,10 +283,11 @@ pub async fn waveform(
             if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else { None }
         }
         "dub" => {
-            let p1 = dir.join("dub_audio.m4a");
-            let p2 = dir.join("output.mp4");
-            let p3 = dir.join("output.wav");
-            if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else if p3.is_file() { Some(p3) } else { None }
+            let p1 = dir.join("dub_vocals.wav");
+            let p2 = dir.join("dub_vocals_raw.wav");
+            let p3 = dir.join("dub_audio.m4a");
+            let p4 = dir.join("output.wav");
+            if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else if p3.is_file() { Some(p3) } else if p4.is_file() { Some(p4) } else { None }
         }
         _ => Some(PathBuf::from(&proj.meta.video)),
     };

@@ -388,6 +388,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/projects/{pid}/original", get(endpoints::original_frame))
         .route("/projects/{pid}/source-video", get(source_video))
         .route("/projects/{pid}/dub", get(dub_video))
+        .route("/projects/{pid}/audio-dub-clean", get(audio_dub_clean))
         .route("/projects/{pid}/audio-vocals", get(audio_vocals))
         .route("/projects/{pid}/audio-bgm", get(audio_bgm))
         .route("/jobs/{job_id}/events", get(job_events))
@@ -2455,6 +2456,28 @@ async fn dub_video(
         return (StatusCode::NOT_FOUND, "no dubbed audio yet").into_response();
     }
     serve_file_range(&f, req, None).await
+}
+
+async fn audio_dub_clean(
+    State(st): State<AppState>,
+    AxPath(pid): AxPath<String>,
+    req: axum::http::Request<axum::body::Body>,
+) -> Response {
+    let dir = match st.proj_dir(&pid) {
+        Ok(d) => d,
+        Err(resp) => return resp,
+    };
+    let candidates = [
+        dir.join("dub_vocals.wav"),
+        dir.join("dub_vocals_raw.wav"),
+        dir.join("dub_audio.m4a"),
+    ];
+    for c in candidates {
+        if c.is_file() {
+            return serve_file_range(&c, req, None).await;
+        }
+    }
+    (StatusCode::NOT_FOUND, "no clean dub vocals found").into_response()
 }
 
 async fn audio_vocals(

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, Headphones, SkipBack, SkipForward } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -2520,12 +2520,8 @@ function MultiTrackTimeline({
   onSeek,
   onPlaySeg,
   setProject,
-  trackMutes,
-  setTrackMutes,
-  trackSolos,
-  setTrackSolos,
-  audioMode: _audioMode,
-  setAudioMode,
+  trackState,
+  setTrackState,
   loopSegId,
   setLoopSegId,
 }: {
@@ -2537,12 +2533,8 @@ function MultiTrackTimeline({
   onSeek: (t: number) => void;
   onPlaySeg: (seg: Project["segments"][number]) => void;
   setProject: (p: Project) => void;
-  trackMutes: { dub: boolean; bgm: boolean; vocals: boolean };
-  setTrackMutes: React.Dispatch<React.SetStateAction<{ dub: boolean; bgm: boolean; vocals: boolean }>>;
-  trackSolos: { dub: boolean; bgm: boolean; vocals: boolean };
-  setTrackSolos: React.Dispatch<React.SetStateAction<{ dub: boolean; bgm: boolean; vocals: boolean }>>;
-  audioMode: "mix" | "dub" | "vocals";
-  setAudioMode: (m: "mix" | "dub" | "vocals") => void;
+  trackState: { dub: boolean; bgm: boolean; vocals: boolean };
+  setTrackState: React.Dispatch<React.SetStateAction<{ dub: boolean; bgm: boolean; vocals: boolean }>>;
   loopSegId: string | null;
   setLoopSegId: (id: string | null) => void;
 }) {
@@ -2614,11 +2606,10 @@ function MultiTrackTimeline({
     api.waveformTrack(pid, "dub").then((r) => setRawPeaksDub(r.peaks || [])).catch(() => {});
   }, [pid]);
 
-  // Compute distinct waveforms per track:
   // 1. Vocals: rawPeaksVocals or rawPeaksMaster
   const peaksVocals = rawPeaksVocals.length ? rawPeaksVocals : rawPeaksMaster;
 
-  // 2. Dub: active only during segment intervals [seg.start, seg.end], flat silence in between
+  // 2. Dub: clean synthesized dub speech strictly inside segments, flat silence outside
   const peaksDub = useMemo(() => {
     if (rawPeaksDub.length > 0 && JSON.stringify(rawPeaksDub) !== JSON.stringify(rawPeaksMaster)) {
       return rawPeaksDub;
@@ -2629,7 +2620,7 @@ function MultiTrackTimeline({
     return base.map((val, i) => {
       const t = i * step;
       const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
-      return insideSeg ? Math.min(1.0, val * 1.15 + 0.05) : 0.02;
+      return insideSeg ? Math.min(1.0, val * 1.15 + 0.06) : 0.015;
     });
   }, [rawPeaksDub, rawPeaksMaster, peaksVocals, segments, total]);
 
@@ -2644,8 +2635,7 @@ function MultiTrackTimeline({
     return base.map((val, i) => {
       const t = i * step;
       const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
-      // In dialogue pauses, BGM is louder/clearer; under speech it dips
-      return insideSeg ? Math.max(0.04, val * 0.45) : Math.min(1.0, val * 0.95 + 0.08);
+      return insideSeg ? Math.max(0.04, val * 0.4) : Math.min(1.0, val * 0.95 + 0.08);
     });
   }, [rawPeaksBgm, rawPeaksMaster, segments, total]);
 
@@ -2668,34 +2658,31 @@ function MultiTrackTimeline({
     const cur = useStore.getState().project;
     if (!cur) return;
 
-    const SNAP_THRESH = 0.15;
+    const SNAP_THRESH = 0.18;
 
-    // 1. Прилипание к вспышкам волновой дорожки вокала (Waveform Snapping)
-    const targetPeaks = peaksVocals;
-    if (targetPeaks.length > 0 && total > 0) {
-      const step = total / targetPeaks.length;
-      const sIdx = Math.max(0, Math.floor((newStart - 0.2) / step));
-      const eIdx = Math.min(targetPeaks.length - 1, Math.ceil((newStart + 0.2) / step));
-      for (let i = sIdx; i <= eIdx; i++) {
-        if (targetPeaks[i] > 0.08) {
-          const peakT = i * step;
+    // 1. Умное магнитное прилипание к началу (Onset) и концу (Offset) звука речи
+    if (peaksVocals.length > 0 && total > 0) {
+      const step = total / peaksVocals.length;
+      for (let i = 0; i < peaksVocals.length - 1; i++) {
+        const p1 = peaksVocals[i];
+        const p2 = peaksVocals[i + 1];
+        // Onset: тишина переходит в речь
+        if (p1 < 0.06 && p2 >= 0.08) {
+          const t = (i + 1) * step;
           if (draggingSeg.type === "move" || draggingSeg.type === "resize-left") {
-            if (Math.abs(newStart - peakT) < SNAP_THRESH) {
-              newStart = Math.round(peakT * 100) / 100;
+            if (Math.abs(newStart - t) < SNAP_THRESH) {
+              newStart = Math.round(t * 100) / 100;
               if (draggingSeg.type === "move") newEnd = newStart + (draggingSeg.origEnd - draggingSeg.origStart);
               break;
             }
           }
         }
-      }
-      const esIdx = Math.max(0, Math.floor((newEnd - 0.2) / step));
-      const eeIdx = Math.min(targetPeaks.length - 1, Math.ceil((newEnd + 0.2) / step));
-      for (let i = esIdx; i <= eeIdx; i++) {
-        if (targetPeaks[i] > 0.08) {
-          const peakT = i * step;
+        // Offset: речь переходит в тишину
+        if (p1 >= 0.08 && p2 < 0.06) {
+          const t = i * step;
           if (draggingSeg.type === "move" || draggingSeg.type === "resize-right") {
-            if (Math.abs(newEnd - peakT) < SNAP_THRESH) {
-              newEnd = Math.round(peakT * 100) / 100;
+            if (Math.abs(newEnd - t) < SNAP_THRESH) {
+              newEnd = Math.round(t * 100) / 100;
               break;
             }
           }
@@ -2863,30 +2850,45 @@ function MultiTrackTimeline({
   const fmtTime = (s: number) =>
     `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}.${String(Math.floor((s % 1) * 10))}`;
 
-  const toggleMute = (track: "dub" | "bgm" | "vocals") => {
-    setTrackMutes((prev) => ({ ...prev, [track]: !prev[track] }));
-  };
-
-  const toggleSolo = (track: "dub" | "bgm" | "vocals") => {
-    setTrackSolos((prev) => {
-      const next = !prev[track];
-      if (next) {
-        if (track === "dub") setAudioMode("dub");
-        else if (track === "vocals") setAudioMode("vocals");
-        return { dub: track === "dub", bgm: track === "bgm", vocals: track === "vocals" };
-      } else {
-        setAudioMode("mix");
-        return { dub: false, bgm: false, vocals: false };
+  // Toggle track with mutual exclusivity between Dub and Vocals
+  const toggleTrack = (track: "dub" | "bgm" | "vocals") => {
+    setTrackState((prev) => {
+      if (track === "dub") {
+        const nextDub = !prev.dub;
+        return { ...prev, dub: nextDub, vocals: nextDub ? false : prev.vocals };
       }
+      if (track === "vocals") {
+        const nextVocals = !prev.vocals;
+        return { ...prev, vocals: nextVocals, dub: nextVocals ? false : prev.dub };
+      }
+      return { ...prev, bgm: !prev.bgm };
     });
   };
 
   // Render waveform bar SVG helper
-  const renderWaveform = (peaks: number[], color: string, h: number) => {
+  const renderWaveform = (peaks: number[], color: string, h: number, isVocalsTrack = false) => {
     if (!peaks.length) return null;
     const bw = totalPx / peaks.length;
     return (
       <svg width={totalPx} height={h} className="block pointer-events-none w-full h-full">
+        {/* Render phrase delimiters & background highlights on Vocals track */}
+        {isVocalsTrack &&
+          segments.map((s, idx) => {
+            const sx = s.start * zoom;
+            const ex = s.end * zoom;
+            const sw = Math.max(2, ex - sx);
+            const isAct = scrub >= s.start && scrub <= s.end;
+            return (
+              <g key={"vseg-" + idx}>
+                <rect x={sx} y={0} width={sw} height={h} fill="#06b6d4" opacity={isAct ? 0.22 : 0.08} />
+                <line x1={sx} y1={0} x2={sx} y2={h} stroke="#06b6d4" strokeWidth={1.5} opacity={0.7} strokeDasharray="3 2" />
+                <rect x={sx - 1} y={0} width={3} height={5} fill="#06b6d4" opacity={0.95} />
+                <line x1={ex} y1={0} x2={ex} y2={h} stroke="#06b6d4" strokeWidth={1.5} opacity={0.7} strokeDasharray="3 2" />
+                <rect x={ex - 2} y={h - 5} width={3} height={5} fill="#06b6d4" opacity={0.95} />
+              </g>
+            );
+          })}
+
         {peaks.map((pk, i) => {
           const bh = Math.max(2, Math.min(h - 2, pk * (h - 4)));
           const played = (i / peaks.length) * total <= scrub;
@@ -2935,8 +2937,8 @@ function MultiTrackTimeline({
 
       {/* 4-Track DAW / NLE Container */}
       <div className="flex w-full bg-[var(--color-surface-2)]/60 border border-[var(--color-border)] rounded-xl overflow-hidden shadow-inner">
-        {/* Left Sticky Track Headers (~125px) */}
-        <div className="w-[125px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)]/90 flex flex-col z-20">
+        {/* Left Sticky Track Headers (~130px) */}
+        <div className="w-[130px] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)]/90 flex flex-col z-20">
           {/* Time Ruler spacer */}
           <div className="h-[22px] border-b border-[var(--color-border)] px-2.5 flex items-center text-[9px] font-bold text-[var(--color-muted)] tracking-wider">
             ДОРОЖКИ
@@ -2944,77 +2946,47 @@ function MultiTrackTimeline({
 
           {/* Track 1 Header: 🎙️ Дубляж */}
           <div className="h-[38px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
-            <span className="font-medium text-emerald-400 truncate flex items-center gap-1.5" title="Дубляж (TTS)">
+            <span className={`font-medium truncate flex items-center gap-1.5 ${trackState.dub ? "text-emerald-400 font-semibold" : "text-[var(--color-muted)]"}`} title="Дубляж (TTS)">
               <Mic size={12} className="shrink-0" /> Дубляж
             </span>
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => toggleMute("dub")}
-                title={trackMutes.dub ? "Включить звук дубляжа" : "Заглушить дубляж (Mute)"}
-                className={`p-1 rounded transition-colors ${trackMutes.dub ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
-              >
-                {trackMutes.dub ? <VolumeX size={11} /> : <Volume2 size={11} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleSolo("dub")}
-                title={trackSolos.dub ? "Выключить соло дубляжа" : "Слушать только дубляж (Solo)"}
-                className={`p-1 rounded transition-colors ${trackSolos.dub ? "bg-emerald-500/30 text-emerald-300 border border-emerald-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
-              >
-                <Headphones size={11} />
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => toggleTrack("dub")}
+              title={trackState.dub ? "Выключить дубляж" : "Включить дубляж"}
+              className={`p-1 rounded transition-colors ${trackState.dub ? "bg-emerald-500/30 text-emerald-300 border border-emerald-500/50 shadow-sm" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+            >
+              {trackState.dub ? <Volume2 size={12} /> : <VolumeX size={12} />}
+            </button>
           </div>
 
           {/* Track 2 Header: 🎵 Фон / Музыка */}
           <div className="h-[36px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
-            <span className="font-medium text-purple-400 truncate flex items-center gap-1.5" title="Фоновая музыка (Instrumental)">
+            <span className={`font-medium truncate flex items-center gap-1.5 ${trackState.bgm ? "text-purple-400 font-semibold" : "text-[var(--color-muted)]"}`} title="Фоновая музыка (Instrumental)">
               <Music size={12} className="shrink-0" /> Фон
             </span>
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => toggleMute("bgm")}
-                title={trackMutes.bgm ? "Включить музыку" : "Заглушить музыку (Mute)"}
-                className={`p-1 rounded transition-colors ${trackMutes.bgm ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
-              >
-                {trackMutes.bgm ? <VolumeX size={11} /> : <Volume2 size={11} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleSolo("bgm")}
-                title={trackSolos.bgm ? "Выключить соло музыки" : "Слушать только музыку (Solo)"}
-                className={`p-1 rounded transition-colors ${trackSolos.bgm ? "bg-purple-500/30 text-purple-300 border border-purple-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
-              >
-                <Headphones size={11} />
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => toggleTrack("bgm")}
+              title={trackState.bgm ? "Выключить музыку" : "Включить музыку"}
+              className={`p-1 rounded transition-colors ${trackState.bgm ? "bg-purple-500/30 text-purple-300 border border-purple-500/50 shadow-sm" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+            >
+              {trackState.bgm ? <Volume2 size={12} /> : <VolumeX size={12} />}
+            </button>
           </div>
 
           {/* Track 3 Header: 🗣️ Вокал */}
           <div className="h-[38px] border-b border-[var(--color-border)]/60 px-2.5 flex items-center justify-between text-[11px]">
-            <span className="font-medium text-cyan-400 truncate flex items-center gap-1.5" title="Оригинальный чистый вокал">
+            <span className={`font-medium truncate flex items-center gap-1.5 ${trackState.vocals ? "text-cyan-400 font-semibold" : "text-[var(--color-muted)]"}`} title="Оригинальный чистый вокал">
               <Users size={12} className="shrink-0" /> Вокал
             </span>
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => toggleMute("vocals")}
-                title={trackMutes.vocals ? "Включить вокал" : "Заглушить вокал (Mute)"}
-                className={`p-1 rounded transition-colors ${trackMutes.vocals ? "bg-red-500/30 text-red-400 border border-red-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
-              >
-                {trackMutes.vocals ? <VolumeX size={11} /> : <Volume2 size={11} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleSolo("vocals")}
-                title={trackSolos.vocals ? "Выключить соло вокала" : "Слушать только вокал (Solo)"}
-                className={`p-1 rounded transition-colors ${trackSolos.vocals ? "bg-cyan-500/30 text-cyan-300 border border-cyan-500/50" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
-              >
-                <Headphones size={11} />
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => toggleTrack("vocals")}
+              title={trackState.vocals ? "Выключить вокал" : "Включить вокал"}
+              className={`p-1 rounded transition-colors ${trackState.vocals ? "bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 shadow-sm" : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-white"}`}
+            >
+              {trackState.vocals ? <Volume2 size={12} /> : <VolumeX size={12} />}
+            </button>
           </div>
 
           {/* Track 4 Header: 💬 Субтитры */}
@@ -3087,9 +3059,9 @@ function MultiTrackTimeline({
               {renderWaveform(peaksBgm, "#a855f7", 36)}
             </div>
 
-            {/* Track 3: 🗣️ Вокал оригинала Canvas (38px) */}
+            {/* Track 3: 🗣️ Вокал оригинала Canvas (38px) with Phrase Delimiters */}
             <div className="h-[38px] border-b border-[var(--color-border)]/40 relative bg-cyan-950/10">
-              {renderWaveform(peaksVocals, "#06b6d4", 38)}
+              {renderWaveform(peaksVocals, "#06b6d4", 38, true)}
             </div>
 
             {/* Track 4: 💬 Субтитры Blocks (74px) with generous pb-6 for scrollbar clearance */}
@@ -3492,10 +3464,8 @@ function Editor() {
   const [audioErr, setAudioErr] = useState(false);
   const audioPlayingRef = useRef(false);
 
-  // Audio Monitoring, speed & multi-track states
-  const [audioMode, setAudioMode] = useState<"mix" | "dub" | "vocals">("mix");
-  const [trackMutes, setTrackMutes] = useState({ dub: false, bgm: false, vocals: false });
-  const [trackSolos, setTrackSolos] = useState({ dub: false, bgm: false, vocals: false });
+  // Track states (Dub, BGM, Vocals toggle) & speed
+  const [trackState, setTrackState] = useState<{ dub: boolean; bgm: boolean; vocals: boolean }>({ dub: true, bgm: true, vocals: false });
   const [playSpeed, setPlaySpeed] = useState<number>(1.0);
   const [loopSegId, setLoopSegId] = useState<string | null>(null);
 
@@ -3508,23 +3478,25 @@ function Editor() {
 
   const hasDubTrack = !audioOnly && (mode === "dub" || mode === "voiceover" || mode === "funny") && !audioErr;
 
-  // Effective audio URL based on monitoring mode, Mute and Solo
+  // Effective audio URL based on active track combinations:
+  // 1. Dub + BGM -> api.dubUrl (Full mix)
+  // 2. Dub only (no BGM) -> api.audioDubCleanUrl (Pure Russian voice in silence)
+  // 3. Vocals + BGM -> api.sourceVideoUrl (Original film mix)
+  // 4. Vocals only (no BGM) -> api.audioVocalsUrl (Pure original voice, no music)
+  // 5. BGM only -> api.audioBgmUrl (Pure instrumental music, no voice)
   const currentAudioSrc = useMemo(() => {
-    if (trackSolos.vocals || audioMode === "vocals") return api.audioVocalsUrl(pid);
-    if (trackSolos.bgm || (audioMode === "mix" && trackMutes.dub && !trackMutes.bgm)) return api.audioBgmUrl(pid);
-    if (trackSolos.dub || audioMode === "dub" || (audioMode === "mix" && !trackMutes.dub && trackMutes.bgm)) return api.dubUrl(pid, dubRev);
-    return api.dubUrl(pid, dubRev); // standard mix
-  }, [audioMode, trackSolos, trackMutes, pid, dubRev]);
+    if (trackState.dub && trackState.bgm) return api.dubUrl(pid, dubRev);
+    if (trackState.dub && !trackState.bgm) return api.audioDubCleanUrl(pid);
+    if (trackState.vocals && !trackState.bgm) return api.audioVocalsUrl(pid);
+    if (trackState.vocals && trackState.bgm) return api.sourceVideoUrl(pid);
+    if (trackState.bgm) return api.audioBgmUrl(pid);
+    return api.dubUrl(pid, dubRev);
+  }, [trackState, pid, dubRev]);
 
   const effectiveVol = useMemo(() => {
-    if (trackSolos.vocals && trackMutes.vocals) return 0;
-    if (trackSolos.bgm && trackMutes.bgm) return 0;
-    if (trackSolos.dub && trackMutes.dub) return 0;
-    if (audioMode === "mix" && trackMutes.dub && trackMutes.bgm) return 0;
-    if (audioMode === "dub" && trackMutes.dub) return 0;
-    if (audioMode === "vocals" && trackMutes.vocals) return 0;
+    if (!trackState.dub && !trackState.bgm && !trackState.vocals) return 0;
     return vol;
-  }, [vol, audioMode, trackSolos, trackMutes]);
+  }, [vol, trackState]);
 
   // Smooth speed updates with pitch preservation (no pitch shifting chipmunk / monster distortion)
   useEffect(() => {
@@ -4352,20 +4324,17 @@ function Editor() {
                 </button>
               </div>
 
-              {/* По центру: Быстрый селектор источника звука (Audio Monitoring Presets) */}
+              {/* По центру: Готовые пресеты дорожек (1 клик) */}
               <div className="inline-flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[11.5px] shrink-0 shadow-inner">
                 <button
                   type="button"
-                  onClick={() => {
-                    setAudioMode("mix");
-                    setTrackSolos({ dub: false, bgm: false, vocals: false });
-                  }}
+                  onClick={() => setTrackState({ dub: true, bgm: true, vocals: false })}
                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
-                    audioMode === "mix" && !trackSolos.dub && !trackSolos.vocals
+                    trackState.dub && trackState.bgm && !trackState.vocals
                       ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold shadow-sm"
                       : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
                   }`}
-                  title="Финальный микс (Дубляж + Музыка)"
+                  title="Микс (Дубляж + Музыка)"
                 >
                   <Disc size={12} />
                   <span>Микс</span>
@@ -4373,16 +4342,13 @@ function Editor() {
 
                 <button
                   type="button"
-                  onClick={() => {
-                    setAudioMode("dub");
-                    setTrackSolos({ dub: true, bgm: false, vocals: false });
-                  }}
+                  onClick={() => setTrackState({ dub: true, bgm: false, vocals: false })}
                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
-                    audioMode === "dub" || trackSolos.dub
+                    trackState.dub && !trackState.bgm && !trackState.vocals
                       ? "bg-emerald-500 text-black font-semibold shadow-sm"
                       : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
                   }`}
-                  title="Только чистый русский голос"
+                  title="Только чистый русский голос (без музыки)"
                 >
                   <Mic size={12} />
                   <span>Дубляж</span>
@@ -4390,23 +4356,34 @@ function Editor() {
 
                 <button
                   type="button"
-                  onClick={() => {
-                    setAudioMode("vocals");
-                    setTrackSolos({ dub: false, bgm: false, vocals: true });
-                  }}
+                  onClick={() => setTrackState({ dub: false, bgm: true, vocals: true })}
                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
-                    audioMode === "vocals" || trackSolos.vocals
+                    trackState.vocals && !trackState.dub
                       ? "bg-cyan-500 text-black font-semibold shadow-sm"
                       : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
                   }`}
-                  title="Только чистый оригинальный голос"
+                  title="Вокал оригинала"
                 >
                   <Users size={12} />
                   <span>Вокал</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTrackState({ dub: false, bgm: true, vocals: false })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                    !trackState.dub && !trackState.vocals && trackState.bgm
+                      ? "bg-purple-500 text-white font-semibold shadow-sm"
+                      : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                  title="Только фоновая музыка (без речи)"
+                >
+                  <Music size={12} />
+                  <span>Фон</span>
+                </button>
               </div>
 
-              {/* Справа: Точный таймкод, Скорость (0.25x-2.0x) и Громкость */}
+              {/* Справа: Точный таймкод, Скорость (0.5x, 1.0x, 1.5x, 2.0x) и Громкость */}
               <div className="flex items-center gap-2 shrink-0">
                 {/* Точный таймкод с миллисекундами */}
                 <div className="mono text-[11px] tabnum px-2.5 py-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg shadow-inner">
@@ -4426,14 +4403,11 @@ function Editor() {
                     setPlaySpeed(s);
                     if (audioRef.current) audioRef.current.playbackRate = s;
                   }}
-                  title="Скорость воспроизведения (0.25x - 2.0x)"
+                  title="Скорость воспроизведения (0.5x - 2.0x)"
                   className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2 py-1 text-[11px] font-bold text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none cursor-pointer"
                 >
-                  <option value={0.25}>0.25x</option>
                   <option value={0.5}>0.5x</option>
-                  <option value={0.75}>0.75x</option>
                   <option value={1.0}>1.0x</option>
-                  <option value={1.25}>1.25x</option>
                   <option value={1.5}>1.5x</option>
                   <option value={2.0}>2.0x</option>
                 </select>
@@ -4489,12 +4463,8 @@ function Editor() {
                 onSeek={onSeek}
                 onPlaySeg={playSeg}
                 setProject={setProject}
-                trackMutes={trackMutes}
-                setTrackMutes={setTrackMutes}
-                trackSolos={trackSolos}
-                setTrackSolos={setTrackSolos}
-                audioMode={audioMode}
-                setAudioMode={setAudioMode}
+                trackState={trackState}
+                setTrackState={setTrackState}
                 loopSegId={loopSegId}
                 setLoopSegId={setLoopSegId}
               />
