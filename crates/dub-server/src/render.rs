@@ -1577,21 +1577,20 @@ fn build_dub(
     // Речевые блоки для дакинга (#106) — из ФАКТИЧЕСКИХ спанов timeline (единый источник: с учётом
     // cursor-ripple и QC-пересинтеза), а не из onset'ов placed.
     let mut speech_blocks = build_speech_blocks(&laid_spans);
-    // HARD-гарантия: дубляж не длиннее видео (tempo-fit всей дорожки, если переполз).
-    let mut dub = dub;
-    let dub_dur = media::duration(&dub)?;
-    if dub_dur > total + 0.15 {
-        let fit = wd.join("dub_fit.wav");
-        let sf = dub_dur / total;
-        media::time_stretch(&dub, &fit, sf)?;
-        emit(progress, "mix", &format!("tempo-fit всей дорожки x{:.2}", sf));
-        dub = fit;
-        // огибающая дакинга едет вместе с дорожкой: границы блоков делим на тот же фактор.
-        for b in &mut speech_blocks {
-            b.start /= sf;
-            b.end /= sf;
+    let dub = dub;
+    let dub_dur = media::duration(&dub).unwrap_or(total);
+    // Гарантия хронометража: если финальный хвост дорожки вышел за total_dur, аккуратно обрезаем хвост,
+    // но НИКОГДА не ускоряем весь фильм целиком (time-stretch всей дорожки ломал синхрон и утягивал фразы влево).
+    let dub = if dub_dur > total + 0.15 {
+        let fit = wd.join("dub_trimmed.wav");
+        if media::trim(&dub, &fit, 0.0, total, 24_000).is_ok() {
+            fit
+        } else {
+            dub
         }
-    }
+    } else {
+        dub
+    };
 
     // 6) свести дорожку.
     let mixed = if voiceover {
@@ -2075,7 +2074,7 @@ fn timeline(placed: &[(f64, PathBuf, f64)], total_dur: f64, out_wav: &Path) -> R
         spans.push((at, end));
         laid.push((at, s));
     }
-    let len = ((total_dur.max(cursor) + 0.5) * sr as f64) as usize;
+    let len = ((total_dur.max(cursor) * sr as f64).ceil()) as usize;
     let mut track = vec![0.0f32; len];
     for (at, s) in &laid {
         let i = (at * sr as f64) as usize;
