@@ -107,6 +107,10 @@ fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(sp) = edit.get("speaker") {
         seg.speaker = sp.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
     }
+    // индивидуальный голос фразы (override): имя из voices/ или "clone:ID" / "donor:ID" или None
+    if let Some(v) = edit.get("voice") {
+        seg.voice = v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+    }
     // hidden / keep_original — хранятся в extra (dub-core Segment их не типизирует, но проносит).
     if let Some(h) = edit.get("hidden").and_then(|x| x.as_bool()) {
         seg.extra.insert("hidden".into(), Value::Bool(h));
@@ -357,14 +361,17 @@ fn op_voiceover_gain(p: &mut Project, edit: &Value) -> PatchResult {
     Ok(())
 }
 
-/// sub_blur — блюр-подложка ПОД сожжёнными субтитрами {on: bool, sigma?: i64}. Опция (не всем нужна): выкл -> текст без
-/// размытой подложки. Дефолт вкл, sigma дефолт 60. Только рендер-настройка (dirty не ставим — вжигание на экспорте).
+/// sub_blur — блюр-подложка ПОД сожжёнными субтитрами {on: bool, sigma?: i64, alpha?: f64}. Опция (не всем нужна): выкл -> текст без
+/// размытой подложки. Дефолт вкл, sigma дефолт 60, alpha дефолт 0.55. Только рендер-настройка (dirty не ставим — вжигание на экспорте).
 fn op_sub_blur(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(on) = edit.get("on").and_then(|v| v.as_bool()) {
         p.render.blur = on;
     }
     if let Some(sigma) = edit.get("sigma").and_then(|v| v.as_i64()) {
         p.render.blur_sigma = sigma.clamp(1, 200);
+    }
+    if let Some(alpha) = edit.get("alpha").and_then(|v| v.as_f64()) {
+        p.render.extra.insert("blur_alpha".to_string(), serde_json::json!(alpha.clamp(0.0, 1.0)));
     }
     Ok(())
 }

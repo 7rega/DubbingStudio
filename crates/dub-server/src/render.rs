@@ -304,8 +304,12 @@ pub fn dub_audio(
         paths.input.clone() // nodub/transcribe -> оригинальная дорожка
     };
     let out = wd.join("dub_audio.m4a");
-    // привести к browser-playable aac/m4a (build_dub уже даёт m4a; nodub -> извлечь звук из оригинала).
-    media::extract_audio(&src, &out, 44_100, 2)?;
+    // Если build_dub уже выдал final_audio.m4a, копируем его в dub_audio.m4a для плеера
+    if src.is_file() && src.extension().and_then(|x| x.to_str()) == Some("m4a") {
+        let _ = std::fs::copy(&src, &out);
+    } else {
+        let _ = media::extract_audio(&src, &out, 44_100, 2);
+    }
     emit(progress, "done", "дуб-аудио готово");
     Ok(out)
 }
@@ -873,8 +877,8 @@ fn build_dub(
     // Альтернативные рефы спикеров (ступени 4-5 лестницы ретраев) — из того же скоринга/REF-QC,
     // что и main-рефы (alt_refs построены выше в build_speaker_refs).
     // QC-список синтезированных в этом прогоне фраз: (fi, индекс в placed, raw-wav, tgt-текст, спикер,
-    // room слота, путь fit-файла) — после цикла сверяем транскрипцией и пересинтезируем несовпавшие.
-    let mut qc_list: Vec<(usize, usize, PathBuf, String, String, f64, PathBuf)> = Vec::new();
+    // room слота, путь fit-файла, ref_wav, ref_text) — после цикла сверяем транскрипцией и пересинтезируем несовпавшие.
+    let mut qc_list: Vec<(usize, usize, PathBuf, String, String, f64, PathBuf, PathBuf, Option<String>)> = Vec::new();
     // Телеметрия укладки (#107): сколько сегментов пришлось растягивать выше капа (rate>1.25) и общий
     // счётчик уложенных — для итоговой доли «слишком быстрого текста».
     let mut fit_total = 0usize;
@@ -966,6 +970,74 @@ fn build_dub(
             continue;
         }
         let tgt = s.tgt_text.trim();
+
+        // Референс голоса для сегмента: custom_ref (голос из пака или донор) -> emo_ref -> identity-реф
+        let custom_ref: Option<(PathBuf, Option<String>)> = if let Some(v) = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+            if let Some(donor_spec) = v.strip_prefix("donor:").or_else(|| v.strip_prefix("clone:")) {
+                // Донорский клон из конкретного сегмента (по ID или по индексу #N)
+                let donor_seg = proj.segments.iter().find(|ds| ds.id == donor_spec).or_else(|| {
+                    donor_spec.parse::<usize>().ok().and_then(|idx| if idx > 0 { proj.segments.get(idx - 1) } else { proj.segments.get(0) })
+                });
+                if let Some(ds) = donor_seg {
+                    let out = wd.join(format!("ref_donor_{sid}.wav"));
+                    let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
+                    let end = ds.end.min(ds.start + cap);
+                    if media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok() {
+                        let t = ds.src_text.trim();
+                        Some((out, if t.is_empty() { None } else { Some(t.to_string()) }))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                // Кастомный голос из библиотеки (voices/<name>.wav/mp3)
+                let voice_file = ["wav", "mp3"]
+                    .iter()
+                    .map(|e| paths.voices_dir.join(format!("{v}.{e}")))
+                    .find(|p| p.is_file());
+                if let Some(vf) = voice_file {
+                    let out = wd.join(format!("ref_voice_{sid}.wav"));
+                    // Копируем во временный ASCII-файл, чтобы MinGW FFmpeg под Windows гарантированно открыл путь без сбоев кодировки
+                    let ext = vf.extension().and_then(|x| x.to_str()).unwrap_or("wav");
+                    let temp_in = wd.join(format!("temp_v_{sid}.{ext}"));
+                    let _ = std::fs::copy(&vf, &temp_in);
+                    let in_p = if temp_in.is_file() { &temp_in } else { &vf };
+                    let trim_ok = media::trim(in_p, &out, 0.0, paths.ref_secs, 16_000).is_ok();
+                    let _ = std::fs::remove_file(&temp_in);
+                    if trim_ok && out.is_file() {
+                        // Подтягиваем текст расшифровки сэмпла .txt, если он есть в каталоге (Higgs клонирует чище)
+                        let txt_file = paths.voices_dir.join(format!("{v}.txt"));
+                        let txt_content = std::fs::read_to_string(&txt_file).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                        Some((out, txt_content))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Реф: если задан custom_ref -> используем его; иначе пробуем эмоц-реф, затем identity-реф
+        let emo_ref = if custom_ref.is_some() { None } else { emo_ref_of(s, &sid) };
+        let (ref_wav, ref_text): (PathBuf, Option<String>) = if let Some(cr) = custom_ref {
+            cr
+        } else {
+            match &emo_ref {
+                Some(er) => {
+                    let cap = paths.ref_secs.min(REF_IDEAL_HI).max(REF_MIN_AFTER_TRIM);
+                    let capped = (s.end - s.start) > cap + 0.05;
+                    let t = s.src_text.trim();
+                    (er.clone(), if capped || t.is_empty() { None } else { Some(t.to_string()) })
+                }
+                None => (ref_of(s), reftext_of(s)),
+            }
+        };
+
         // Синтез ТОЛЬКО если сегмент dirty (правился текст/спикер/голос) ИЛИ нет кэша. Реф-клипы
         // пересобираются каждый рендер, поэтому mtime-сравнение с рефом («stale_ref») ошибочно
         // помечало ВЕСЬ кэш устаревшим на каждом рендере → экспорт ре-роллил уже одобренную озвучку
@@ -997,24 +1069,6 @@ fn build_dub(
                 }
             }
             } else {
-            // Реф: сначала пробуем per-segment ЭМОЦ-реф (обрезок vocals16 самой этой чистой реплики ≥2.5с)
-            // — клон наследует эмоцию оригинала в этот момент. Не подошёл (грязная/короткая реплика/пак) ->
-            // стабильный identity-реф спикера. ref_text эмоц-рефа = src_text ЭТОГО сегмента (совпадает с
-            // аудио по построению); для identity-рефа — заранее посчитанный reftext_of. Считаем ТОЛЬКО при
-            // синтезе (не тратить ffmpeg-обрезку на закэшированные не-dirty сегменты).
-            let emo_ref = emo_ref_of(s, &sid);
-            let (ref_wav, ref_text): (PathBuf, Option<String>) = match &emo_ref {
-                Some(er) => {
-                    // ref_text ТОЛЬКО если эмоц-аудио НЕ обрезано капом (иначе текст описывает больше,
-                    // чем в клипе → рассинхрон клона; как exact_cover у identity-пути, ревью-находка C).
-                    // Обрезано → None: Higgs клонирует без транскрипта рефа (хуже мисматча).
-                    let cap = paths.ref_secs.min(REF_IDEAL_HI).max(REF_MIN_AFTER_TRIM);
-                    let capped = (s.end - s.start) > cap + 0.05;
-                    let t = s.src_text.trim();
-                    (er.clone(), if capped || t.is_empty() { None } else { Some(t.to_string()) })
-                }
-                None => (ref_of(s), reftext_of(s)),
-            };
             // Анти-артефактный ретрай: иногда Higgs выдаёт «гудение» (непрерывный гул без речи). Детект
             // in-memory (synth_defect) по сэмплам; перегенерируем — синтез стохастичен, повтор обычно
             // даёт валидный дубль. Вариативность ретрая (BORROWINGS #17 + ревью-находка D): у Higgs
@@ -1209,11 +1263,9 @@ fn build_dub(
                 );
             } else {
                 let _spk_key = s.speaker.clone().unwrap_or_else(|| "0".into());
-                let ref_wav_mt = {
-                    let emo = emo_ref_of(s, &sid);
-                    emo.unwrap_or_else(|| ref_of(s))
-                };
-                let ref_text_mt = reftext_of(s);
+                // Multi-take обязан наследовать индивидуальный голос/донор сегмента (ref_wav / ref_text)
+                let ref_wav_mt = ref_wav.clone();
+                let ref_text_mt = ref_text.clone();
                 let tok_cap: u32 = ((((s.end - s.start).max(0.6) * 75.0 * 1.5).ceil() as u32) + 32).clamp(64, 2048);
                 for take_i in 1..=2u64 {
                     let take_path = wd.join(format!("seg_{sid}_take{take_i}.wav"));
@@ -1324,6 +1376,8 @@ fn build_dub(
                 s.speaker.clone().unwrap_or_else(|| "0".into()),
                 target_slot,
                 fitp,
+                ref_wav.clone(),
+                ref_text.clone(),
             ));
         }
     }
@@ -1374,11 +1428,12 @@ fn build_dub(
         if !bad_idx.is_empty() {
             emit(progress, "tts", &format!("QC: {} фраз не совпали с переводом — пересинтез", bad_idx.len()));
             for &i in &bad_idx {
-                let (fi, pidx, raw, tgtq, spk, room, fitp) = &qc_list[i];
+                let (fi, pidx, raw, tgtq, spk, room, fitp, seg_rw, seg_rt) = &qc_list[i];
                 let s = &proj.segments[*fi];
-                let main_rw = ref_of(s);
-                let main_rt = reftext_of(s);
-                let alt = alt_refs.get(spk);
+                let has_custom_voice = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()).is_some();
+                let main_rw = if has_custom_voice { seg_rw.clone() } else { ref_of(s) };
+                let main_rt = if has_custom_voice { seg_rt.clone() } else { reftext_of(s) };
+                let alt = if has_custom_voice { None } else { alt_refs.get(spk) };
                 let tgt_chars = tgtq.chars().filter(|c| c.is_alphanumeric()).count();
                 // до 3 свежих попыток (низкая temperature по ENGINES_FINDINGS §1.3 + кап токенов §1.1):
                 // альт-реф 0.3 → альт-реф 0.15+RAS1 → основной 0.10 с новым seed

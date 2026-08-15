@@ -68,6 +68,17 @@ const PRESET_LOOKS: Record<
   fresh_soft: { font: "Montserrat", color: "#FFFFFF", plate: "soft", plate_c: "transparent", reveal: "whole" },
 };
 
+// Пер-шрифтовой визуальный множитель размера (синхронизирован с backend dub-captions / look.rs _FONT_SCALE)
+const FONT_SCALE: Record<string, number> = {
+  Montserrat: 1.0,
+  Oswald: 1.06,
+  Roboto: 1.0,
+  "Russo One": 0.92,
+  Pacifico: 1.42,
+  "Playfair Display": 1.06,
+  Caveat: 1.55,
+};
+
 interface WordTiming {
   word: string;
   start: number;
@@ -89,7 +100,6 @@ const getWordsWithTimings = (seg: Project["segments"][number], customText?: stri
     }));
   }
 
-  // Пропорциональный расчет времени слов внутри фразы
   const segDur = Math.max(0.1, seg.end - seg.start);
   const totalChars = tokens.reduce((sum, t) => sum + t.length, 0) || 1;
   let curTime = seg.start;
@@ -118,9 +128,9 @@ export default function PreviewCanvas({
 }: Props) {
   const rev = useStore((s) => s.rev);
   const bump = useStore((s) => s.bump);
-  const sel = useStore((s) => s.selBlur);        // SHARED with the left blur list
+  const sel = useStore((s) => s.selBlur);
   const setSel = useStore((s) => s.setSelBlur);
-  const selT = useStore((s) => s.selTitle);      // SHARED with the left titles list
+  const selT = useStore((s) => s.selTitle);
   const setSelT = useStore((s) => s.setSelTitle);
   const wrap = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -135,7 +145,6 @@ export default function PreviewCanvas({
   const sx = disp.w / vw, sy = disp.h / vh;
   const previewSrc = rendered ? api.outputUrl(pid) : api.previewUrl(pid, scrub, rev);
 
-  // Синхронизация скорости видеоплеера и питча
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -147,7 +156,6 @@ export default function PreviewCanvas({
     } catch {}
   }, [playbackRate]);
 
-  // Синхронизация нативного видеоплеера при плее/паузе/перемотке (Pure HTML5 Video)
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -155,24 +163,15 @@ export default function PreviewCanvas({
     v.volume = vol;
     v.playbackRate = playbackRate;
     if (playing) {
-      if (Math.abs(v.currentTime - scrub) > 0.08) {
-        v.currentTime = scrub;
-      }
+      if (Math.abs(v.currentTime - scrub) > 0.08) v.currentTime = scrub;
       const playPromise = v.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((err) => {
-          console.warn("Video playback start:", err);
-        });
-      }
+      if (playPromise !== undefined) playPromise.catch((err) => console.warn("Video playback start:", err));
     } else {
       v.pause();
-      if (Math.abs(v.currentTime - scrub) > 0.03) {
-        v.currentTime = scrub;
-      }
+      if (Math.abs(v.currentTime - scrub) > 0.03) v.currentTime = scrub;
     }
-  }, [playing, audioMuted, vol, playbackRate]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [playing, audioMuted, vol, playbackRate]);
 
-  // Непрерывная синхронизация видео со скрабом (и на паузе, и при перемотке во время воспроизведения)
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -180,33 +179,26 @@ export default function PreviewCanvas({
     v.volume = vol;
     const diff = Math.abs(v.currentTime - scrub);
     if (!playing) {
-      if (diff > 0.03) {
-        v.currentTime = scrub;
-      }
-    } else {
-      // При воспроизведении: если разница больше 180мс (пользователь мотнул ползунок/кликнул таймлайн),
-      // мгновенно перематываем видео на лету без остановки воспроизведения!
-      if (diff > 0.18) {
-        v.currentTime = scrub;
-      }
-    }
+      if (diff > 0.03) v.currentTime = scrub;
+    } else if (diff > 0.18) v.currentTime = scrub;
   }, [scrub, playing, audioMuted, vol]);
 
-  // Масштабирование холста под контейнер с сохранением соотношения сторон
   useEffect(() => {
     const el = wrap.current; if (!el) return;
     const measure = () => {
       const cw = el.clientWidth, ch = el.clientHeight;
       if (cw <= 0 || ch <= 0) return;
-      const scale = Math.min(cw / vw, ch / vh);
-      setDisp({ w: Math.round(vw * scale), h: Math.round(vh * scale) });
+      const fitScale = Math.min(cw / vw, ch / vh);
+      const nw = Math.round(vw * fitScale);
+      const nh = Math.round(vh * fitScale);
+      setDisp((prev) => (prev.w === nw && prev.h === nh ? prev : { w: nw, h: nh }));
     };
+    measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(el); measure();
+    ro.observe(el);
     return () => ro.disconnect();
   }, [vw, vh]);
 
-  // Присоединение трансформера Konva к активному объекту
   useEffect(() => {
     let node: Konva.Rect | null = null;
     if (lane === "blur" && sel != null) {
@@ -229,12 +221,13 @@ export default function PreviewCanvas({
 
   const blurs = project.captions.blur_boxes || [];
   const titles = project.captions.titles || [];
-  const subY = project.captions.sub_y ?? Math.round(vh * 0.82);
+  const subY = project.captions.sub_y != null && project.captions.sub_y > 0
+    ? project.captions.sub_y
+    : (project.captions.sub_style?.shadow_dir != null ? vh - 100 : Math.round(vh * 0.88));
   const ss: Partial<SubStyle> = project.captions.sub_style || {};
-
-  // Пресет стилей субтитров
-  const presetName = String(project.captions.preset?.name || "");
-  const preset = PRESET_LOOKS[presetName] || null;
+  const rawPresetName = String((project.captions.preset as { name?: string })?.name || "").trim();
+  const isOriginalPreset = !rawPresetName || rawPresetName === "original" || rawPresetName === "match";
+  const preset = !isOriginalPreset && PRESET_LOOKS[rawPresetName] ? PRESET_LOOKS[rawPresetName] : null;
 
   const centerGuide = (nx: number, wPx: number) =>
     setGuide(Math.abs(nx + wPx / 2 - disp.w / 2) < 8 ? disp.w / 2 : null);
@@ -247,7 +240,6 @@ export default function PreviewCanvas({
     return { x: Math.round(n.x() / sx), y: Math.round(n.y() / sy), w, h };
   };
 
-  // Определение текста субтитров в зависимости от режима p.subs.mode ("translate" | "transcribe" | "none") и p.subs.burn
   const subsBurnOn = project.subs.burn !== false;
   const subsMode = project.subs.mode || "translate";
   const activeRawSeg = (project.segments || []).find((s) => !s.hidden && scrub >= s.start && scrub <= s.end);
@@ -255,62 +247,55 @@ export default function PreviewCanvas({
   const activeSegText = (() => {
     if (!subsBurnOn || subsMode === "none" || !activeRawSeg) return null;
     if (subsMode === "transcribe") return (activeRawSeg.src_text || "").trim();
-    if (subsMode === "translate") return (activeRawSeg.tgt_text || activeRawSeg.src_text || "").trim();
     return (activeRawSeg.tgt_text || activeRawSeg.src_text || "").trim();
   })();
 
   const activeTitles = (project.captions.titles || []).filter((ti) => scrub >= ti.start && scrub <= ti.end);
   const activeBlurs = project.render.blur
-    ? (project.captions.blur_boxes || []).filter((b) => !b.hidden && scrub >= b.t0 && scrub <= b.t1)
+    ? (project.captions.blur_boxes || []).filter((b) => !b.hidden && scrub >= Math.max(0, b.t0 - 0.6) && scrub <= b.t1 + 0.4)
     : [];
 
   const effectiveFont = preset?.font || ss.font || "Montserrat";
   const effectiveColor = preset?.color || ss.color || "#FFFFFF";
-  const effectiveBold = preset?.bold ?? ss.bold;
-  const effectiveUppercase = preset?.uppercase ?? ss.uppercase;
+  const effectiveBold = preset ? (preset.bold ?? false) : (ss.bold ?? true);
+  const effectiveUppercase = preset ? (preset.uppercase ?? false) : (ss.uppercase ?? false);
   const hasPlate = preset ? preset.plate !== "none" : !!ss.plate;
   const plateColor = preset?.plate_c || ss.plate_color || "rgba(0,0,0,0.75)";
   const plateType = preset?.plate || (ss.plate ? "box" : "none");
 
-  // Точный расчет размера шрифта, 1-в-1 синхронизированный с libass (dub_captions)
   const explicitSize = ss.size_px && ss.size_px > 0 ? ss.size_px : null;
   const h5 = Math.round(vh / 5);
   const h10 = Math.round(vh / 10);
-  const baseSubFs = explicitSize
-    ? Math.max(20, Math.min(explicitSize, h5))
-    : Math.min(h10, Math.max(44, Math.round(vh / 16)));
-  const subFontSize = Math.max(10, baseSubFs * sy * 0.72);
+  const h16 = Math.round(vh / 16);
+  const baseFs = explicitSize ? Math.max(20, Math.min(explicitSize, h5)) : Math.min(h10, Math.max(44, h16));
+  const fontMultiplier = FONT_SCALE[effectiveFont] || 1.0;
+  const fsFont = Math.max(24, Math.round(baseFs * fontMultiplier));
+  const subFontSize = Math.max(10, fsFont * sy);
 
-  // Динамический расчет высоты авто-блюра под количество строк текста
-  const lineCount = activeSegText
-    ? Math.max(1, Math.ceil(activeSegText.length / 42) + (activeSegText.includes("\n") ? 1 : 0))
-    : 1;
+  const padX = Math.max(6, Math.round(subFontSize * 0.55));
+  const padY = Math.max(2, Math.round(subFontSize * 0.30));
+
+  const lineCount = activeSegText ? Math.max(1, Math.ceil(activeSegText.length / 42) + (activeSegText.includes("\n") ? 1 : 0)) : 1;
   const autoBlurH = Math.max(subFontSize * 1.85, lineCount * subFontSize * 1.35 + 12 * sy);
 
-  const isOriginalPreset = !preset || presetName === "original" || presetName === "match";
   const shouldRenderAutoSubBlur = project.render.blur && isOriginalPreset && !!activeSegText;
+  const blurAlpha = (project.render as any).blur_alpha ?? (project.render.extra?.blur_alpha as number) ?? 0.55;
+  const blurSigma = project.render.blur_sigma || 60;
 
   const textShadowCSS = (() => {
     const parts: string[] = [];
-    if (preset?.plate === "glow" && preset.accent) {
-      parts.push(`0 0 10px ${preset.accent}`, `0 0 20px ${preset.accent}`, `0 0 35px ${preset.accent}`);
+    if (plateType === "glow" && (preset?.accent || effectiveColor)) {
+      const acc = preset?.accent || effectiveColor;
+      parts.push(`0 0 8px ${acc}`, `0 0 18px ${acc}`, `0 0 30px ${acc}`);
     } else {
-      const ow = Math.max(1, (ss.outline_w ?? 2) * sy * 0.72);
+      const isFreshOrNone = plateType === "none" || plateType === "soft";
+      const bordW = isFreshOrNone ? Math.max(1.5, subFontSize * 0.11) : Math.max(1, (ss.outline_w ?? 2) * sy * 0.85);
       const oc = ss.outline || "#000000";
-      if (ow > 0) {
-        parts.push(
-          `-${ow}px -${ow}px 0 ${oc}`,
-          `${ow}px -${ow}px 0 ${oc}`,
-          `-${ow}px ${ow}px 0 ${oc}`,
-          `${ow}px ${ow}px 0 ${oc}`,
-          `0px -${ow}px 0 ${oc}`,
-          `0px ${ow}px 0 ${oc}`,
-          `-${ow}px 0px 0 ${oc}`,
-          `${ow}px 0px 0 ${oc}`
-        );
+      if (bordW > 0) {
+        parts.push(`-${bordW}px -${bordW}px 0 ${oc}`, `${bordW}px -${bordW}px 0 ${oc}`, `-${bordW}px ${bordW}px 0 ${oc}`, `${bordW}px ${bordW}px 0 ${oc}`, `0px -${bordW}px 0 ${oc}`, `0px ${bordW}px 0 ${oc}`, `-${bordW}px 0px 0 ${oc}`, `${bordW}px 0px 0 ${oc}`);
       }
-      if (ss.shadow_dir != null) {
-        const sd = Math.max(2, 2.5 * sy);
+      if (isFreshOrNone || ss.shadow_dir != null) {
+        const sd = isFreshOrNone ? Math.max(1.5, subFontSize * 0.06) : Math.max(2, 2.5 * sy);
         parts.push(`${sd}px ${sd}px 3px rgba(0,0,0,0.85)`);
       }
     }
@@ -319,198 +304,84 @@ export default function PreviewCanvas({
 
   const plateBorderRadius = (() => {
     if (plateType === "pill") return "9999px";
-    if (plateType === "rounded" || plateType === "card" || plateType === "blob") return `${6 * sy}px`;
-    if (plateType === "box") return `${3 * sy}px`;
-    return `${3 * sy}px`;
+    if (plateType === "rounded" || plateType === "card") return `${Math.round(subFontSize * 0.35)}px`;
+    if (plateType === "box") return `${Math.max(2, Math.round(subFontSize * 0.08))}px`;
+    if (plateType === "blob") return `${Math.round(subFontSize * 0.45)}px`;
+    if (plateType === "glow") return `${Math.round(subFontSize * 0.25)}px`;
+    if (plateType === "soft") return `${Math.round(subFontSize * 0.30)}px`;
+    return `${Math.max(2, Math.round(subFontSize * 0.1))}px`;
   })();
 
   return (
     <div ref={wrap} className="relative w-full h-full min-h-0 overflow-hidden grid place-items-center bg-black/40 rounded-xl">
       <div className="relative overflow-hidden rounded-lg" style={{ width: disp.w, height: disp.h }}>
         {rendered ? (
-          <video
-            ref={videoRef}
-            src={previewSrc}
-            playsInline
-            controls
-            onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)}
-            onEnded={() => onEnded?.()}
-            className="absolute inset-0 w-full h-full rounded-lg"
-          />
+          <video ref={videoRef} src={previewSrc} playsInline controls onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)} onEnded={() => onEnded?.()} className="absolute inset-0 w-full h-full rounded-lg" />
         ) : (
           <>
-            {/* Аппаратный видеоплеер (Pure HTML5 Video: активен и на плее, и на паузе, и при скраббинге) */}
-            <video
-              ref={videoRef}
-              src={api.sourceVideoUrl(pid)}
-              playsInline
-              muted={audioMuted}
-              preload="auto"
-              onTimeUpdate={(e) => {
-                if (playing) {
-                  onTimeUpdate?.(e.currentTarget.currentTime);
-                }
-              }}
-              onEnded={() => onEnded?.()}
-              className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black"
-            />
-
-            {/* Единый оверлей субтитров/титров/блюра (активен всегда: 0% мерцания, 100% стабильность шрифта) */}
+            <video ref={videoRef} src={api.sourceVideoUrl(pid)} playsInline muted={audioMuted} preload="auto" onTimeUpdate={(e) => { if (playing) onTimeUpdate?.(e.currentTarget.currentTime); }} onEnded={() => onEnded?.()} className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black" />
             {disp.w > 0 && (
               <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
-                {/* Автоматическое размытие оригинальных субтитров при p.render.blur (только для оригинального пресета) */}
                 {shouldRenderAutoSubBlur && (
                   <div
                     style={{
                       position: "absolute",
                       left: `${disp.w * 0.05}px`,
-                      top: `${Math.max(0, subY * sy - autoBlurH * 0.45)}px`,
+                      top: `${Math.max(0, subY * sy - autoBlurH * 0.5)}px`,
                       width: `${disp.w * 0.9}px`,
                       height: `${autoBlurH}px`,
-                      backdropFilter: `blur(${Math.max(8, (project.render.blur_sigma || 60) * 0.35)}px) brightness(0.75)`,
-                      backgroundColor: "rgba(0, 0, 0, 0.55)",
+                      backdropFilter: `blur(${Math.max(4, blurSigma * 0.35 * sy)}px) brightness(${Math.max(0.2, 1.0 - blurAlpha * 0.45)})`,
+                      backgroundColor: `rgba(0, 0, 0, ${blurAlpha})`,
                       borderRadius: `${8 * sy}px`,
-                      boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+                      boxShadow: blurAlpha > 0.1 ? `0 4px 20px rgba(0,0,0,${blurAlpha * 0.8})` : undefined,
                     }}
                   />
                 )}
-
-                {/* Пользовательские зоны размытия (блюр-боксы) */}
-                {activeBlurs.map((b, i) => (
-                  <div
-                    key={`live-blur-${i}`}
-                    style={{
-                      position: "absolute",
-                      left: `${b.x * sx}px`,
-                      top: `${b.y * sy}px`,
-                      width: `${b.w * sx}px`,
-                      height: `${b.h * sy}px`,
-                      backgroundColor: b.fill || "rgba(0,0,0,0.45)",
-                      backdropFilter: b.fill ? undefined : `blur(${Math.max(6, (project.render.blur_sigma || 60) * 0.25)}px)`,
-                      borderRadius: `${4 * sx}px`,
-                    }}
-                  />
-                ))}
-
-                {/* Титры */}
+                {activeBlurs.map((b, i) => {
+                  const bx0 = Math.max(0, b.x - 2);
+                  const by0 = Math.max(0, b.y - 2);
+                  const bw = Math.min(vw - bx0, b.w + 4);
+                  const bh = Math.min(vh - by0, b.h + 4);
+                  return (
+                    <div key={`live-blur-${i}`} style={{ position: "absolute", left: `${bx0 * sx}px`, top: `${by0 * sy}px`, width: `${bw * sx}px`, height: `${bh * sy}px`, backgroundColor: b.fill || "rgba(0,0,0,0.40)", backdropFilter: b.fill ? undefined : `blur(${Math.max(8, blurSigma * 0.35 * sy)}px)`, borderRadius: `${3 * sx}px` }} />
+                  );
+                })}
                 {activeTitles.map((ti, i) => {
                   const [bx, by, bw, bh] = (ti.bbox || [0, 0, vw, 60]) as number[];
-                  const tSize = (ti.size_px || Math.round(vh / 18)) * sy;
+                  const tiFnt = ti.font || effectiveFont;
+                  const tiScale = FONT_SCALE[tiFnt] || 1.0;
+                  const tSize = (ti.size_px || Math.round(vh / 18)) * tiScale * sy;
                   return (
-                    <div
-                      key={`live-title-${i}`}
-                      style={{
-                        position: "absolute",
-                        left: `${bx * sx}px`,
-                        top: `${by * sy}px`,
-                        width: `${bw * sx}px`,
-                        height: `${bh * sy}px`,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: ti.align === "left" ? "flex-start" : ti.align === "right" ? "flex-end" : "center",
-                        textAlign: (ti.align || "center") as React.CSSProperties["textAlign"],
-                        fontSize: `${tSize}px`,
-                        fontFamily: ti.font || effectiveFont,
-                        fontWeight: ti.bold ? "bold" : "normal",
-                        fontStyle: ti.italic ? "italic" : "normal",
-                        textTransform: ti.uppercase ? "uppercase" : "none",
-                        color: ti.color || "#FFFFFF",
-                        textShadow: ti.outline ? `0 0 ${ti.outline_w || 2}px ${ti.outline}` : undefined,
-                      }}
-                    >
+                    <div key={`live-title-${i}`} style={{ position: "absolute", left: `${bx * sx}px`, top: `${by * sy}px`, width: `${bw * sx}px`, height: `${bh * sy}px`, display: "flex", alignItems: "center", justifyContent: ti.align === "left" ? "flex-start" : ti.align === "right" ? "flex-end" : "center", textAlign: (ti.align || "center") as React.CSSProperties["textAlign"], fontSize: `${tSize}px`, fontFamily: `"${tiFnt}", "Montserrat", sans-serif`, fontWeight: ti.bold ? "bold" : "normal", fontStyle: ti.italic ? "italic" : "normal", textTransform: ti.uppercase ? "uppercase" : "none", color: ti.color || "#FFFFFF", textShadow: ti.outline ? `0 0 ${Math.max(1, (ti.outline_w || 2) * sy)}px ${ti.outline}` : undefined, lineHeight: 1.15, padding: `0 ${4 * sx}px` }}>
                       {ti.tgt || ti.text}
                     </div>
                   );
                 })}
-
-                {/* Основные субтитры с пословной караоке-анимацией */}
                 {activeSegText && activeRawSeg && (() => {
                   const words = getWordsWithTimings(activeRawSeg, activeSegText);
                   const revealType = preset?.reveal || "whole";
-
                   return (
-                    <div
-                      style={{
-                        position: "absolute",
-                        left: 0,
-                        top: `${Math.max(0, Math.min(disp.h - subFontSize * 1.5, subY * sy - subFontSize * 0.65))}px`,
-                        width: `${disp.w}px`,
-                        textAlign: (ss.align || "center") as React.CSSProperties["textAlign"],
-                        fontSize: `${subFontSize}px`,
-                        fontFamily: `"${effectiveFont}", "Montserrat", sans-serif`,
-                        fontWeight: effectiveBold ? 800 : 600,
-                        fontStyle: ss.italic ? "italic" : "normal",
-                        textTransform: effectiveUppercase ? "uppercase" : "none",
-                        color: effectiveColor,
-                        textShadow: textShadowCSS,
-                        lineHeight: 1.12,
-                        padding: `0 ${16 * sx}px`,
-                      }}
-                    >
-                      <span
-                        style={{
-                          backgroundColor: hasPlate ? plateColor : undefined,
-                          padding: hasPlate ? `${Math.max(2, Math.round(3 * sy))}px ${Math.max(5, Math.round(10 * sx))}px` : undefined,
-                          borderRadius: hasPlate ? plateBorderRadius : undefined,
-                          boxDecorationBreak: "clone",
-                          WebkitBoxDecorationBreak: "clone",
-                          display: "inline-flex",
-                          flexWrap: "wrap",
-                          justifyContent: "center",
-                          alignItems: "center",
-                          maxWidth: "92%",
-                          backdropFilter: hasPlate && plateType === "soft" ? "blur(8px)" : undefined,
-                          boxShadow: hasPlate && plateColor !== "transparent" ? "0 2px 10px rgba(0,0,0,0.35)" : undefined,
-                        }}
-                      >
+                    <div style={{ position: "absolute", left: 0, top: `${subY * sy}px`, transform: "translateY(-50%)", width: `${disp.w}px`, display: "flex", justifyContent: "center", alignItems: "center", textAlign: (ss.align || "center") as React.CSSProperties["textAlign"], fontSize: `${subFontSize}px`, fontFamily: `"${effectiveFont}", "Montserrat", sans-serif`, fontWeight: effectiveBold ? 800 : 600, fontStyle: ss.italic ? "italic" : "normal", textTransform: effectiveUppercase ? "uppercase" : "none", color: effectiveColor, textShadow: textShadowCSS, lineHeight: 1.15, padding: `0 ${16 * sx}px` }}>
+                      <span style={{ backgroundColor: hasPlate ? plateColor : undefined, padding: hasPlate ? `${padY}px ${padX}px` : undefined, borderRadius: hasPlate ? plateBorderRadius : undefined, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone", display: "inline-flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", maxWidth: "92%", backdropFilter: hasPlate && plateType === "soft" ? "blur(8px)" : undefined, boxShadow: hasPlate && plateType === "glow" && preset?.accent ? `0 0 15px ${preset.accent}, 0 0 30px ${preset.accent}` : hasPlate && plateColor !== "transparent" ? "0 2px 10px rgba(0,0,0,0.35)" : undefined }}>
                         {words.map((w, idx) => {
                           const isCurrent = scrub >= w.start && scrub < w.end;
                           const isPast = scrub >= w.end;
                           const isFuture = scrub < w.start;
-
                           let wordColor = effectiveColor;
                           let wordTransform = "none";
                           let wordOpacity = 1;
                           let wordTextShadow = textShadowCSS;
-
                           if (revealType === "highlight") {
-                            if (isCurrent) {
-                              wordColor = preset?.accent || "#FFD400";
-                              wordTransform = "scale(1.08)";
-                              wordTextShadow = `0 0 14px ${preset?.accent || "#FFD400"}, ${textShadowCSS}`;
-                            }
+                            if (isCurrent) { wordColor = preset?.accent || "#FFD400"; wordTransform = "scale(1.08)"; wordTextShadow = `0 0 14px ${preset?.accent || "#FFD400"}, ${textShadowCSS}`; }
                           } else if (revealType === "pop") {
-                            if (isCurrent) {
-                              wordColor = preset?.accent || "#FFE000";
-                              wordTransform = "scale(1.15) translateY(-2px)";
-                            }
+                            if (isCurrent) { wordColor = preset?.accent || "#FFE000"; wordTransform = "scale(1.15) translateY(-2px)"; }
                           } else if (revealType === "karaoke") {
-                            if (isCurrent || isPast) {
-                              wordColor = preset?.accent || "#28E0A8";
-                            } else {
-                              wordOpacity = 0.6;
-                            }
+                            if (isCurrent || isPast) wordColor = preset?.accent || "#28E0A8"; else wordOpacity = 0.6;
                           } else if (revealType === "word") {
-                            if (isFuture) {
-                              wordOpacity = 0;
-                            } else if (isCurrent) {
-                              wordColor = preset?.accent || "#00E5FF";
-                            }
+                            if (isFuture) wordOpacity = 0; else if (isCurrent) wordColor = preset?.accent || "#00E5FF";
                           }
-
                           return (
-                            <span
-                              key={idx}
-                              style={{
-                                display: "inline-block",
-                                color: wordColor,
-                                transform: wordTransform,
-                                opacity: wordOpacity,
-                                textShadow: wordTextShadow,
-                                transition: "transform 0.08s ease-out, color 0.08s ease-out, opacity 0.08s ease-out",
-                                marginRight: idx < words.length - 1 ? "0.28em" : 0,
-                              }}
-                            >
+                            <span key={idx} style={{ display: "inline-block", color: wordColor, transform: wordTransform, opacity: wordOpacity, textShadow: wordTextShadow, transition: "transform 0.08s ease-out, color 0.08s ease-out, opacity 0.08s ease-out", marginRight: idx < words.length - 1 ? "0.28em" : 0 }}>
                               {w.word}
                             </span>
                           );
@@ -521,8 +392,6 @@ export default function PreviewCanvas({
                 })()}
               </div>
             )}
-
-            {/* Интерактивный редакторский холст Konva (активен на паузе) */}
             {!playing && disp.w > 0 && (
               <Stage
                 width={disp.w}
