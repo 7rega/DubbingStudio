@@ -363,10 +363,37 @@ numbering, match tone/slang/intent.{budget_rule}{style_c} Use ALL the context be
                     if let Some(t) = local.get(&k) {
                         by_n.insert(start + k, t.clone());
                         got += 1;
+                    } else {
+                        // СТРАХОВКА (#122): если модель пропустила номер k или склеила строки — вызываем точечный per-line перевод
+                        let gi = start + k - 1;
+                        let txt = line_texts[gi].trim();
+                        if !txt.is_empty() {
+                            let budget = budgets.get(gi).copied().flatten();
+                            match crate::translate::translate_one(
+                                llm,
+                                txt,
+                                tgt,
+                                "",
+                                &gloss_suffix,
+                                budget,
+                                &style_c,
+                            ) {
+                                Ok(t1) if !t1.trim().is_empty() => {
+                                    by_n.insert(start + k, term_lock(&t1, &gloss));
+                                    got += 1;
+                                }
+                                _ => {
+                                    // Фолбэк на исходный текст если даже translate_one не вернул перевод
+                                    by_n.insert(start + k, txt.to_string());
+                                }
+                            }
+                        } else {
+                            by_n.insert(start + k, String::new());
+                        }
                     }
                 }
                 ok_lines += got;
-                fail_lines += clen - got; // не вернула модель -> фолбэк на исходник в run()
+                fail_lines += clen - got;
             }
             Err(e) => {
                 if clen > 1 {
@@ -374,10 +401,11 @@ numbering, match tone/slang/intent.{budget_rule}{style_c} Use ALL the context be
                     let mid = start + clen / 2;
                     stack.push((mid, end));
                     stack.push((start, mid));
-                    log(&format!("  ctx translate: чанк [{}..{}) не влёз ({e}) -> дроблю пополам", start + 1, end));
+                    log(&format!("  ctx translate: чанк [{}..{}) не влез ({e}) -> дроблю пополам", start + 1, end));
                 } else {
                     // одна строка и всё равно сбой -> оставляем как есть (исходник), НЕ рушим остальные
                     fail_lines += 1;
+                    by_n.insert(start + 1, line_texts[start].trim().to_string());
                     log(&format!("  ctx translate: строка {} не переведена ({e}) -> оставлена как есть", start + 1));
                 }
             }

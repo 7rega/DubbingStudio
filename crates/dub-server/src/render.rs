@@ -597,14 +597,36 @@ fn build_dub(
         media::to_16k_mono(&vocals, &vocals16)?;
     }
 
-    // 3) клон-референс. voice.mode="voice" -> реф из пака/записи (voices/<name>.wav|mp3) НА КАЖДОГО спикера.
-    //    Имя — CSV; позиция = отсортированный спикер (как во фронте: speaker ?? "0", лексикографически),
-    //    пустой слот берёт первое непустое имя. Иначе (clone) — длиннейшая реплика спикера из вокала.
-    //    Слот "-" (CLONE_SLOT, авто-распределение #114) — этот спикер остаётся на КЛОНИРОВАНИИ: пак-реф
-    //    не строим, его identity-реф добавляется ниже из вокала (spk_refs). Существующие CSV без "-"
-    //    ведут себя как раньше.
+    // 3) Подсчёт сегментов к синтезу. Кэш: seg_XXX.wav; если все сегменты уже в кэше и не dirty
+    // (например, при экспорте готового проекта или пересведении) — мы ПОЛНОСТЬЮ пропускаем
+    // долгий поиск референсов, ASR-проверки и тяжелую загрузку Higgs в VRAM!
+    let dirty_count = segs
+        .iter()
+        .filter(|&(_, s)| {
+            if seg_keep(s) || s.tgt_text.trim().is_empty() {
+                return false;
+            }
+            let sid: String = s.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+            let sid = if sid.is_empty() { format!("i{}", s.id) } else { sid };
+            let raw = wd.join(format!("seg_{sid}.wav"));
+            (regen_dub && s.dirty) || !raw.is_file()
+        })
+        .count();
+
+    if dirty_count == 0 {
+        emit(progress, "tts", &format!("синтез не требуется: все {} сегментов уже готовы (кэш)", segs.len()));
+    } else {
+        emit(progress, "tts", &format!("синтез {dirty_count} из {} сегментов", segs.len()));
+    }
+
+    // клон-референс. voice.mode="voice" -> реф из пака/записи (voices/<name>.wav|mp3) НА КАЖДОГО спикера.
+    // Имя — CSV; позиция = отсортированный спикер (как во фронте: speaker ?? "0", лексикографически),
+    // пустой слот берёт первое непустое имя. Иначе (clone) — длиннейшая реплика спикера из вокала.
+    // Слот "-" (CLONE_SLOT, авто-распределение #114) — этот спикер остаётся на КЛОНИРОВАНИИ: пак-реф
+    // не строим, его identity-реф добавляется ниже из вокала (spk_refs). Существующие CSV без "-"
+    // ведут себя как раньше.
     let mut clone_slot_spks: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let pack_refs: std::collections::BTreeMap<String, PathBuf> = if proj.audio.voice.mode == "voice" {
+    let pack_refs: std::collections::BTreeMap<String, PathBuf> = if dirty_count > 0 && proj.audio.voice.mode == "voice" {
         let names: Vec<&str> = proj.audio.voice.name.as_deref().unwrap_or("").split(',').map(|s| s.trim()).collect();
         let first_named = names
             .iter()
@@ -644,7 +666,9 @@ fn build_dub(
     // ref_texts: расшифровка реф-клипа НА СПИКЕРА (Higgs клонирует качественнее с ref_text). Клон-режим —
     // src_text выбранного сегмента; пак-режим — АВТОТРАНСКРИПЦИЯ 12с-клипа (как Higgs build_speaker_reference;
     // пак-.txt = полный 3-мин транскрипт, к 12с не подходит). ASR best-effort: сбой -> None (не хуже прежнего).
-    let (spk_refs, mut ref_texts, alt_refs) = if use_pack {
+    let (spk_refs, mut ref_texts, alt_refs) = if dirty_count == 0 {
+        (std::collections::BTreeMap::new(), std::collections::BTreeMap::new(), std::collections::BTreeMap::new())
+    } else if use_pack {
         if clone_slot_spks.is_empty() {
             (std::collections::BTreeMap::new(), std::collections::BTreeMap::new(), std::collections::BTreeMap::new())
         } else {
@@ -664,7 +688,7 @@ fn build_dub(
         let mut asr = crate::models::build_engine(&paths.asr);
         build_speaker_refs(&segs, &vocals16, wd, paths.ref_secs, asr.as_mut(), progress)?
     };
-    if use_pack {
+    if dirty_count > 0 && use_pack {
         // Реф-транскрипция выбранным движком (Parakeet/Whisper), а НЕ захардкоженным Parakeet — иначе у
         // Whisper-only юзера (без Parakeet-модели) ref_text молча не считался бы. build_engine сам решает.
         let mut asr = crate::models::build_engine(&paths.asr);
@@ -726,7 +750,7 @@ fn build_dub(
         .unwrap_or(true);
     let emo_enabled = emo_ref_on;
     let emo_ref_of = |s: &dub_core::Segment, sid: &str| -> Option<PathBuf> {
-        if !emo_enabled {
+        if !emo_enabled || dirty_count == 0 {
             return None;
         }
         if use_pack {
@@ -749,24 +773,13 @@ fn build_dub(
         }
     };
 
-    // 4) TTS каждый сегмент через Higgs (audiocpp). Кэш: seg_XXX.wav; не-dirty переиспользуются.
-    let dirty_count = segs
-        .iter()
-        .filter(|&(_, s)| {
-            if seg_keep(s) || s.tgt_text.trim().is_empty() {
-                return false;
-            }
-            let sid: String = s.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-            let sid = if sid.is_empty() { format!("i{}", s.id) } else { sid };
-            let raw = wd.join(format!("seg_{sid}.wav"));
-            (regen_dub && s.dirty) || !raw.is_file()
-        })
-        .count();
-    emit(progress, "tts", &format!("синтез {dirty_count} из {} сегментов", segs.len()));
+    // 4) TTS каждый сегмент через Higgs (audiocpp).
     // Облачный TTS (OpenRouter) вместо локального Higgs: тяжёлую DLL + модель НЕ грузим вовсе — в этом и
     // смысл (снять самую тяжёлую часть). engine=None; синтез идёт по облачной ветке ниже.
     let cloud_tts_on = crate::models::openrouter_stage_on(&paths.models_root, "tts");
-    let engine: Option<Arc<AudiocppEngine>> = if cloud_tts_on {
+    let engine: Option<Arc<AudiocppEngine>> = if dirty_count == 0 {
+        None
+    } else if cloud_tts_on {
         emit(progress, "tts", "TTS через облако (OpenRouter) — локальный Higgs не загружаем");
         None
     } else {
@@ -823,7 +836,7 @@ fn build_dub(
     // разным спикерам — разные. Пол — F0-замер (как в кастинге), голоса модели — динамически из API, пол
     // голоса — из спеки провайдера. Только в облачном режиме (локальный Higgs клонирует реальные рефы).
     // Пусто -> облачный TTS уйдёт на дефолтный голос настроек (or_tts_voice).
-    let cloud_voice_map: std::collections::HashMap<String, String> = if cloud_tts_on {
+    let cloud_voice_map: std::collections::HashMap<String, String> = if dirty_count > 0 && cloud_tts_on {
         let mut m: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         // (1) РУЧНОЙ выбор голосов из кастинга: proj.audio.voice — CSV, позиционный по отсортированным
         // спикерам (как локальный пак-путь выше). В облачном режиме имена = ОБЛАЧНЫЕ голоса (casting_apply
@@ -924,19 +937,35 @@ fn build_dub(
         .and_then(|v| v.as_str())
         .map(|v| v != "0")
         .unwrap_or(true);
+    // Ручной контроль сэмплинга (Temperature/Seed): дефолт false (выкл -> заводские 0.30 и динамический сид)
+    let voice_manual_ctrl = crate::models::load_selection(&paths.models_root)
+        .get("voice_manual_ctrl")
+        .and_then(|v| v.as_str())
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
     // Настраиваемая температура / стабильность голоса: дефолт 0.20 (0.08..0.45)
-    let user_voice_temp: f64 = crate::models::load_selection(&paths.models_root)
-        .get("voice_temp")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(0.20)
-        .clamp(0.08, 0.45);
-    // Фиксация сида персонажей (Speaker Seed Lock): дефолт true
-    let seed_lock = crate::models::load_selection(&paths.models_root)
-        .get("seed_lock")
-        .and_then(|v| v.as_str())
-        .map(|v| v != "0")
-        .unwrap_or(true);
+    let user_voice_temp: f64 = if voice_manual_ctrl {
+        crate::models::load_selection(&paths.models_root)
+            .get("voice_temp")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.20)
+            .clamp(0.08, 0.45)
+    } else {
+        0.30
+    };
+
+    // Фиксация сида персонажей (Speaker Seed Lock): дефолт true при ручном контроле
+    let seed_lock = if voice_manual_ctrl {
+        crate::models::load_selection(&paths.models_root)
+            .get("seed_lock")
+            .and_then(|v| v.as_str())
+            .map(|v| v != "0")
+            .unwrap_or(true)
+    } else {
+        false
+    };
     // ПАРАЛЛЕЛЬНЫЙ ПРЕ-СИНТЕЗ облачного TTS: OpenRouter держит десятки конкурентных запросов, поэтому все
     // сегменты к синтезу гоним в N потоков (настройка or_concurrency) ДО последовательной укладки — она
     // потом просто подхватит уже готовые seg-файлы (network-latency больше не по одному). Провал сегмента ->
@@ -2281,8 +2310,8 @@ pub(crate) fn cover_to_blur(c: &dub_captions::SubCover) -> BlurBox {
 pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total: f64) -> Result<Vec<dub_captions::SubCover>, String> {
     let titles: Vec<CapTitle> = proj.captions.titles.iter().map(map_title).collect();
     let sub_style = proj.captions.sub_style.as_ref().map(map_sub_style);
-    // sub_y дефолт vh*0.82 если не задан (как pipeline.py: не затирать edited/pinned sub_y).
-    let sub_y = proj.captions.sub_y.unwrap_or((vh as f64 * 0.82) as i64);
+    // sub_y дефолт vh*0.84 если не задан (как pipeline.py: не затирать edited/pinned sub_y).
+    let sub_y = proj.captions.sub_y.unwrap_or((vh as f64 * 0.84) as i64);
     // PER-SEGMENT Y-RIDE (порт pipeline.py 616-631). Каждую дублированную строку кладём на y, где в этот
     // момент была ОРИГИНАЛЬНАЯ полоса сабов, чтобы наш текст/плашка НАКРЫЛИ заблюренный оригинал (а не
     // висели на одной фикс-линии, пока блюр другой строки просвечивает). Источник полосы —
@@ -2305,8 +2334,8 @@ pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total:
     let cap_lo = 0.40 * vw as f64;
     let cap_hi = 0.60 * vw as f64;
     let seg_y = |st: f64, en: f64| -> i64 {
-        if proj.captions.sub_y_locked || no_band {
-            return sub_y; // editor-pinned или полосы нет -> выбранная band
+        if proj.captions.sub_y_locked || no_band || proj.captions.sub_y.is_some() {
+            return sub_y; // editor-pinned или задан sub_y -> строго выбранная высота
         }
         // медиана y-центров band-боксов, перекрывающих сегмент по времени, центрированных по X,
         // в нижней половине кадра (ехать на нижнюю оригинальную полосу, не на верхний оверлей).
@@ -2323,7 +2352,7 @@ pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total:
             .map(|b| b.y as f64 + b.h as f64 / 2.0)
             .collect();
         if ys.is_empty() {
-            return (vh as f64 * 0.82) as i64;
+            return sub_y;
         }
         ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         ys[ys.len() / 2] as i64
@@ -2355,7 +2384,14 @@ pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total:
         .map(|s| {
             let tgt = match overrides.get(s.id.as_str()) {
                 Some(t) => t.to_string(),
-                None => s.tgt_text.clone(),
+                None => {
+                    let t = s.tgt_text.trim();
+                    if !t.is_empty() {
+                        t.to_string()
+                    } else {
+                        s.src_text.trim().to_string()
+                    }
+                }
             };
             (s, tgt)
         })

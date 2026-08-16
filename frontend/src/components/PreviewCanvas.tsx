@@ -223,7 +223,7 @@ export default function PreviewCanvas({
   const titles = project.captions.titles || [];
   const subY = project.captions.sub_y != null && project.captions.sub_y > 0
     ? project.captions.sub_y
-    : (project.captions.sub_style?.shadow_dir != null ? vh - 100 : Math.round(vh * 0.88));
+    : (project.captions.sub_style?.shadow_dir != null ? vh - 100 : Math.round(vh * 0.84));
   const ss: Partial<SubStyle> = project.captions.sub_style || {};
   const rawPresetName = String((project.captions.preset as { name?: string })?.name || "").trim();
   const isOriginalPreset = !rawPresetName || rawPresetName === "original" || rawPresetName === "match";
@@ -263,14 +263,13 @@ export default function PreviewCanvas({
   const plateColor = preset?.plate_c || ss.plate_color || "rgba(0,0,0,0.75)";
   const plateType = preset?.plate || (ss.plate ? "box" : "none");
 
+  // Кинематографический оптический масштаб: в точности повторяет геометрию libass (FreeType)
+  // При 1080p стандартный размер составляет ~32-34px (занимает ~48-52% ширины для строки из 40 символов)
   const explicitSize = ss.size_px && ss.size_px > 0 ? ss.size_px : null;
-  const h5 = Math.round(vh / 5);
-  const h10 = Math.round(vh / 10);
-  const h16 = Math.round(vh / 16);
-  const baseFs = explicitSize ? Math.max(20, Math.min(explicitSize, h5)) : Math.min(h10, Math.max(44, h16));
+  const baseFs = explicitSize ? Math.max(16, Math.min(explicitSize, Math.round(vh / 5))) * 0.72 : Math.round(vh / 28.0);
   const fontMultiplier = FONT_SCALE[effectiveFont] || 1.0;
-  const fsFont = Math.max(24, Math.round(baseFs * fontMultiplier));
-  const subFontSize = Math.max(10, fsFont * sy);
+  const fsFont = Math.max(14, Math.round(baseFs * fontMultiplier));
+  const subFontSize = Math.max(10, Math.round(fsFont * sy));
 
   const padX = Math.max(6, Math.round(subFontSize * 0.55));
   const padY = Math.max(2, Math.round(subFontSize * 0.30));
@@ -282,24 +281,30 @@ export default function PreviewCanvas({
   const blurAlpha = (project.render as any).blur_alpha ?? (project.render.extra?.blur_alpha as number) ?? 0.55;
   const blurSigma = project.render.blur_sigma || 60;
 
+  // Чистая обводка под буквой (paint-order: stroke fill) — в точности как векторная обводка в libass
+  const outlineWidth = (() => {
+    const isFreshOrNone = plateType === "none" || plateType === "soft";
+    if (isFreshOrNone) return Math.max(1.6, subFontSize * 0.08);
+    return Math.max(1.2, (ss.outline_w ?? 2) * sy * 0.85);
+  })();
+  const outlineColor = ss.outline || "#000000";
+
+  const strokeCSS: React.CSSProperties = plateType === "glow" ? {} : {
+    WebkitTextStroke: `${outlineWidth}px ${outlineColor}`,
+    paintOrder: "stroke fill",
+  };
+
   const textShadowCSS = (() => {
-    const parts: string[] = [];
     if (plateType === "glow" && (preset?.accent || effectiveColor)) {
       const acc = preset?.accent || effectiveColor;
-      parts.push(`0 0 8px ${acc}`, `0 0 18px ${acc}`, `0 0 30px ${acc}`);
-    } else {
-      const isFreshOrNone = plateType === "none" || plateType === "soft";
-      const bordW = isFreshOrNone ? Math.max(1.5, subFontSize * 0.11) : Math.max(1, (ss.outline_w ?? 2) * sy * 0.85);
-      const oc = ss.outline || "#000000";
-      if (bordW > 0) {
-        parts.push(`-${bordW}px -${bordW}px 0 ${oc}`, `${bordW}px -${bordW}px 0 ${oc}`, `-${bordW}px ${bordW}px 0 ${oc}`, `${bordW}px ${bordW}px 0 ${oc}`, `0px -${bordW}px 0 ${oc}`, `0px ${bordW}px 0 ${oc}`, `-${bordW}px 0px 0 ${oc}`, `${bordW}px 0px 0 ${oc}`);
-      }
-      if (isFreshOrNone || ss.shadow_dir != null) {
-        const sd = isFreshOrNone ? Math.max(1.5, subFontSize * 0.06) : Math.max(2, 2.5 * sy);
-        parts.push(`${sd}px ${sd}px 3px rgba(0,0,0,0.85)`);
-      }
+      return `0 0 8px ${acc}, 0 0 18px ${acc}, 0 0 30px ${acc}`;
     }
-    return parts.join(", ");
+    const isFreshOrNone = plateType === "none" || plateType === "soft";
+    if (isFreshOrNone || ss.shadow_dir != null) {
+      const sd = isFreshOrNone ? Math.max(1.2, subFontSize * 0.05) : Math.max(2, 2.5 * sy);
+      return `${sd}px ${sd}px 3px rgba(0,0,0,0.85)`;
+    }
+    return undefined;
   })();
 
   const plateBorderRadius = (() => {
@@ -361,7 +366,7 @@ export default function PreviewCanvas({
                   const words = getWordsWithTimings(activeRawSeg, activeSegText);
                   const revealType = preset?.reveal || "whole";
                   return (
-                    <div style={{ position: "absolute", left: 0, top: `${subY * sy}px`, transform: "translateY(-50%)", width: `${disp.w}px`, display: "flex", justifyContent: "center", alignItems: "center", textAlign: (ss.align || "center") as React.CSSProperties["textAlign"], fontSize: `${subFontSize}px`, fontFamily: `"${effectiveFont}", "Montserrat", sans-serif`, fontWeight: effectiveBold ? 800 : 600, fontStyle: ss.italic ? "italic" : "normal", textTransform: effectiveUppercase ? "uppercase" : "none", color: effectiveColor, textShadow: textShadowCSS, lineHeight: 1.15, padding: `0 ${16 * sx}px` }}>
+                    <div style={{ position: "absolute", left: 0, top: `${subY * sy}px`, transform: "translateY(-50%)", width: `${disp.w}px`, display: "flex", justifyContent: "center", alignItems: "center", textAlign: (ss.align || "center") as React.CSSProperties["textAlign"], fontSize: `${subFontSize}px`, fontFamily: `"${effectiveFont}", "Montserrat", sans-serif`, fontWeight: effectiveBold ? 800 : 700, fontStyle: ss.italic ? "italic" : "normal", textTransform: effectiveUppercase ? "uppercase" : "none", color: effectiveColor, letterSpacing: "-0.015em", lineHeight: 1.15, padding: `0 ${16 * sx}px` }}>
                       <span style={{ backgroundColor: hasPlate ? plateColor : undefined, padding: hasPlate ? `${padY}px ${padX}px` : undefined, borderRadius: hasPlate ? plateBorderRadius : undefined, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone", display: "inline-flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", maxWidth: "92%", backdropFilter: hasPlate && plateType === "soft" ? "blur(8px)" : undefined, boxShadow: hasPlate && plateType === "glow" && preset?.accent ? `0 0 15px ${preset.accent}, 0 0 30px ${preset.accent}` : hasPlate && plateColor !== "transparent" ? "0 2px 10px rgba(0,0,0,0.35)" : undefined }}>
                         {words.map((w, idx) => {
                           const isCurrent = scrub >= w.start && scrub < w.end;
@@ -372,7 +377,7 @@ export default function PreviewCanvas({
                           let wordOpacity = 1;
                           let wordTextShadow = textShadowCSS;
                           if (revealType === "highlight") {
-                            if (isCurrent) { wordColor = preset?.accent || "#FFD400"; wordTransform = "scale(1.08)"; wordTextShadow = `0 0 14px ${preset?.accent || "#FFD400"}, ${textShadowCSS}`; }
+                            if (isCurrent) { wordColor = preset?.accent || "#FFD400"; wordTransform = "scale(1.08)"; wordTextShadow = `0 0 14px ${preset?.accent || "#FFD400"}, ${textShadowCSS || ""}`; }
                           } else if (revealType === "pop") {
                             if (isCurrent) { wordColor = preset?.accent || "#FFE000"; wordTransform = "scale(1.15) translateY(-2px)"; }
                           } else if (revealType === "karaoke") {
@@ -381,7 +386,7 @@ export default function PreviewCanvas({
                             if (isFuture) wordOpacity = 0; else if (isCurrent) wordColor = preset?.accent || "#00E5FF";
                           }
                           return (
-                            <span key={idx} style={{ display: "inline-block", color: wordColor, transform: wordTransform, opacity: wordOpacity, textShadow: wordTextShadow, transition: "transform 0.08s ease-out, color 0.08s ease-out, opacity 0.08s ease-out", marginRight: idx < words.length - 1 ? "0.28em" : 0 }}>
+                            <span key={idx} style={{ display: "inline-block", color: wordColor, transform: wordTransform, opacity: wordOpacity, ...strokeCSS, textShadow: wordTextShadow, transition: "transform 0.08s ease-out, color 0.08s ease-out, opacity 0.08s ease-out", marginRight: idx < words.length - 1 ? "0.24em" : 0 }}>
                               {w.word}
                             </span>
                           );
