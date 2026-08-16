@@ -3753,7 +3753,7 @@ function Editor() {
     uppercase: false,
     font: "Montserrat",
     align: "center",
-    size_px: Math.round((p.meta.height || 1080) / 14),
+    size_px: Math.round((p.meta.height || 1080) / 28),
     outline_w: 2,
     shadow_dir: null,
     scene_flat: false,
@@ -5140,7 +5140,7 @@ function Editor() {
                     <span className="text-[var(--color-muted)]">{t("style.size")}</span>
                     <div className="flex items-center gap-1">
                       <input type="number" min={12} max={300}
-                        value={sizeDraft ?? ss.size_px ?? Math.round((p.meta.height || 1280) / 14)}
+                        value={sizeDraft ?? ss.size_px ?? Math.round((p.meta.height || 1080) / 28)}
                         onChange={(e) => {
                           const val = parseInt(e.target.value);
                           if (!isNaN(val)) setSizeDraft(val);
@@ -5152,8 +5152,8 @@ function Editor() {
                       <span className="mono text-[11px] text-[var(--color-muted)]">px</span>
                     </div>
                   </div>
-                  <input type="range" min={16} max={Math.round((p.meta.height || 1280) / 5)}
-                    value={sizeDraft ?? ss.size_px ?? Math.round((p.meta.height || 1280) / 14)}
+                  <input type="range" min={16} max={Math.round((p.meta.height || 1080) / 6)}
+                    value={sizeDraft ?? ss.size_px ?? Math.round((p.meta.height || 1080) / 28)}
                     onChange={(e) => setSizeDraft(parseInt(e.target.value))}
                     onPointerUp={async () => { if (sizeDraft != null) { await branch("caption", { size_px: sizeDraft }); setSizeDraft(null); } }}
                     className="w-full accent-[var(--color-accent)] cursor-pointer" />

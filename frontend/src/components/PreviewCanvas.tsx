@@ -263,14 +263,13 @@ export default function PreviewCanvas({
   const plateColor = preset?.plate_c || ss.plate_color || "rgba(0,0,0,0.75)";
   const plateType = preset?.plate || (ss.plate ? "box" : "none");
 
-  // Кинематографический размер шрифта: в точности как в libass / dub-captions (~46px на 1080p)
+  // Кинематографический оптический масштаб: в точности повторяет геометрию libass (FreeType)
+  // При 1080p стандартный размер составляет ~32-34px (занимает ~48-52% ширины для строки из 40 символов)
   const explicitSize = ss.size_px && ss.size_px > 0 ? ss.size_px : null;
-  const h5 = Math.round(vh / 5);
-  const h10 = Math.round(vh / 10);
-  const baseFs = explicitSize ? Math.max(20, Math.min(explicitSize, h5)) : Math.min(h10, Math.max(34, Math.round(vh / 23.5)));
+  const baseFs = explicitSize ? Math.max(16, Math.min(explicitSize, Math.round(vh / 5))) * 0.72 : Math.round(vh / 28.0);
   const fontMultiplier = FONT_SCALE[effectiveFont] || 1.0;
-  const fsFont = Math.max(20, Math.round(baseFs * fontMultiplier));
-  const subFontSize = Math.max(10, fsFont * sy);
+  const fsFont = Math.max(14, Math.round(baseFs * fontMultiplier));
+  const subFontSize = Math.max(10, Math.round(fsFont * sy));
 
   const padX = Math.max(6, Math.round(subFontSize * 0.55));
   const padY = Math.max(2, Math.round(subFontSize * 0.30));
@@ -367,7 +366,7 @@ export default function PreviewCanvas({
                   const words = getWordsWithTimings(activeRawSeg, activeSegText);
                   const revealType = preset?.reveal || "whole";
                   return (
-                    <div style={{ position: "absolute", left: 0, top: `${subY * sy}px`, transform: "translateY(-50%)", width: `${disp.w}px`, display: "flex", justifyContent: "center", alignItems: "center", textAlign: (ss.align || "center") as React.CSSProperties["textAlign"], fontSize: `${subFontSize}px`, fontFamily: `"${effectiveFont}", "Montserrat", sans-serif`, fontWeight: effectiveBold ? 800 : 700, fontStyle: ss.italic ? "italic" : "normal", textTransform: effectiveUppercase ? "uppercase" : "none", color: effectiveColor, lineHeight: 1.15, padding: `0 ${16 * sx}px` }}>
+                    <div style={{ position: "absolute", left: 0, top: `${subY * sy}px`, transform: "translateY(-50%)", width: `${disp.w}px`, display: "flex", justifyContent: "center", alignItems: "center", textAlign: (ss.align || "center") as React.CSSProperties["textAlign"], fontSize: `${subFontSize}px`, fontFamily: `"${effectiveFont}", "Montserrat", sans-serif`, fontWeight: effectiveBold ? 800 : 700, fontStyle: ss.italic ? "italic" : "normal", textTransform: effectiveUppercase ? "uppercase" : "none", color: effectiveColor, letterSpacing: "-0.015em", lineHeight: 1.15, padding: `0 ${16 * sx}px` }}>
                       <span style={{ backgroundColor: hasPlate ? plateColor : undefined, padding: hasPlate ? `${padY}px ${padX}px` : undefined, borderRadius: hasPlate ? plateBorderRadius : undefined, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone", display: "inline-flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", maxWidth: "92%", backdropFilter: hasPlate && plateType === "soft" ? "blur(8px)" : undefined, boxShadow: hasPlate && plateType === "glow" && preset?.accent ? `0 0 15px ${preset.accent}, 0 0 30px ${preset.accent}` : hasPlate && plateColor !== "transparent" ? "0 2px 10px rgba(0,0,0,0.35)" : undefined }}>
                         {words.map((w, idx) => {
                           const isCurrent = scrub >= w.start && scrub < w.end;
@@ -387,7 +386,7 @@ export default function PreviewCanvas({
                             if (isFuture) wordOpacity = 0; else if (isCurrent) wordColor = preset?.accent || "#00E5FF";
                           }
                           return (
-                            <span key={idx} style={{ display: "inline-block", color: wordColor, transform: wordTransform, opacity: wordOpacity, ...strokeCSS, textShadow: wordTextShadow, transition: "transform 0.08s ease-out, color 0.08s ease-out, opacity 0.08s ease-out", marginRight: idx < words.length - 1 ? "0.28em" : 0 }}>
+                            <span key={idx} style={{ display: "inline-block", color: wordColor, transform: wordTransform, opacity: wordOpacity, ...strokeCSS, textShadow: wordTextShadow, transition: "transform 0.08s ease-out, color 0.08s ease-out, opacity 0.08s ease-out", marginRight: idx < words.length - 1 ? "0.24em" : 0 }}>
                               {w.word}
                             </span>
                           );
