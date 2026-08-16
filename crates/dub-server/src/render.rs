@@ -924,19 +924,35 @@ fn build_dub(
         .and_then(|v| v.as_str())
         .map(|v| v != "0")
         .unwrap_or(true);
+    // Ручной контроль сэмплинга (Temperature/Seed): дефолт false (выкл -> заводские 0.30 и динамический сид)
+    let voice_manual_ctrl = crate::models::load_selection(&paths.models_root)
+        .get("voice_manual_ctrl")
+        .and_then(|v| v.as_str())
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
     // Настраиваемая температура / стабильность голоса: дефолт 0.20 (0.08..0.45)
-    let user_voice_temp: f64 = crate::models::load_selection(&paths.models_root)
-        .get("voice_temp")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(0.20)
-        .clamp(0.08, 0.45);
-    // Фиксация сида персонажей (Speaker Seed Lock): дефолт true
-    let seed_lock = crate::models::load_selection(&paths.models_root)
-        .get("seed_lock")
-        .and_then(|v| v.as_str())
-        .map(|v| v != "0")
-        .unwrap_or(true);
+    let user_voice_temp: f64 = if voice_manual_ctrl {
+        crate::models::load_selection(&paths.models_root)
+            .get("voice_temp")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.20)
+            .clamp(0.08, 0.45)
+    } else {
+        0.30
+    };
+
+    // Фиксация сида персонажей (Speaker Seed Lock): дефолт true при ручном контроле
+    let seed_lock = if voice_manual_ctrl {
+        crate::models::load_selection(&paths.models_root)
+            .get("seed_lock")
+            .and_then(|v| v.as_str())
+            .map(|v| v != "0")
+            .unwrap_or(true)
+    } else {
+        false
+    };
     // ПАРАЛЛЕЛЬНЫЙ ПРЕ-СИНТЕЗ облачного TTS: OpenRouter держит десятки конкурентных запросов, поэтому все
     // сегменты к синтезу гоним в N потоков (настройка or_concurrency) ДО последовательной укладки — она
     // потом просто подхватит уже готовые seg-файлы (network-latency больше не по одному). Провал сегмента ->
