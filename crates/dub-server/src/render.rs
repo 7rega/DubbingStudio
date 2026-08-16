@@ -597,14 +597,36 @@ fn build_dub(
         media::to_16k_mono(&vocals, &vocals16)?;
     }
 
-    // 3) клон-референс. voice.mode="voice" -> реф из пака/записи (voices/<name>.wav|mp3) НА КАЖДОГО спикера.
-    //    Имя — CSV; позиция = отсортированный спикер (как во фронте: speaker ?? "0", лексикографически),
-    //    пустой слот берёт первое непустое имя. Иначе (clone) — длиннейшая реплика спикера из вокала.
-    //    Слот "-" (CLONE_SLOT, авто-распределение #114) — этот спикер остаётся на КЛОНИРОВАНИИ: пак-реф
-    //    не строим, его identity-реф добавляется ниже из вокала (spk_refs). Существующие CSV без "-"
-    //    ведут себя как раньше.
+    // 3) Подсчёт сегментов к синтезу. Кэш: seg_XXX.wav; если все сегменты уже в кэше и не dirty
+    // (например, при экспорте готового проекта или пересведении) — мы ПОЛНОСТЬЮ пропускаем
+    // долгий поиск референсов, ASR-проверки и тяжелую загрузку Higgs в VRAM!
+    let dirty_count = segs
+        .iter()
+        .filter(|&(_, s)| {
+            if seg_keep(s) || s.tgt_text.trim().is_empty() {
+                return false;
+            }
+            let sid: String = s.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+            let sid = if sid.is_empty() { format!("i{}", s.id) } else { sid };
+            let raw = wd.join(format!("seg_{sid}.wav"));
+            (regen_dub && s.dirty) || !raw.is_file()
+        })
+        .count();
+
+    if dirty_count == 0 {
+        emit(progress, "tts", &format!("синтез не требуется: все {} сегментов уже готовы (кэш)", segs.len()));
+    } else {
+        emit(progress, "tts", &format!("синтез {dirty_count} из {} сегментов", segs.len()));
+    }
+
+    // клон-референс. voice.mode="voice" -> реф из пака/записи (voices/<name>.wav|mp3) НА КАЖДОГО спикера.
+    // Имя — CSV; позиция = отсортированный спикер (как во фронте: speaker ?? "0", лексикографически),
+    // пустой слот берёт первое непустое имя. Иначе (clone) — длиннейшая реплика спикера из вокала.
+    // Слот "-" (CLONE_SLOT, авто-распределение #114) — этот спикер остаётся на КЛОНИРОВАНИИ: пак-реф
+    // не строим, его identity-реф добавляется ниже из вокала (spk_refs). Существующие CSV без "-"
+    // ведут себя как раньше.
     let mut clone_slot_spks: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let pack_refs: std::collections::BTreeMap<String, PathBuf> = if proj.audio.voice.mode == "voice" {
+    let pack_refs: std::collections::BTreeMap<String, PathBuf> = if dirty_count > 0 && proj.audio.voice.mode == "voice" {
         let names: Vec<&str> = proj.audio.voice.name.as_deref().unwrap_or("").split(',').map(|s| s.trim()).collect();
         let first_named = names
             .iter()
@@ -644,7 +666,9 @@ fn build_dub(
     // ref_texts: расшифровка реф-клипа НА СПИКЕРА (Higgs клонирует качественнее с ref_text). Клон-режим —
     // src_text выбранного сегмента; пак-режим — АВТОТРАНСКРИПЦИЯ 12с-клипа (как Higgs build_speaker_reference;
     // пак-.txt = полный 3-мин транскрипт, к 12с не подходит). ASR best-effort: сбой -> None (не хуже прежнего).
-    let (spk_refs, mut ref_texts, alt_refs) = if use_pack {
+    let (spk_refs, mut ref_texts, alt_refs) = if dirty_count == 0 {
+        (std::collections::BTreeMap::new(), std::collections::BTreeMap::new(), std::collections::BTreeMap::new())
+    } else if use_pack {
         if clone_slot_spks.is_empty() {
             (std::collections::BTreeMap::new(), std::collections::BTreeMap::new(), std::collections::BTreeMap::new())
         } else {
@@ -664,7 +688,7 @@ fn build_dub(
         let mut asr = crate::models::build_engine(&paths.asr);
         build_speaker_refs(&segs, &vocals16, wd, paths.ref_secs, asr.as_mut(), progress)?
     };
-    if use_pack {
+    if dirty_count > 0 && use_pack {
         // Реф-транскрипция выбранным движком (Parakeet/Whisper), а НЕ захардкоженным Parakeet — иначе у
         // Whisper-only юзера (без Parakeet-модели) ref_text молча не считался бы. build_engine сам решает.
         let mut asr = crate::models::build_engine(&paths.asr);
@@ -726,7 +750,7 @@ fn build_dub(
         .unwrap_or(true);
     let emo_enabled = emo_ref_on;
     let emo_ref_of = |s: &dub_core::Segment, sid: &str| -> Option<PathBuf> {
-        if !emo_enabled {
+        if !emo_enabled || dirty_count == 0 {
             return None;
         }
         if use_pack {
@@ -749,24 +773,13 @@ fn build_dub(
         }
     };
 
-    // 4) TTS каждый сегмент через Higgs (audiocpp). Кэш: seg_XXX.wav; не-dirty переиспользуются.
-    let dirty_count = segs
-        .iter()
-        .filter(|&(_, s)| {
-            if seg_keep(s) || s.tgt_text.trim().is_empty() {
-                return false;
-            }
-            let sid: String = s.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-            let sid = if sid.is_empty() { format!("i{}", s.id) } else { sid };
-            let raw = wd.join(format!("seg_{sid}.wav"));
-            (regen_dub && s.dirty) || !raw.is_file()
-        })
-        .count();
-    emit(progress, "tts", &format!("синтез {dirty_count} из {} сегментов", segs.len()));
+    // 4) TTS каждый сегмент через Higgs (audiocpp).
     // Облачный TTS (OpenRouter) вместо локального Higgs: тяжёлую DLL + модель НЕ грузим вовсе — в этом и
     // смысл (снять самую тяжёлую часть). engine=None; синтез идёт по облачной ветке ниже.
     let cloud_tts_on = crate::models::openrouter_stage_on(&paths.models_root, "tts");
-    let engine: Option<Arc<AudiocppEngine>> = if cloud_tts_on {
+    let engine: Option<Arc<AudiocppEngine>> = if dirty_count == 0 {
+        None
+    } else if cloud_tts_on {
         emit(progress, "tts", "TTS через облако (OpenRouter) — локальный Higgs не загружаем");
         None
     } else {
@@ -823,7 +836,7 @@ fn build_dub(
     // разным спикерам — разные. Пол — F0-замер (как в кастинге), голоса модели — динамически из API, пол
     // голоса — из спеки провайдера. Только в облачном режиме (локальный Higgs клонирует реальные рефы).
     // Пусто -> облачный TTS уйдёт на дефолтный голос настроек (or_tts_voice).
-    let cloud_voice_map: std::collections::HashMap<String, String> = if cloud_tts_on {
+    let cloud_voice_map: std::collections::HashMap<String, String> = if dirty_count > 0 && cloud_tts_on {
         let mut m: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         // (1) РУЧНОЙ выбор голосов из кастинга: proj.audio.voice — CSV, позиционный по отсортированным
         // спикерам (как локальный пак-путь выше). В облачном режиме имена = ОБЛАЧНЫЕ голоса (casting_apply
