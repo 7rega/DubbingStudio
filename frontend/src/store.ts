@@ -82,7 +82,7 @@ export const useStore = create<State>((set, get) => ({
   }),
   setRendered: (rendered) => set({ rendered }),
   setRendering: (rendering) => set({ rendering }),
-  addExport: (e) => set((s) => ({ exports: [e, ...s.exports.filter((x) => x.id !== e.id)] })),   // дедуп по id: повторный экспорт того же проекта заменяет запись, а не плодит дубли
+  addExport: (e) => set((s) => ({ exports: [e, ...s.exports.filter((x) => x.id !== e.id)].slice(0, 50) })),   // дедуп по id + кап до 50
   updateExport: (id, patch) => set((s) => ({ exports: s.exports.map((x) => (x.id === id ? { ...x, ...patch } : x)) })),
   pushHistory: (p) => set((s) => {
     // no-op if the snapshot matches the current head: callers may re-snapshot the same
@@ -90,7 +90,7 @@ export const useStore = create<State>((set, get) => ({
     // future:[] there would silently kill the redo stack.
     const head = s.past[s.past.length - 1];
     if (head && JSON.stringify(head) === JSON.stringify(p)) return {};
-    return { past: [...s.past, p].slice(-60), future: [] };
+    return { past: [...s.past, p].slice(-25), future: [] };
   }),
   undo: () => {
     const s = get(); if (!s.past.length || !s.project) return null;

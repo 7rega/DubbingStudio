@@ -51,7 +51,7 @@ enum JobStatus {
 #[derive(Clone)]
 pub struct JobQueue {
     inner: Arc<Mutex<HashMap<String, Job>>>,
-    submit_tx: tokio::sync::mpsc::UnboundedSender<(String, JobFn)>,
+    submit_tx: tokio::sync::mpsc::Sender<(String, JobFn)>,
 }
 
 impl JobQueue {
@@ -59,7 +59,7 @@ impl JobQueue {
     pub fn new() -> Self {
         let inner: Arc<Mutex<HashMap<String, Job>>> = Arc::new(Mutex::new(HashMap::new()));
         let (submit_tx, mut submit_rx) =
-            tokio::sync::mpsc::unbounded_channel::<(String, JobFn)>();
+            tokio::sync::mpsc::channel::<(String, JobFn)>(64);
 
         let worker_inner = inner.clone();
         tokio::spawn(async move {
@@ -149,7 +149,7 @@ impl JobQueue {
             result_sender: None,
         };
         self.inner.lock().await.insert(job_id.clone(), job);
-        let _ = self.submit_tx.send((job_id.clone(), fn_));
+        let _ = self.submit_tx.send((job_id.clone(), fn_)).await;
         job_id
     }
 
@@ -170,7 +170,7 @@ impl JobQueue {
             result_sender: Some(res_tx),
         };
         self.inner.lock().await.insert(job_id.clone(), job);
-        let _ = self.submit_tx.send((job_id.clone(), fn_));
+        let _ = self.submit_tx.send((job_id.clone(), fn_)).await;
         (job_id, res_rx)
     }
 

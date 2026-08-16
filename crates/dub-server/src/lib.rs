@@ -47,9 +47,25 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub use jobs::JobQueue;
+
+pub type TtsCache = Arc<Mutex<Option<(render::EngineKey, Arc<audiocpp::AudiocppEngine>)>>>;
+static GLOBAL_TTS_CACHE: OnceLock<TtsCache> = OnceLock::new();
+
+/// Принудительно выгрузить Higgs TTS из VRAM/RAM (для взаимного вытеснения перед стартом LLM/Vision).
+pub fn evict_tts_cache() {
+    if let Some(cache) = GLOBAL_TTS_CACHE.get() {
+        if let Ok(mut lock) = cache.lock() {
+            if lock.is_some() {
+                eprintln!("[memory] Выгружаем Higgs TTS из VRAM/RAM для освобождения памяти");
+                *lock = None;
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        }
+    }
+}
 
 /// E2E-верификация caption-композита БЕЗ ASR/Gemma/TTS: берём УЖЕ проанализированный project.json
 /// (кэш transcript+raw_ctx), заново гоним OCR-стадию + compose (реальная детекция + матчинг титров),
@@ -275,7 +291,11 @@ impl AppState {
             models_root: mroot,
             voices_dir,
             setup_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tts_cache: Arc::new(Mutex::new(None)),
+            tts_cache: {
+                let cache: TtsCache = Arc::new(Mutex::new(None));
+                let _ = GLOBAL_TTS_CACHE.set(cache.clone());
+                cache
+            },
         }
     }
 

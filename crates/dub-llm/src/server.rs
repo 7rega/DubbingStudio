@@ -18,7 +18,10 @@ use crate::LlmError;
 /// Последние N строк stderr — для внятной диагностики, если сервер упал/не поднялся.
 type LogTail = Arc<Mutex<VecDeque<String>>>;
 
-fn drain_to_tail<R: std::io::Read + Send + 'static>(reader: R, tail: LogTail) {
+fn drain_to_tail<R: std::io::Read + Send + 'static>(
+    reader: R,
+    tail: LogTail,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let r = BufReader::new(reader);
         for line in r.lines().map_while(Result::ok) {
@@ -29,7 +32,7 @@ fn drain_to_tail<R: std::io::Read + Send + 'static>(reader: R, tail: LogTail) {
                 t.push_back(line);
             }
         }
-    });
+    })
 }
 
 fn tail_text(tail: &LogTail) -> String {
@@ -94,6 +97,7 @@ pub struct LlamaServer {
     port: u16,
     base_url: String,
     log_tail: LogTail,
+    drain_handles: Vec<std::thread::JoinHandle<()>>,
 }
 
 /// Подобрать свободный TCP-порт на 127.0.0.1 (bind :0 -> ОС выдаёт порт, тут же освобождаем).
@@ -188,11 +192,12 @@ impl LlamaServer {
 
         let base_url = format!("http://127.0.0.1:{port}");
         let log_tail: LogTail = Arc::new(Mutex::new(VecDeque::new()));
+        let mut drain_handles = Vec::new();
         if let Some(out) = child.stdout.take() {
-            drain_to_tail(out, log_tail.clone());
+            drain_handles.push(drain_to_tail(out, log_tail.clone()));
         }
         if let Some(err) = child.stderr.take() {
-            drain_to_tail(err, log_tail.clone());
+            drain_handles.push(drain_to_tail(err, log_tail.clone()));
         }
 
         let mut srv = LlamaServer {
@@ -200,6 +205,7 @@ impl LlamaServer {
             port,
             base_url,
             log_tail,
+            drain_handles,
         };
         srv.wait_ready(opts.ready_timeout_secs)?;
         Ok(srv)
@@ -254,10 +260,15 @@ impl LlamaServer {
         self.port
     }
 
-    /// Явно остановить сервер (kill + wait). Идемпотентно.
+    /// Явно остановить сервер (kill + wait + join + WDDM dealloc sleep). Идемпотентно.
     pub fn stop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        for h in self.drain_handles.drain(..) {
+            let _ = h.join();
+        }
+        // Даём Windows WDDM время вернуть закоммиченные страницы видеопамяти
+        std::thread::sleep(Duration::from_millis(200));
     }
 }
 

@@ -293,17 +293,20 @@ impl Asr {
         workers: usize,
     ) -> Result<Vec<Word>, AsrError> {
         ensure_ort_dylib();
-        // Задания: (индекс окна, offset, w.start, клип-копия O(окна)).
-        let jobs: Vec<(usize, f64, f64, Vec<f32>)> = windows
+        // Оптимизация памяти: не клонируем все 80 клипов сразу в RAM (~920МБ),
+        // а держим Arc<[f32]> на общий буфер и нарезаем клип только внутри рабочего потока по месту.
+        let audio_arc: std::sync::Arc<[f32]> = std::sync::Arc::from(audio);
+        // Задания: (индекс окна, offset, w.start, a, b).
+        let jobs: Vec<(usize, f64, f64, usize, usize)> = windows
             .iter()
             .enumerate()
             .filter_map(|(i, w)| {
-                let a = ((w.start * sr as f64) as usize).min(audio.len());
-                let b = ((w.end * sr as f64) as usize).min(audio.len());
+                let a = ((w.start * sr as f64) as usize).min(audio_arc.len());
+                let b = ((w.end * sr as f64) as usize).min(audio_arc.len());
                 if b <= a {
                     None
                 } else {
-                    Some((i, w.offset(), w.start, audio[a..b].to_vec()))
+                    Some((i, w.offset(), w.start, a, b))
                 }
             })
             .collect();
@@ -315,7 +318,7 @@ impl Asr {
 
         let mut handles = Vec::new();
         for _ in 0..workers {
-            let (q, res, fail) = (queue.clone(), results.clone(), failed.clone());
+            let (q, res, fail, audio_ref) = (queue.clone(), results.clone(), failed.clone(), audio_arc.clone());
             let dir = self.tdt_dir.clone();
             let sr_c = sr;
             handles.push(std::thread::spawn(move || {
@@ -329,7 +332,8 @@ impl Asr {
                 };
                 loop {
                     let job = { q.lock().unwrap_or_else(|p| p.into_inner()).pop() };
-                    let Some((i, off, w_start, clip)) = job else { break };
+                    let Some((i, off, w_start, a, b)) = job else { break };
+                    let clip = audio_ref[a..b].to_vec();
                     match model.transcribe_samples(clip, sr_c, 1, Some(TimestampMode::Words)) {
                         Ok(r) => {
                             let end_abs = |v: f64| v;

@@ -78,6 +78,9 @@ pub fn open(o: &LlmOpen, mode: LlmMode) -> Result<LlmProvider, String> {
     if mode == LlmMode::Vision && o.mmproj.is_file() {
         opts = opts.with_mmproj(o.mmproj);
     }
+    // Перед стартом локального llama-server освобождаем VRAM от Higgs TTS
+    crate::evict_tts_cache();
+
     let server = LlamaServer::start(&opts).map_err(|e| format!("llama-server: {e}"))?;
     let client = ChatClient::new(server.base_url()).map_err(|e| format!("клиент чата: {e}"))?;
     Ok(LlmProvider::Local { _server: server, client })

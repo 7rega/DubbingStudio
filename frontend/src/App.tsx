@@ -5946,6 +5946,12 @@ function VoiceRecorder({ voiceList, onVoices, onDone }: { voiceList: string[]; o
   const [rename, setRename] = useState<{ from: string; to: string } | null>(null);
   const lvlTimer = useRef<number | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (lvlTimer.current) window.clearInterval(lvlTimer.current);
+    };
+  }, []);
+
   const start = async () => {
     const auto = `Голос ${voiceList.length + 1}`; // авто-имя, переименовать можно после
     const r = await api.recordStart(auto).catch(() => null);
