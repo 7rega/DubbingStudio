@@ -2384,7 +2384,14 @@ pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total:
         .map(|s| {
             let tgt = match overrides.get(s.id.as_str()) {
                 Some(t) => t.to_string(),
-                None => s.tgt_text.clone(),
+                None => {
+                    let t = s.tgt_text.trim();
+                    if !t.is_empty() {
+                        t.to_string()
+                    } else {
+                        s.src_text.trim().to_string()
+                    }
+                }
             };
             (s, tgt)
         })

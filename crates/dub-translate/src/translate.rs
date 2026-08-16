@@ -58,7 +58,7 @@ fn parse_numbered(text: &str, n: usize) -> Vec<Option<String>> {
 
 /// _translate_one — нативный однострочный вызов (надёжный фолбэк при рассинхроне батча). budget —
 /// мягкий лимит символов (#107): Some(N) добавляет в промпт требование уложиться в N; None — без лимита.
-fn translate_one(
+pub(crate) fn translate_one(
     llm: &ChatClient,
     txt: &str,
     tgt_name: &str,
