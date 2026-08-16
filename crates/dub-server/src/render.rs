@@ -2310,8 +2310,8 @@ pub(crate) fn cover_to_blur(c: &dub_captions::SubCover) -> BlurBox {
 pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total: f64) -> Result<Vec<dub_captions::SubCover>, String> {
     let titles: Vec<CapTitle> = proj.captions.titles.iter().map(map_title).collect();
     let sub_style = proj.captions.sub_style.as_ref().map(map_sub_style);
-    // sub_y дефолт vh*0.82 если не задан (как pipeline.py: не затирать edited/pinned sub_y).
-    let sub_y = proj.captions.sub_y.unwrap_or((vh as f64 * 0.82) as i64);
+    // sub_y дефолт vh*0.84 если не задан (как pipeline.py: не затирать edited/pinned sub_y).
+    let sub_y = proj.captions.sub_y.unwrap_or((vh as f64 * 0.84) as i64);
     // PER-SEGMENT Y-RIDE (порт pipeline.py 616-631). Каждую дублированную строку кладём на y, где в этот
     // момент была ОРИГИНАЛЬНАЯ полоса сабов, чтобы наш текст/плашка НАКРЫЛИ заблюренный оригинал (а не
     // висели на одной фикс-линии, пока блюр другой строки просвечивает). Источник полосы —
@@ -2334,8 +2334,8 @@ pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total:
     let cap_lo = 0.40 * vw as f64;
     let cap_hi = 0.60 * vw as f64;
     let seg_y = |st: f64, en: f64| -> i64 {
-        if proj.captions.sub_y_locked || no_band {
-            return sub_y; // editor-pinned или полосы нет -> выбранная band
+        if proj.captions.sub_y_locked || no_band || proj.captions.sub_y.is_some() {
+            return sub_y; // editor-pinned или задан sub_y -> строго выбранная высота
         }
         // медиана y-центров band-боксов, перекрывающих сегмент по времени, центрированных по X,
         // в нижней половине кадра (ехать на нижнюю оригинальную полосу, не на верхний оверлей).
@@ -2352,7 +2352,7 @@ pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total:
             .map(|b| b.y as f64 + b.h as f64 / 2.0)
             .collect();
         if ys.is_empty() {
-            return (vh as f64 * 0.82) as i64;
+            return sub_y;
         }
         ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         ys[ys.len() / 2] as i64
