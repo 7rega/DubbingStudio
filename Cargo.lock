@@ -301,7 +301,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audiocpp"
-version = "3.1.2"
+version = "3.2.0"
 dependencies = [
  "libloading 0.8.9",
  "serde",
@@ -848,7 +848,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dub-asr"
-version = "3.1.2"
+version = "3.2.0"
 dependencies = [
  "hound",
  "ort",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "dub-captions"
-version = "3.1.2"
+version = "3.2.0"
 dependencies = [
  "ab_glyph",
  "serde",
@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "dub-core"
-version = "3.1.2"
+version = "3.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -878,7 +878,7 @@ dependencies = [
 
 [[package]]
 name = "dub-faces"
-version = "3.1.2"
+version = "3.2.0"
 dependencies = [
  "dub-asr",
  "hound",
@@ -892,7 +892,7 @@ dependencies = [
 
 [[package]]
 name = "dub-llm"
-version = "3.1.2"
+version = "3.2.0"
 dependencies = [
  "base64 0.22.1",
  "reqwest",
@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "dub-ocr"
-version = "3.1.2"
+version = "3.2.0"
 dependencies = [
  "image",
  "ndarray 0.16.1",
@@ -915,15 +915,16 @@ dependencies = [
 
 [[package]]
 name = "dub-sep"
-version = "3.1.2"
+version = "3.2.0"
 dependencies = [
  "hound",
+ "realfft",
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "dub-server"
-version = "3.1.2"
+version = "3.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -962,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "dub-translate"
-version = "3.1.2"
+version = "3.2.0"
 dependencies = [
  "base64 0.22.1",
  "dub-llm",

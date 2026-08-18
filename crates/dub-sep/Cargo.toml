@@ -8,6 +8,7 @@ description = "Вокал/инструментал сепарация — Mel-Ba
 [dependencies]
 hound = "3"
 thiserror = { workspace = true }
+realfft = "3.4"
 
 [[example]]
 name = "separate"

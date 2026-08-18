@@ -5,7 +5,7 @@
 //! Вход — WAV 44.1кГц (движок сам сообщит, если частота не совпала). На выходе — <dir>/vocals.wav и
 //! <dir>/instrumental.wav. Печатает RMS-проверку (вокал/инструментал против микса).
 
-use dub_sep::separate;
+use dub_sep::{separate_with_mode, SepMode};
 use std::path::PathBuf;
 
 fn main() {
@@ -13,6 +13,7 @@ fn main() {
     let mut model = None;
     let mut input = None;
     let mut out_dir = PathBuf::from(".");
+    let mut mode = SepMode::default();
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         let mut next = || it.next().expect("флаг требует значение");
@@ -21,6 +22,13 @@ fn main() {
             "--model" => model = Some(PathBuf::from(next())),
             "--in" => input = Some(PathBuf::from(next())),
             "--out-dir" => out_dir = PathBuf::from(next()),
+            "--mode" => {
+                let m = next();
+                mode = match m.to_lowercase().as_str() {
+                    "legacy" | "sub" => SepMode::Legacy,
+                    _ => SepMode::SpectralMask,
+                };
+            }
             other => {
                 eprintln!("неизвестный флаг: {other}");
                 std::process::exit(2);
@@ -31,8 +39,9 @@ fn main() {
     let model = model.expect("нужен --model");
     let input = input.expect("нужен --in");
 
-    match separate(&input, &out_dir, &cli, &model) {
+    match separate_with_mode(&input, &out_dir, &cli, &model, mode) {
         Ok(r) => {
+            println!("mode:         {:?}", mode);
             println!("vocals:       {}", r.vocals.display());
             println!("instrumental: {}", r.instrumental.display());
         }

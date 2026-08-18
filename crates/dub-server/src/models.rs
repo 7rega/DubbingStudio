@@ -79,6 +79,9 @@ pub fn is_selection_key(key: &str) -> bool {
             // gpu = CUDA, cpu = без NVIDIA. sep=сепарация(BSRoformer CUDA/CPU-сборка), diar=диаризация
             // (Sortformer onnx CUDA-EP/CPU), asr=локальный ASR (Parakeet onnx / Whisper CTranslate2).
             | "local_backend" | "sep_backend" | "diar_backend" | "asr_backend"
+            // Режим формирования instrumental (BSRoformer voc_fv6):
+            // "spectral_mask" (дефолт, без фантомного вокала) | "legacy" (mix - vocals)
+            | "sep_mode"
             // Лимиты RAM (видимые контролы в настройках, НЕ авто-магия): против OOM на слабой памяти.
             | "llama_ubatch"    // размер prefill-батча Gemma (меньше = меньше пиковый буфер графа prefill)
             | "higgs_ref_secs"  // длина реф-клипа клона голоса (меньше = меньше prefill Higgs; <12с спасает 32ГБ)
@@ -132,6 +135,16 @@ pub fn stage_backend(mroot: &Path, key: &str) -> &'static str {
 /// Per-stage: `stage_backend(mroot, "<sep|diar|asr>_backend")`.
 pub fn local_backend(mroot: &Path) -> &'static str {
     stage_backend(mroot, "local_backend")
+}
+
+/// Режим формирования инструментала BSRoformer (Mel-Band Roformer voc_fv6):
+/// "spectral_mask" (дефолт) | "legacy" (посемпловое вычитание mix - vocals).
+pub fn sep_mode(mroot: &Path) -> dub_sep::SepMode {
+    let sel = load_selection(mroot);
+    match pick(&sel, "sep_mode").unwrap_or("spectral_mask") {
+        "legacy" | "sub" | "subtraction" => dub_sep::SepMode::Legacy,
+        _ => dub_sep::SepMode::SpectralMask,
+    }
 }
 
 /// API-ключ OpenRouter из active.json (локальное хранение, десктоп). Пусто/нет -> None.

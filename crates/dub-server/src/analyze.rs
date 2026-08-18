@@ -609,7 +609,8 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                     media::extract_audio(&paths.input, &audio_hq, 44100, 2)?;
                 }
                 emit(progress, "separate", "сепарация вокала (BSRoformer) — чистый голос для диаризации/ASR");
-                dub_sep::separate(&audio_hq, &stems, &paths.bsroformer_cli, &paths.bsroformer_model)
+                let sep_mode = crate::models::sep_mode(&paths.models_root);
+                dub_sep::separate_with_mode(&audio_hq, &stems, &paths.bsroformer_cli, &paths.bsroformer_model, sep_mode)
                     .map_err(|e| e.to_string())?;
             } else {
                 emit(progress, "separate", "сепарация из кэша (stems уже посчитаны)");

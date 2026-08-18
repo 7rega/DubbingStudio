@@ -15,7 +15,19 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub mod spectral;
 mod wav;
+
+/// Режим формирования инструментала из вокала и микса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SepMode {
+    /// Спектральная инверсная маска: S_inst = S_mix * max(0, 1 - 1.015 * |S_voc|/|S_mix|) с phase(S_mix) и iSTFT.
+    /// Устраняет фантомные голоса, не разрушая барабаны/бас/синтезаторы.
+    #[default]
+    SpectralMask,
+    /// Legacy: посемпловое вычитание во временной области (mix - vocals).
+    Legacy,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SepError {
@@ -77,14 +89,27 @@ pub fn is_installed(repo_root: &Path) -> bool {
     engine_dir(repo_root).join(ENGINE_CLI_FILE).is_file() && model_path(repo_root).is_file()
 }
 
-/// Разделить mix (WAV 44.1кГц) на вокал + инструментал. `out_dir` — куда положить `vocals.wav` и
-/// `instrumental.wav` (порт `separate.split` контракта). `cli` — путь к bs_roformer-cli.exe,
-/// `model` — GGUF. Движок пишет вокал; инструментал считается как mix − vocals во времени.
+/// Разделить mix (WAV 44.1кГц) на вокал + инструментал с режимом по умолчанию (SpectralMask).
+/// `out_dir` — куда положить `vocals.wav` и `instrumental.wav`. `cli` — путь к bs_roformer-cli.exe,
+/// `model` — GGUF.
 pub fn separate(
     mix_wav: &Path,
     out_dir: &Path,
     cli: &Path,
     model: &Path,
+) -> Result<SepResult, SepError> {
+    separate_with_mode(mix_wav, out_dir, cli, model, SepMode::default())
+}
+
+/// Разделить mix (WAV 44.1кГц) на вокал + инструментал с заданным режимом (`mode`).
+/// `SepMode::SpectralMask` формирует чистый инструментал через инверсную спектральную маску (S_inst = S_mix * mask),
+/// `SepMode::Legacy` формирует инструментал классическим вычитанием (mix - vocals).
+pub fn separate_with_mode(
+    mix_wav: &Path,
+    out_dir: &Path,
+    cli: &Path,
+    model: &Path,
+    mode: SepMode,
 ) -> Result<SepResult, SepError> {
     if !cli.is_file() {
         return Err(SepError::EngineMissing(cli.to_path_buf()));
@@ -101,7 +126,7 @@ pub fn separate(
     // память O(окна) при том же качестве (стыки в перекрытии, шов заглажен фейдом 1с).
     let (_, _, dur) = wav::probe(mix_wav).map_err(SepError::Wav)?;
     if dur > SEP_WINDOW_GATE_SECS {
-        return separate_windowed(mix_wav, out_dir, cli, model, dur);
+        return separate_windowed(mix_wav, out_dir, cli, model, dur, mode);
     }
 
     run_cli(cli, model, mix_wav, &vocals)?;
@@ -109,11 +134,13 @@ pub fn separate(
         return Err(SepError::NoOutput(vocals));
     }
 
-    // Инструментал = mix − vocals во временной области. Читаем оба, вычитаем сэмпл-в-сэмпл
-    // (движок гарантирует ту же длину/частоту), пишем WAV float32.
+    // Формирование инструментала в зависимости от выбранного режима
     let mix = wav::read_f32(mix_wav).map_err(SepError::Wav)?;
     let voc = wav::read_f32(&vocals).map_err(SepError::Wav)?;
-    let inst = subtract(mix, &voc);
+    let inst = match mode {
+        SepMode::SpectralMask => spectral::spectral_invert_mask(&mix, &voc, spectral::DEFAULT_GAMMA),
+        SepMode::Legacy => subtract(mix, &voc),
+    };
     wav::write_f32(&instrumental, &inst).map_err(SepError::Wav)?;
 
     Ok(SepResult { vocals, instrumental })
@@ -135,6 +162,7 @@ fn separate_windowed(
     cli: &Path,
     model: &Path,
     dur: f64,
+    mode: SepMode,
 ) -> Result<SepResult, SepError> {
     let (sr, ch, _) = wav::probe(mix_wav).map_err(SepError::Wav)?;
     let ch = ch.max(1);
@@ -193,19 +221,19 @@ fn separate_windowed(
     }
     out_voc.finalize().map_err(SepError::Wav)?;
 
-    // Инструментал = mix − vocals, окнами по 10 мин (без перекрытий — оба файла уже выровнены).
+    // Инструментал (SpectralMask / Legacy), окнами по 10 мин (без перекрытий — оба файла уже выровнены).
     let mut out_inst = wav::StreamWriter::create(&instrumental, sr, ch).map_err(SepError::Wav)?;
     let step = f(600.0);
     let mut pos: u64 = 0;
     while pos < total_frames {
         let n = step.min(total_frames - pos);
-        let mut m = wav::read_f32_range(mix_wav, pos as u32, n as u32).map_err(SepError::Wav)?;
+        let m = wav::read_f32_range(mix_wav, pos as u32, n as u32).map_err(SepError::Wav)?;
         let v = wav::read_f32_range(&vocals, pos as u32, n as u32).map_err(SepError::Wav)?;
-        let k = m.data.len().min(v.data.len());
-        for (o, vv) in m.data[..k].iter_mut().zip(&v.data[..k]) {
-            *o -= *vv;
-        }
-        out_inst.write(&m.data).map_err(SepError::Wav)?;
+        let inst_chunk = match mode {
+            SepMode::SpectralMask => spectral::spectral_invert_mask(&m, &v, spectral::DEFAULT_GAMMA),
+            SepMode::Legacy => subtract(m, &v),
+        };
+        out_inst.write(&inst_chunk.data).map_err(SepError::Wav)?;
         pos += n;
     }
     out_inst.finalize().map_err(SepError::Wav)?;

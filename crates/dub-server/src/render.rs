@@ -563,8 +563,9 @@ fn build_dub(
             emit(progress, "separate", "сепарация из кэша (stems уже посчитаны)");
             did_sep = true;
         } else if paths.bsroformer_cli.is_file() && paths.bsroformer_model.is_file() {
-            emit(progress, "separate", "сепарация (Mel-Band Roformer voc_fv6-Q8_0)");
-            match dub_sep::separate(&audio_hq, &stems, &paths.bsroformer_cli, &paths.bsroformer_model) {
+            emit(progress, "separate", "сепарация (Mel-Band Roformer voc_fv6)");
+            let sep_mode = crate::models::sep_mode(&paths.models_root);
+            match dub_sep::separate_with_mode(&audio_hq, &stems, &paths.bsroformer_cli, &paths.bsroformer_model, sep_mode) {
                 Ok(_) => did_sep = true,
                 Err(e) => emit(progress, "separate", &format!("ошибка сепарации: {e} -> без чистого вокала")),
             }

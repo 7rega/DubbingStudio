@@ -414,6 +414,21 @@ function ModelsSection() {
         <BackendTabs k="sep_backend" />
         <VariantPicker base="Mel-Band Roformer voc_fv6" ids={["roformer", "roformer-q5", "roformer-q4"]} />
         {selv("sep_backend") === "cpu" ? rowOf("bsroformer-engine-cpu") : rowOf("bsroformer-engine")}
+        <div className="mt-2 pt-2 border-t border-[var(--color-border)]">
+          <div className="mb-1.5">
+            <div className="text-[12px] font-medium">{t("settings.sepMode")}</div>
+            <div className="text-[10px] text-[var(--color-muted)]">{t("settings.sepModeHint")}</div>
+          </div>
+          <div className="flex gap-1">
+            {([["spectral_mask", t("settings.sepModeSpectral")], ["legacy", t("settings.sepModeLegacy")]] as const).map(([id, label]) => {
+              const cur = selv("sep_mode") || "spectral_mask";
+              return (
+                <button key={id} onClick={() => setSel("sep_mode", id)}
+                  className={`flex-1 px-2 py-1.5 rounded-md text-[11px] font-medium border transition-colors ${cur === id ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>{label}</button>
+              );
+            })}
+          </div>
+        </div>
       </Group>
       <Group label={t("settings.roleDiar")}>
         {/* На чём считать диаризацию — свои табы (Sortformer onnx: CUDA-EP / CPU-провайдер). */}
