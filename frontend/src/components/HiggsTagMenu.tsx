@@ -89,6 +89,17 @@ export function insertHiggsTag(
   }
 }
 
+/**
+ * Удаляет управляющие теги Higgs (<|...|>) из текста субтитров и нормализует пробелы.
+ */
+export function stripHiggsTags(text: string): string {
+  if (!text) return "";
+  return text
+    .replace(/<\|[^|>]+?\|>/g, "")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+}
+
 export interface HiggsContextMenuState {
   x: number;
   y: number;

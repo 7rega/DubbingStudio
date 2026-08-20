@@ -9,6 +9,7 @@ import { Stage, Layer, Rect, Line, Transformer } from "react-konva";
 import type Konva from "konva";
 import { api, type Project, type SubStyle } from "../lib/api";
 import { useStore } from "../store";
+import { stripHiggsTags } from "./HiggsTagMenu";
 
 type Lane = "subs" | "blur" | "titles";
 type Props = {
@@ -86,7 +87,7 @@ interface WordTiming {
 }
 
 const getWordsWithTimings = (seg: Project["segments"][number], customText?: string): WordTiming[] => {
-  const rawText = (customText ?? seg.tgt_text ?? seg.src_text ?? "").trim();
+  const rawText = stripHiggsTags(customText ?? seg.tgt_text ?? seg.src_text ?? "");
   if (!rawText) return [];
   const tokens = rawText.split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return [];
@@ -246,8 +247,8 @@ export default function PreviewCanvas({
 
   const activeSegText = (() => {
     if (!subsBurnOn || subsMode === "none" || !activeRawSeg) return null;
-    if (subsMode === "transcribe") return (activeRawSeg.src_text || "").trim();
-    return (activeRawSeg.tgt_text || activeRawSeg.src_text || "").trim();
+    if (subsMode === "transcribe") return stripHiggsTags(activeRawSeg.src_text || "");
+    return stripHiggsTags(activeRawSeg.tgt_text || activeRawSeg.src_text || "");
   })();
 
   const activeTitles = (project.captions.titles || []).filter((ti) => scrub >= ti.start && scrub <= ti.end);

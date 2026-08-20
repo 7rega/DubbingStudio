@@ -10,7 +10,7 @@ import { useStore } from "./store";
 import PreviewCanvas from "./components/PreviewCanvas";
 import { playSfx, sfxEnabled, setSfxEnabled } from "./lib/sfx";
 import ResourceMonitor from "./components/ResourceMonitor";
-import { HiggsContextMenu, type HiggsContextMenuState } from "./components/HiggsTagMenu";
+import { HiggsContextMenu, type HiggsContextMenuState, stripHiggsTags } from "./components/HiggsTagMenu";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -3512,7 +3512,6 @@ function Editor() {
   const [voiceManualCtrl, setVoiceManualCtrl] = useState(false);
   const [voiceTemp, setVoiceTemp] = useState(0.20);
   const [voiceTempDraft, setVoiceTempDraft] = useState<number | null>(null);
-  const [seedLock, setSeedLock] = useState(true);
   useEffect(() => {
     api.capabilities().then((c) => {
       setDuckOn(c.selection?.duck_on === "1");
@@ -3520,9 +3519,6 @@ function Editor() {
       if (c.selection?.voice_temp) {
         const vt = parseFloat(c.selection.voice_temp);
         if (!isNaN(vt) && vt >= 0.08 && vt <= 0.50) setVoiceTemp(vt);
-      }
-      if (c.selection?.seed_lock !== undefined) {
-        setSeedLock(c.selection.seed_lock !== "0");
       }
     }).catch(() => {});
   }, []);
@@ -3787,7 +3783,7 @@ function Editor() {
         const ms = Math.max(0, Math.round(s * 1000)), z = (n: number, w = 2) => String(n).padStart(w, "0");
         return `${z(Math.floor(ms / 3600000))}:${z(Math.floor((ms % 3600000) / 60000))}:${z(Math.floor((ms % 60000) / 1000))},${z(ms % 1000, 3)}`;
       };
-      const content = p.segments.map((s, i) => `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${(s.tgt_text || s.src_text || "").trim()}\n`).join("\n");
+      const content = p.segments.map((s, i) => `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${stripHiggsTags(s.tgt_text || s.src_text || "")}\n`).join("\n");
       await api.putProject(pid, p);
 
       if ("showSaveFilePicker" in window) {
@@ -3829,7 +3825,7 @@ function Editor() {
         speakers.map(spk => `Style: Speaker_${spk},Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1`).join("\n") +
         `\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
 
-      const content = header + p.segments.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Speaker_${s.speaker ?? "0"},${s.speaker ?? "0"},0,0,0,,${(s.tgt_text || s.src_text || "").trim().replace(/\n/g, "\\N")}`).join("\n");
+      const content = header + p.segments.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Speaker_${s.speaker ?? "0"},${s.speaker ?? "0"},0,0,0,,${stripHiggsTags(s.tgt_text || s.src_text || "").replace(/\n/g, "\\N")}`).join("\n");
       await api.putProject(pid, p);
 
       if ("showSaveFilePicker" in window) {
@@ -5540,23 +5536,6 @@ function Editor() {
                       />
                       <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.stabilityHint")}</div>
                     </div>
-
-                    <div>
-                      <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none" title={t("voice.seedLockHint")}>
-                        <input
-                          type="checkbox"
-                          checked={seedLock}
-                          onChange={async (e) => {
-                            const val = e.target.checked;
-                            setSeedLock(val);
-                            await api.setSelection("seed_lock", val ? "1" : "0");
-                          }}
-                          className="accent-[var(--color-accent)] w-3.5 h-3.5"
-                        />
-                        <span className="text-[var(--color-text)] font-medium">{t("voice.seedLock")}</span>
-                      </label>
-                      <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.seedLockHint")}</div>
-                    </div>
                   </div>
                 )}
 
@@ -6967,8 +6946,8 @@ function TranscriptView() {
     const ms = Math.max(0, Math.round(s * 1000)), z = (n: number, w = 2) => String(n).padStart(w, "0");
     return `${z(Math.floor(ms / 3600000))}:${z(Math.floor((ms % 3600000) / 60000))}:${z(Math.floor((ms % 60000) / 1000))},${z(ms % 1000, 3)}`;
   };
-  const exportSrt = () => dl("transcript.srt", rows.map((s, i) => `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${(s.src_text || "").trim()}\n`).join("\n"));
-  const exportTxt = () => dl("transcript.txt", rows.map((s) => `[${t("transcribe.speaker")} ${s.speaker ?? "0"}] ${(s.src_text || "").trim()}`).join("\n"));
+  const exportSrt = () => dl("transcript.srt", rows.map((s, i) => `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${stripHiggsTags(s.src_text || "")}\n`).join("\n"));
+  const exportTxt = () => dl("transcript.txt", rows.map((s) => `[${t("transcribe.speaker")} ${s.speaker ?? "0"}] ${stripHiggsTags(s.src_text || "")}`).join("\n"));
   const exportAss = () => {
     const assTime = (s: number) => {
       const ms = Math.max(0, Math.round(s * 100));
@@ -6979,7 +6958,7 @@ function TranscriptView() {
     const header = `[Script Info]\nTitle: Dub Studio Export\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n` +
       speakers.map(spk => `Style: Speaker_${spk},Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1`).join("\n") +
       `\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
-    const events = rows.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Speaker_${s.speaker ?? "0"},,0,0,0,,${(s.src_text || "").trim().replace(/\n/g, "\\N")}`).join("\n");
+    const events = rows.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Speaker_${s.speaker ?? "0"},,0,0,0,,${stripHiggsTags(s.src_text || "").replace(/\n/g, "\\N")}`).join("\n");
     dl("transcript.ass", header + events);
   };
 

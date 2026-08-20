@@ -441,9 +441,34 @@ fn synth_defect(samples: &[f32], sr: i32, tgt_chars: usize) -> Option<&'static s
     None
 }
 
+/// Удаляет управляющие теги Higgs (<|...|>) и нормализует пробелы
+pub fn strip_higgs_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        if !in_tag && i + 1 < len && chars[i] == '<' && chars[i + 1] == '|' {
+            in_tag = true;
+            i += 2;
+        } else if in_tag && i + 1 < len && chars[i] == '|' && chars[i + 1] == '>' {
+            in_tag = false;
+            i += 2;
+        } else if !in_tag {
+            out.push(chars[i]);
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    out.split_whitespace().collect::<Vec<&str>>().join(" ")
+}
+
 /// Похожесть ожидаемого перевода и услышанного ASR: нормализация (lowercase, ё→е, только буквы/цифры)
 /// + доля общих слов от максимума. Мягкая метрика: ловим «совсем не то/тишину», не орфографию.
 fn qc_similarity(expected: &str, heard: &str) -> f64 {
+    let clean_expected = strip_higgs_tags(expected);
     let norm = |s: &str| -> Vec<String> {
         s.to_lowercase()
             .replace('ё', "е")
@@ -454,7 +479,7 @@ fn qc_similarity(expected: &str, heard: &str) -> f64 {
             .map(|w| w.to_string())
             .collect()
     };
-    let a = norm(expected);
+    let a = norm(&clean_expected);
     let b = norm(heard);
     if a.is_empty() && b.is_empty() {
         return 1.0;
@@ -938,7 +963,7 @@ fn build_dub(
         .and_then(|v| v.as_str())
         .map(|v| v != "0")
         .unwrap_or(true);
-    // Ручной контроль сэмплинга (Temperature/Seed): дефолт false (выкл -> заводские 0.30 и динамический сид)
+    // Ручной контроль сэмплинга (Temperature): дефолт false (выкл -> заводские 0.30)
     let voice_manual_ctrl = crate::models::load_selection(&paths.models_root)
         .get("voice_manual_ctrl")
         .and_then(|v| v.as_str())
@@ -955,17 +980,6 @@ fn build_dub(
             .clamp(0.08, 0.45)
     } else {
         0.30
-    };
-
-    // Фиксация сида персонажей (Speaker Seed Lock): дефолт true при ручном контроле
-    let seed_lock = if voice_manual_ctrl {
-        crate::models::load_selection(&paths.models_root)
-            .get("seed_lock")
-            .and_then(|v| v.as_str())
-            .map(|v| v != "0")
-            .unwrap_or(true)
-    } else {
-        false
     };
     // ПАРАЛЛЕЛЬНЫЙ ПРЕ-СИНТЕЗ облачного TTS: OpenRouter держит десятки конкурентных запросов, поэтому все
     // сегменты к синтезу гоним в N потоков (настройка or_concurrency) ДО последовательной укладки — она
@@ -1088,13 +1102,11 @@ fn build_dub(
             }
         };
 
-        let spk_seed_base: u64 = if seed_lock {
+        let spk_seed_base: u64 = {
             let n: u64 = s.speaker.as_deref().unwrap_or("0").parse::<u64>().unwrap_or_else(|_| {
                 s.speaker.as_deref().unwrap_or("0").bytes().fold(42u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
             });
             (n + 1) * 77777 + 42
-        } else {
-            (fi as u64) * 1000
         };
 
         // Синтез ТОЛЬКО если сегмент dirty (правился текст/спикер/голос) ИЛИ нет кэша. Реф-клипы
@@ -1340,7 +1352,7 @@ fn build_dub(
                 let tok_cap: u32 = ((((s.end - s.start).max(0.6) * 75.0 * 1.5).ceil() as u32) + 32).clamp(64, 2048);
                 for take_i in 1..=2u64 {
                     let take_path = wd.join(format!("seg_{sid}_take{take_i}.wav"));
-                    let seed = if seed_lock { spk_seed_base + take_i * 100 + 77 } else { (fi as u64) * 10000 + take_i * 100 + 77 };
+                    let seed = spk_seed_base + take_i * 100 + 77;
                     let temp = if take_i == 1 { (user_voice_temp * 0.90).clamp(0.08, 0.40) } else { (user_voice_temp * 1.15).clamp(0.10, 0.45) };
                     let opts = format!(
                         "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
@@ -2387,13 +2399,13 @@ pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total:
         })
         .map(|s| {
             let tgt = match overrides.get(s.id.as_str()) {
-                Some(t) => t.to_string(),
+                Some(t) => strip_higgs_tags(t),
                 None => {
-                    let t = s.tgt_text.trim();
+                    let t = strip_higgs_tags(&s.tgt_text);
                     if !t.is_empty() {
-                        t.to_string()
+                        t
                     } else {
-                        s.src_text.trim().to_string()
+                        strip_higgs_tags(&s.src_text)
                     }
                 }
             };
@@ -2645,5 +2657,33 @@ mod tests {
         let ass = build_to_string(&proj, vw, vh);
         let y = first_sub_y(&ass);
         assert!((630..=650).contains(&y), "fallback: без маркеров едем по всему набору: y={y}");
+    }
+
+    #[test]
+    fn test_strip_higgs_tags_basic() {
+        assert_eq!(strip_higgs_tags("<|emotion:anger|>Привет мир!"), "Привет мир!");
+        assert_eq!(strip_higgs_tags("<|style:whispering|>Тихий шепот"), "Тихий шепот");
+        assert_eq!(strip_higgs_tags("Начало <|prosody:pause|> конец."), "Начало конец.");
+        assert_eq!(strip_higgs_tags("<|sfx:laughter|>Haha, смешная шутка!"), "Haha, смешная шутка!");
+        assert_eq!(strip_higgs_tags("<|emotion:fear|><|style:shouting|> Помогите! <|prosody:speed_fast|>"), "Помогите!");
+        assert_eq!(strip_higgs_tags("Обычный текст без тегов."), "Обычный текст без тегов.");
+        assert_eq!(strip_higgs_tags("<|emotion:sadness|>"), "");
+    }
+
+    #[test]
+    fn test_build_ass_strips_higgs_tags() {
+        let (vw, vh) = (1080i64, 1920i64);
+        let mut proj = Project::default();
+        proj.mode = "dub".into();
+        proj.subs.mode = "translate".into();
+        proj.segments = vec![
+            seg("s0", 1.0, 2.0, "<|emotion:anger|>Сердитая фраза!"),
+            seg("s1", 2.5, 3.5, "<|sfx:laughter|>Haha, смешно!"),
+        ];
+        let ass = build_to_string(&proj, vw, vh);
+        assert!(ass.contains("Сердитая фраза!"));
+        assert!(ass.contains("Haha, смешно!"));
+        assert!(!ass.contains("<|emotion:anger|>"));
+        assert!(!ass.contains("<|sfx:laughter|>"));
     }
 }
