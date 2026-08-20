@@ -87,6 +87,7 @@ pub fn is_selection_key(key: &str) -> bool {
             | "higgs_ref_secs"  // длина реф-клипа клона голоса (меньше = меньше prefill Higgs; <12с спасает 32ГБ)
             | "bench"           // пер-стадийный бенчмарк (bench.json + ⏱ в журнале); галка в настройках, ВЫКЛ по умолчанию
             | "duck_on"         // дакинг фона под дубляжом (приглушать фон под речью); ВЫКЛ по умолчанию — не всем нужен
+            | "vision_on"       // "1" -> мультимодальный анализ видеокадров (Vision); "0" -> Fast Text Mode (только текст)
             | "qc_asr"          // "1" -> авто-проверка услышанного текста через Whisper ASR; "0" -> выкл (быстрый синтез)
             | "qc_duration"     // "1" -> строгий контроль длительности/растяжения; "0" -> без ограничений
             | "multitake"       // "1" -> генерировать 3 дубля каждой фразы и выбирать лучший по таймингу; "0" -> один дубль (быстро)
@@ -249,6 +250,24 @@ pub fn bench_enabled(mroot: &Path) -> bool {
 /// без него фон в дубляже звучит на полной громкости под голосом. Настройка "duck_on"="1".
 pub fn duck_enabled(mroot: &Path) -> bool {
     pick(&load_selection(mroot), "duck_on") == Some("1")
+}
+
+/// Включён ли мультимодальный анализ видеокадров (Vision): "0" -> выкл (Fast Text Mode), иначе вкл (дефолт true).
+pub fn vision_enabled(mroot: &Path) -> bool {
+    load_selection(mroot)
+        .get("vision_on")
+        .and_then(|v| {
+            if let Some(s) = v.as_str() {
+                Some(s != "0")
+            } else if let Some(b) = v.as_bool() {
+                Some(b)
+            } else if let Some(n) = v.as_i64() {
+                Some(n != 0)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(true) // дефолт: включено для обратной совместимости
 }
 
 /// Прочитать числовой слот выбора (llama_ubatch/higgs_ref_secs) из active.json. Значение может лежать

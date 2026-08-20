@@ -25,6 +25,8 @@ type State = {
   setAudioOnly: (b: boolean) => void;
   jobSteps: string[] | null;         // ключи шагов степпера ТЕКУЩЕЙ джобы (по конфигу запуска); null = все
   setJobSteps: (s: string[] | null) => void;
+  visionOn: boolean;                 // мультимодальный анализ кадров (Gemma Vision); синхронизируется между Settings, DropZone и Batch
+  setVisionOn: (b: boolean) => void;
   recent: ProjectSummary[];
   setRecent: (recent: ProjectSummary[] | ((prev: ProjectSummary[]) => ProjectSummary[])) => void;
   setStage: (s: Stage) => void;
@@ -68,6 +70,13 @@ export const useStore = create<State>((set, get) => ({
   setAudioOnly: (audioOnly) => set({ audioOnly }),
   jobSteps: null,
   setJobSteps: (jobSteps) => set({ jobSteps }),
+  visionOn: typeof window !== "undefined" ? localStorage.getItem("dub-vision") !== "0" : true,
+  setVisionOn: (visionOn) => {
+    if (typeof window !== "undefined") {
+      try { localStorage.setItem("dub-vision", visionOn ? "1" : "0"); } catch {}
+    }
+    set({ visionOn });
+  },
   setStage: (stage) => set({ stage }),
   setPid: (pid) => set({ pid }),
   setProject: (project) => set({ project }),

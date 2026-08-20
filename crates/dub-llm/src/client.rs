@@ -167,7 +167,7 @@ impl ChatClient {
     }
 
     /// remote-режим = задан id модели (OpenRouter/OpenAI): шлём `model`, не шлём chat_template_kwargs.
-    fn is_remote(&self) -> bool {
+    pub fn is_remote(&self) -> bool {
         self.model.is_some()
     }
 
@@ -230,9 +230,9 @@ impl ChatClient {
                             .to_string();
                         return Ok(txt);
                     }
-                    // 4xx (кроме 429) — не ретраим, это наша ошибка запроса.
+                    // 4xx (кроме 429) или неподдерживаемые фичи (not supported) — не ретраим.
                     let text = resp.text().unwrap_or_default();
-                    if status.as_u16() != 429 && status.as_u16() < 500 {
+                    if (status.as_u16() != 429 && status.as_u16() < 500) || text.contains("not supported") {
                         return Err(LlmError::Api(format!("{status}: {text}")));
                     }
                     last_err = format!("{status}: {text}");

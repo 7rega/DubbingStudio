@@ -44,6 +44,9 @@ pub struct CtxConfig {
     /// субтитров/титров — в режимах без субтитров это 10-20 лишних vision-вызовов Gemma (минуты на
     /// длинном видео) ради данных, которые никто не прочитает. false -> фаза 1 пропускается целиком.
     pub want_layout: bool,
+    /// Нужен ли мультимодальный анализ видеокадров (Vision). Если false, layout и scene_context
+    /// пропускаются полностью (Fast Text Mode — чистый текстовый инференс без --mmproj и без PNG).
+    pub want_vision: bool,
     /// Стилевая инструкция перевода (#112): доп-указание тона/регистра/лексики. Пусто = без стиля.
     /// Вставляется в инструкционную часть TP-промпта ПЕРЕД форматом-контрактом (он остаётся приоритетным).
     pub style: String,
@@ -66,10 +69,10 @@ pub fn run(
         "brands": [], "audio_context": "", "scene_context": ""
     });
 
-    // ── фаза 1: VISION layout — ТОЛЬКО если субтитры/титры будут вжигаться ─
+    // ── фаза 1: VISION layout — ТОЛЬКО если vision включён И субтитры/титры будут вжигаться ─
     // (гейт по режиму: в «без субтитров»/burn=off выход layout никем не используется, а это 2 vision-
     // вызова на каждый из 5-10 кейфреймов = минуты Gemma на длинном видео впустую).
-    if cfg.want_layout {
+    if cfg.want_vision && cfg.want_layout {
         match vision::analyze_layout(llm, &cfg.input, &tmp, cfg.total, cfg.vh) {
             Ok(layout) => {
                 extra["sub_style"] = layout.sub_style.unwrap_or(Value::Null);
@@ -83,22 +86,38 @@ pub fn run(
             }
             Err(e) => log(&format!("  ctx vision skipped: {e}")),
         }
+    } else if !cfg.want_vision {
+        log("  ctx vision layout: пропущен (Fast Text Mode)");
     } else {
         log("  ctx vision layout: пропущен (субтитры не вжигаются — раскладка не нужна)");
     }
 
     // ── фаза 2: VISION scene-контекст ──────────────────────────────────────
-    match vision::scene_context(llm, &cfg.input, &tmp, cfg.total, &tgt) {
-        Ok(sc) => extra["scene_context"] = Value::from(sc),
-        Err(e) => log(&format!("  ctx scene skipped: {e}")),
+    if cfg.want_vision {
+        match vision::scene_context(llm, &cfg.input, &tmp, cfg.total, &tgt) {
+            Ok(sc) => extra["scene_context"] = Value::from(sc),
+            Err(e) => log(&format!("  ctx scene skipped: {e}")),
+        }
+    } else {
+        log("  ctx vision scene: пропущен (Fast Text Mode)");
     }
 
-    // ── фаза 3: AUDIO-контекст (окна <=28с). Fail-safe: нет вокала / модель не умеет audio -> пусто ──
-    if let Some(vocals) = &cfg.vocals16 {
-        match audio_context(llm, vocals, &tgt) {
-            Ok(ac) if !ac.is_empty() => extra["audio_context"] = Value::from(ac),
-            Ok(_) => {}
-            Err(e) => log(&format!("  ctx audio skipped: {e}")),
+    // ── фаза 3: AUDIO-контекст (окна <=28с). Доступно только в мультимодальных аудио-LLM (напр. облако) ──
+    // Local llama-server с Gemma — это Vision+Text модель (без audio mmproj), отправка audio даёт 500.
+    if llm.is_remote() && cfg.want_vision {
+        if let Some(vocals) = &cfg.vocals16 {
+            match audio_context(llm, vocals, &tgt) {
+                Ok(ac) if !ac.is_empty() => extra["audio_context"] = Value::from(ac),
+                Ok(_) => {}
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("not supported") {
+                        log("  ctx audio: модель не поддерживает audio input (пропущен)");
+                    } else {
+                        log(&format!("  ctx audio skipped: {e}"));
+                    }
+                }
+            }
         }
     }
 

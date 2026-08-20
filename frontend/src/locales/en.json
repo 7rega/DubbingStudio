@@ -98,6 +98,14 @@
     "done": "done",
     "error": "error",
     "open_out": "Open",
+    "vision": "Vision frame analysis",
+    "visionFast": "Fast Text (+200% speed)",
+    "subBlur": "Blur plate",
+    "subBlurOn": "ON (background blur)",
+    "subBlurOff": "OFF (clean text)",
+    "creatingProject": "Creating project…",
+    "startingAnalyze": "Starting analysis…",
+    "startingRender": "Voice synthesis & assembling…",
     "saveAll": "Save all to folder",
     "back": "Back",
     "add": "Add files"
@@ -365,7 +373,10 @@
     "voLeadInHint": "Allows listeners to hear original voice and tone (BBC/Discovery standard)",
     "dubReverb": "Scene Spatial Reverb",
     "dubReverbDesc": "Subtle early room reflections for acoustic immersion",
-    "dubReverbHint": "Eliminates dry radio-booth sound and blends speech into video scene"
+    "dubReverbHint": "Eliminates dry radio-booth sound and blends speech into video scene",
+    "vision": "Vision frame analysis",
+    "visionDesc": "visual scene analysis (disable for 2-3x faster translation: podcasts, lectures)",
+    "visionHint": "Analyzes video scene and on-screen titles. Turn off to speed up translation 2-3x (podcasts, lectures)."
   },
   "help": {
     "title": "About Dub Studio",
@@ -471,6 +482,9 @@
     "asrSwitched": "Parakeet doesn't know {{lang}} — ASR switched to Whisper (99 languages).",
     "detect": "Detect on-screen text",
     "detectHint": "OCR finds baked-in captions to blur & localize. Slow on 4K — turn off if you don't need it (e.g. dubbing without subtitles).",
+    "vision": "Vision (frame analysis)",
+    "visionHint": "Multimodal video frame analysis by Gemma. Disable for fast text-only translation (2-3x speedup: podcasts, lectures).",
+    "visionFastBadge": "Fast text-only translation (+200% speed)",
     "casting": "Cast characters",
     "castingHint": "Optional. Adds a pass over the frames — detects faces, matches them to speakers, and builds a character cast (avatar, name, voice) you can edit after analysis. Slower on long videos.",
     "hint": "Compose freely — audio and subtitles are independent, in any mode",

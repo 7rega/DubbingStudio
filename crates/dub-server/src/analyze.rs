@@ -280,6 +280,7 @@ pub struct AnalyzeArgs {
     pub import_translated: bool, // импортированные субтитры УЖЕ на языке перевода -> MT/vision пропустить,
                                  // tgt = импортированный текст, Даб Студио только озвучивает. Работает лишь с import_subs.
     pub num_speakers: usize,     // 0 = авто, 1..=8 = заданное число спикеров через WeSpeaker кластеризацию
+    pub vision: bool,            // true = полный vision; false = fast text mode (без видеокадров)
 }
 
 /// Пути к моделям/входу для одной джобы analyze.
@@ -916,6 +917,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
         &proj.mode,
         &args.rewrite,
         if args.import_translated { "imp1" } else { "imp0" },
+        if args.vision { "vis1" } else { "vis0" },
     ]);
     cache.write_stage(&paths.work_dir, "translate", &translate_key, &[]);
 

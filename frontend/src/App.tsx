@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -406,6 +406,19 @@ function ModelsSection() {
           <>
             <VariantPicker base="Gemma-4 12B QAT + vision" ids={["gemma", "gemma-q5_0", "gemma-q6_k", "gemma-q8_0"]} />
             {rowOf("llama")}
+            <div className="mt-2 pt-2 border-t border-[var(--color-border)] flex items-center justify-between gap-3" title={t("settings.visionHint")}>
+              <div className="min-w-0 flex-1">
+                <span className="text-[12px] font-medium text-[var(--color-text)] inline-flex items-center gap-2">
+                  <Video size={13} className="text-[var(--color-accent-2)]" />
+                  {t("settings.vision")}
+                </span>
+                <span className="block text-[10px] text-[var(--color-muted)]">{t("settings.visionDesc")}</span>
+              </div>
+              <button onClick={() => { const v = selv("vision_on") === "0"; setSel("vision_on", v ? "1" : "0"); useStore.getState().setVisionOn(v); }} title={t("settings.visionHint")}
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selv("vision_on") !== "0" ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${selv("vision_on") !== "0" ? "left-[18px]" : "left-0.5"}`} />
+              </button>
+            </div>
           </>
         )}
       </Group>
@@ -1214,6 +1227,7 @@ function DropZone() {
   const setSlotsFSaved = (v: string[]) => { setSlotsF(v); localStorage.setItem("dub-voice-slots-f", JSON.stringify(v)); };
   const [voiceLib, setVoiceLib] = useState<string[]>([]);                        // имена голосов из GET /voices (для селектов слотов)
   const [mainTranscribeSpeakers, setMainTranscribeSpeakers] = useState<number>(0); // выбор спикеров для режима транскрипции на главном экране
+  const visionOn = useStore((s) => s.visionOn);
   useEffect(() => { api.voices().then((r) => setVoiceLib(r.voices)).catch(() => {}); }, []);
   const [preview, setPreview] = useState<string | null>(null);                  // objectURL превью выбранного видео (первый кадр)
   const audioOnly = !!file && isAudioFile(file);                                // вход без видео -> режим «только аудио»
@@ -1373,7 +1387,7 @@ function DropZone() {
       const effCastingRef = effCasting ? castingRef : "";
       const effContentType = effCasting ? contentType : "real";
       const effNumSpeakers = audio === "transcribe" ? mainTranscribeSpeakers : 0;
-      const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers);
+      const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers, audioOnly ? false : visionOn);
       await api.watchJob(job_id, (e) => { if (e.type === "progress") s.setProgress(e.stage || "", e.msg || "", e.pct ?? null); });
       if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain });   // громкость оригинала со старта -> рендер ниже подхватит
       // Блюр-подложка под субтитрами — опция дубляжа/субтитров (дефолт вкл). Патчим, когда сабы вжигаются.
@@ -1842,7 +1856,7 @@ function DropZone() {
       <input ref={inputRef} type="file" accept={MEDIA_ACCEPT} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); }} />
       <input ref={batchRef} type="file" multiple accept={MEDIA_ACCEPT} className="hidden"
-        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; s.setStage("batch"); } }} />
+        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; s.setStage("batch"); } }} />
 
       {/* Модальное окно "Все проекты" со скроллом и поиском */}
       {allProjectsModal && (
@@ -6465,10 +6479,10 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
 }
 
 // Пакетная обработка: DropZone кладёт выбранные файлы + настройки сюда, BatchView читает (без раздувания стора).
-const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; funnyOn: boolean; funny: string; voGain: number; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number } =
-  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, funnyOn: false, funny: "", voGain: -12, trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0 };
+const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; funnyOn: boolean; funny: string; voGain: number; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
+  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") !== "0" : true, funnyOn: false, funny: "", voGain: -12, trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
 
-type BatchItem = { name: string; status: "queued" | "analyzing" | "rendering" | "done" | "error"; pid: string | null; pct: number; msg?: string; detail?: string };
+type BatchItem = { name: string; status: "queued" | "analyzing" | "rendering" | "done" | "error"; pid: string | null; pct: number | null; stage?: string; detail?: string; msg?: string };
 
 // Пакетный режим: пачка файлов -> для каждого createProject -> analyze -> (dub/funny) render, последовательно
 // (движок одно-воркерный, GPU сериализует). Переиспользует существующие эндпоинты, отдельного backend не нужно.
@@ -6476,7 +6490,10 @@ function BatchView() {
   const { t } = useTranslation();
   const setStage = useStore((s) => s.setStage);
   const filesRef = useRef<File[]>(batchState.files);
-  const { tgt, src, audio, subs, burn, detectText, funnyOn, funny, voGain, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
+  const { tgt, src, audio, subs, burn, detectText, subBlur, funnyOn, funny, voGain, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
+  const visionOn = useStore((s) => s.visionOn);
+  const setVisionOn = useStore((s) => s.setVisionOn);
+  const [batchSubBlur, setBatchSubBlur] = useState(subBlur);
   const [items, setItems] = useState<BatchItem[]>(() => filesRef.current.map((f) => ({ name: f.name, status: "queued", pid: null, pct: 0 })));
   const [running, setRunning] = useState(false);
   const [doneN, setDoneN] = useState(0);
@@ -6494,21 +6511,29 @@ function BatchView() {
     for (let i = 0; i < filesRef.current.length; i++) {
       if (!mountedRef.current) break;   // компонент размонтирован — прекращаем
       const upd = (patch: Partial<BatchItem>) => setItems((xs) => xs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+      const bf = filesRef.current[i];
       try {
-        upd({ status: "analyzing", pct: 0 });
-        const bf = filesRef.current[i];
+        upd({ status: "analyzing", pct: null, detail: t("batch.creatingProject") });
         const ao = isAudioFile(bf);                                // этот файл — аудио (без видео)?
         const { project_id } = await api.createProject(bf);
-        upd({ pid: project_id });
+        upd({ pid: project_id, detail: t("batch.startingAnalyze") });
         // Транскрипт всегда вжигает субтитры (иначе транскрипт-режим дал бы видео без текста); аудио-файл ->
         // субтитры/бёрн/OCR off (нет видео) -> на выходе озвученный WAV.
         const fSubs = ao ? "none" : eSubs;
         const fBurn = ao ? false : audio === "transcribe" ? true : burn;
         const effNumSpeakers = audio === "transcribe" ? transcribeSpeakers : 0;
         // Стиль перевода (#112) — параметром analyze (patch до analyze невозможен: project.json ещё нет).
-        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, false, trStyle, false, "", "auto", effNumSpeakers);
-        await api.watchJob(job_id, (e) => { if (e.type === "progress") upd({ pct: e.pct ?? 0, detail: e.msg || undefined }); });
+        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, false, trStyle, false, "", "auto", effNumSpeakers, ao ? false : visionOn);
+        await api.watchJob(job_id, (e) => {
+          if (e.type === "progress") {
+            const stepText = stageLabel(e.stage, t) || e.msg || e.stage || "";
+            if (e.msg) useStore.getState().pushActivity(`[${bf.name}] ${e.msg}`, "work");
+            upd({ pct: e.pct ?? null, stage: e.stage, detail: e.msg || stepText || undefined });
+          }
+        });
         if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain });   // громкость оригинала со старта -> общий для всех проектов батча
+        // Блюр-подложка под субтитрами: патчим в проект перед рендером
+        if (fBurn && fSubs !== "none" && !ao) await api.patch(project_id, { op: "sub_blur", on: batchSubBlur });
         // Сохранить оригинальную дорожку (#113): 2-я дорожка при mux. Только dub/voiceover, не аудио-файл.
         if (keepOrig && !ao && doRender) await api.patch(project_id, { op: "keep_original", keep: true, container });
         // Голоса из библиотеки (#114): раздать слоты ПЕРЕД render каждого проекта. Ошибка не роняет батч (клон-фолбэк).
@@ -6516,13 +6541,19 @@ function BatchView() {
           try { await api.voiceSlots(project_id, { male: slotsM, female: slotsF }); } catch { /* фолбэк на клон */ }
         }
         if (doRender) {
-          upd({ status: "rendering", pct: 0 });
+          upd({ status: "rendering", pct: null, detail: t("batch.startingRender") });
           const r = await api.render(project_id);
-          await api.watchJob(r.job_id, (e) => { if (e.type === "progress") upd({ pct: e.pct ?? 0, detail: e.msg || undefined }); });
+          await api.watchJob(r.job_id, (e) => {
+            if (e.type === "progress") {
+              const stepText = stageLabel(e.stage, t) || e.msg || e.stage || "";
+              if (e.msg) useStore.getState().pushActivity(`[${bf.name}] ${e.msg}`, "work");
+              upd({ pct: e.pct ?? null, stage: e.stage, detail: e.msg || stepText || undefined });
+            }
+          });
         }
-        upd({ status: "done", pct: 100 });
+        upd({ status: "done", pct: 100, detail: t("batch.done") });
       } catch (err) {
-        upd({ status: "error", msg: String(err) });
+        upd({ status: "error", msg: String(err), detail: String(err) });
       }
       setDoneN((n) => n + 1);
     }
@@ -6560,26 +6591,92 @@ function BatchView() {
             <button onClick={() => setStage("empty")} className="text-[13px] text-[var(--color-muted)] hover:text-[var(--color-text)] inline-flex items-center gap-1"><ArrowRight size={14} className="rotate-180" />{t("batch.back")}</button>
             <span className="text-[15px] font-semibold flex items-center gap-2"><FolderDown size={16} className="text-[var(--color-accent)]" />{t("batch.title")}</span>
           </div>
-          <span className="text-[12px] text-[var(--color-muted)]">{doneN}/{items.length} · {items.length} {t("batch.files")}</span>
+          <div className="flex items-center gap-3">
+            {/* Тумблер блюр-подложки */}
+            <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap shrink-0" title="Размытая подложка под субтитрами. Выкл = чистый текст без блюра видеоряда.">
+              <input type="checkbox" checked={batchSubBlur} disabled={running} onChange={(e) => { setBatchSubBlur(e.target.checked); batchState.subBlur = e.target.checked; }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
+              <span className="whitespace-nowrap">{t("batch.subBlur")}</span>
+              <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded whitespace-nowrap ${batchSubBlur ? "bg-[var(--color-surface-2)] text-[var(--color-muted)]" : "bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"}`}>
+                {batchSubBlur ? t("batch.subBlurOn") : t("batch.subBlurOff")}
+              </span>
+            </label>
+            {/* Тумблер Vision */}
+            <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap shrink-0" title={t("comp.visionHint")}>
+              <input type="checkbox" checked={visionOn} disabled={running} onChange={(e) => { const v = e.target.checked; setVisionOn(v); batchState.vision = v; api.setSelection("vision_on", v ? "1" : "0").catch(() => {}); }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
+              <span className="whitespace-nowrap">{t("settings.vision")}</span>
+              {!visionOn && (
+                <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded whitespace-nowrap bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]">
+                  {t("comp.visionFastBadge")}
+                </span>
+              )}
+            </label>
+            <span className="text-[12px] text-[var(--color-muted)] whitespace-nowrap shrink-0">{doneN}/{items.length} · {items.length} {t("batch.files")}</span>
+          </div>
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] divide-y divide-[var(--color-border)]">
           {items.map((it, i) => (
-            <div key={i} className="flex items-center gap-3 px-3 py-2.5">
-              <span className="shrink-0">{icon(it.status)}</span>
+            <div key={i} className={`flex items-start gap-3 px-3.5 py-3 transition-colors ${it.status === "analyzing" || it.status === "rendering" ? "bg-[color-mix(in_oklab,var(--color-accent)_6%,transparent)]" : ""}`}>
+              <span className="shrink-0 mt-0.5">{icon(it.status)}</span>
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] truncate">{it.name}</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[13px] font-medium truncate text-[var(--color-text)]">{it.name}</div>
+                  <div className="text-[11px] text-[var(--color-muted)] shrink-0 flex items-center gap-1.5">
+                    {it.status === "analyzing" || it.status === "rendering" ? (
+                      <span className="font-semibold text-[var(--color-accent)]">
+                        {t(`batch.${it.status}`)}
+                        {it.pct != null ? ` · ${Math.round(it.pct)}%` : ""}
+                      </span>
+                    ) : (
+                      <span>{t(`batch.${it.status}`)}</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Ход прогресса: подробная стадия и анимированный прогресс-бар */}
                 {(it.status === "analyzing" || it.status === "rendering") && (
-                  <div className="mt-1 h-1 rounded bg-[var(--color-surface-2)] overflow-hidden">
-                    <div className="h-full bg-[var(--color-accent)] transition-all" style={{ width: `${Math.min(100, Math.round(it.pct || 0))}%` }} />
+                  <div className="mt-1.5 space-y-1.5">
+                    {it.detail && (
+                      <div className="text-[11px] text-[var(--color-accent-2)] truncate font-mono flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-ping shrink-0" />
+                        <span className="truncate">{it.detail}</span>
+                      </div>
+                    )}
+                    <div className="h-1.5 rounded-full bg-[var(--color-surface-2)] overflow-hidden">
+                      {it.pct != null ? (
+                        <div
+                          className="h-full bg-[var(--color-accent)] transition-all duration-300 rounded-full"
+                          style={{ width: `${Math.max(2, Math.min(100, Math.round(it.pct)))}%` }}
+                        />
+                      ) : (
+                        <div className="h-full w-1/3 bg-[var(--color-accent)] rounded-full animate-pulse" />
+                      )}
+                    </div>
                   </div>
                 )}
-                {it.status === "error" && <div className="text-[10px] text-[var(--color-warn)] truncate mono">{it.msg}</div>}
+
+                {it.status === "done" && (
+                  <div className="mt-1 text-[11px] text-[var(--color-muted)] flex items-center gap-3">
+                    <span className="text-[var(--color-accent)] flex items-center gap-1">
+                      <Check size={12} /> {t("batch.done")}
+                    </span>
+                    {it.pid && (
+                      <button
+                        onClick={() => it.pid && api.openOutput(it.pid).catch(() => {})}
+                        className="text-[11px] text-[var(--color-accent)] inline-flex items-center gap-1 hover:underline ml-auto"
+                      >
+                        <ExternalLink size={12} /> {t("batch.open_out")}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {it.status === "error" && (
+                  <div className="mt-1 text-[10px] text-[var(--color-warn)] truncate mono">
+                    {it.msg || it.detail || t("batch.error")}
+                  </div>
+                )}
               </div>
-              <span className="text-[11px] text-[var(--color-muted)] shrink-0">{t(`batch.${it.status}`)}</span>
-              {it.status === "done" && it.pid && (
-                <button onClick={() => it.pid && api.openOutput(it.pid).catch(() => {})} className="text-[11px] text-[var(--color-accent)] inline-flex items-center gap-1 shrink-0 hover:underline"><ExternalLink size={12} />{t("batch.open_out")}</button>
-              )}
             </div>
           ))}
         </div>
@@ -7126,6 +7223,9 @@ export default function App() {
     // ASR в футере — из ФАКТИЧЕСКОГО выбора (active.json), не из статичного имени Parakeet-модели:
     // юзер переключил движок в «Моделях» -> строка обязана показать то, чем реально пойдёт прогон.
     const sel = (c as { selection?: Record<string, string> }).selection ?? {};
+    if (sel.vision_on !== undefined) {
+      useStore.getState().setVisionOn(sel.vision_on !== "0");
+    }
     const asrLabel = sel.asr_engine === "whisper" ? `whisper ${sel.whisper_model || "auto"}` : c.asr_model;
     const parts = [c.device, `ASR ${asrLabel}`];
     if (c.models?.llm) parts.push(`MT+vision ${base(c.models.llm)}`);

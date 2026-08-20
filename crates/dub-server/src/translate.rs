@@ -107,7 +107,12 @@ pub fn stage(
     }
 
     // LLM-провайдер: облако OpenRouter (если включено в настройках + есть ключ) ИЛИ локальный llama-server
-    // (Gemma+mmproj). Vision-режим: облаку — multimodal-модель, локали — mmproj. Fail-safe как раньше.
+    // (Gemma+mmproj). Vision-режим: облаку — multimodal-модель, локали — mmproj. Fast Text: без mmproj.
+    let llm_mode = if args.vision {
+        crate::llm_provider::LlmMode::Vision
+    } else {
+        crate::llm_provider::LlmMode::Text
+    };
     let prov = match crate::llm_provider::open(
         &crate::llm_provider::LlmOpen {
             llama_bin: &paths.llama_bin,
@@ -115,13 +120,21 @@ pub fn stage(
             mmproj: &paths.mmproj,
             models_root: &paths.models_root,
         },
-        crate::llm_provider::LlmMode::Vision,
+        llm_mode,
     ) {
         Ok(p) => {
             emit(progress, "translate", if p.is_remote() {
-                "перевод/vision через облако (OpenRouter)"
+                if args.vision {
+                    "перевод/vision через облако (OpenRouter)"
+                } else {
+                    "перевод через облако (OpenRouter Fast Text)"
+                }
             } else {
-                "поднимаю llama-server (Gemma + mmproj)"
+                if args.vision {
+                    "поднимаю llama-server (Gemma + mmproj)"
+                } else {
+                    "поднимаю llama-server (Gemma Fast Text)"
+                }
             });
             p
         }
@@ -133,9 +146,9 @@ pub fn stage(
     let client = prov.client();
 
     // Авто-детект типа контента для кастинга (#115): юзер выбрал «Авто» + кастинг включён -> классифицируем
-    // live-action vs анимация Gemma-vision (сервер уже поднят). Только при наличии mmproj (иначе vision нет
-    // -> casting-стадия сделает автономный детект/дефолт). Результат в проект; casting-стадия прочитает.
-    if args.casting && args.content_type == "auto" && paths.mmproj.is_file() {
+    // live-action vs анимация Gemma-vision (сервер уже поднят). Только при включённом vision и наличии mmproj
+    // (иначе vision нет -> casting-стадия сделает автономный детект/дефолт). Результат в проект; casting-стадия прочитает.
+    if args.vision && args.casting && args.content_type == "auto" && paths.mmproj.is_file() {
         let tmp = paths.work_dir.join("ctype_frame.png");
         let ct = classify_content_type(&client, &paths.input, &tmp, total, |m| {
             emit(progress, "vision", m);
@@ -158,9 +171,9 @@ pub fn stage(
         .collect();
 
     // VISION-layout нужен только когда его выход (sub_style/titles/brands) реально попадёт на экран:
-    // вжигание включено И субтитры не «none». Иначе (например «Дубляж без субтитров») это 10-20
-    // vision-вызовов Gemma впустую — на длинном видео минуты (баг-репорт юзера).
-    let want_layout = proj.subs.burn && proj.subs.mode != "none";
+    // vision включён, вжигание включено И субтитры не «none». Иначе (например «Дубляж без субтитров»
+    // или Fast Text Mode) это 10-20 vision-вызовов Gemma впустую — на длинном видео минуты (баг-репорт юзера).
+    let want_layout = args.vision && proj.subs.burn && proj.subs.mode != "none";
     let cfg = CtxConfig {
         input: paths.input.clone(),
         work_dir: paths.work_dir.clone(),
@@ -169,11 +182,16 @@ pub fn stage(
         vh: vh as f64,
         total,
         want_layout,
+        want_vision: args.vision,
         // Стиль перевода (#112): из проекта. Тем же путём, что rewrite попадает в ctx_run.
         style: proj.audio.translate_style.clone(),
     };
 
-    emit(progress, "vision", "ctx-проход: vision layout/scene + перевод транскрипта");
+    emit(progress, "vision", if args.vision {
+        "ctx-проход: vision layout/scene + перевод транскрипта"
+    } else {
+        "ctx-проход: быстрый перевод транскрипта (Fast Text Mode)"
+    });
     let res = ctx_run(&client, &cfg, &mut segs, rewrite, |m| {
         emit(progress, "vision", m);
     });

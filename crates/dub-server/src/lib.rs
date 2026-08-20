@@ -110,6 +110,7 @@ pub fn verify_captions_e2e(
         content_type: String::new(),
         import_translated: false,
         num_speakers: 0,
+        vision: models::vision_enabled(&mroot),
     };
     let sel = models::load_selection(&mroot);
     let (mt_model, mmproj) = models::resolve_mt(&mroot, &sel);
@@ -1582,6 +1583,9 @@ async fn analyze_project(
         // «сабы уже на языке перевода» — эффективно только если сабы реально импортированы.
         import_translated: import_subs.is_some() && qget("import_translated", "0") == "1",
         num_speakers: q.get("num_speakers").and_then(|s| s.parse().ok()).unwrap_or(0),
+        vision: q.get("vision")
+            .map(|v| v != "0")
+            .unwrap_or_else(|| models::vision_enabled(&st.models_root)),
     };
     // Активный вариант модели резолвится ПРИ КАЖДОЙ джобе (не морозится на старте): скачал/выбрал
     // квант -> применяется без рестарта. См. models::resolve_*.
