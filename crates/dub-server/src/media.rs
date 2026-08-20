@@ -435,6 +435,7 @@ pub fn mix_ducked(voice: &Path, music: &Path, out: &Path) -> Result<(), String> 
 
 /// Свести три аудиопотока в один стерео-микс (для профессионального закадра):
 /// track1 (дубляж 100%) + track2 (инструментал/музыка 100%) + track3 (приглушенный оригинальный вокал).
+#[allow(dead_code)]
 pub fn mix3(track1: &Path, track2: &Path, track3: &Path, out: &Path) -> Result<(), String> {
     let fc = "[0:a]aformat=channel_layouts=stereo[a0];\
               [1:a]aformat=channel_layouts=stereo[a1];\
@@ -455,6 +456,7 @@ pub fn mix3(track1: &Path, track2: &Path, track3: &Path, out: &Path) -> Result<(
 
 /// Наложить детерминированную огибающую дакинга на аудиофайл (напр. изолированный вокал):
 /// 1.0 в паузах, 10^(duck_db/20) во время речевых блоков с плавными рампами.
+#[allow(dead_code)]
 pub fn duck_envelope_file(src_audio: &Path, blocks: &[SpeechBlock], duck_db: f64, out: &Path) -> Result<(), String> {
     let g = 10f64.powf(duck_db / 20.0).clamp(0.01, 1.0);
     let vol = duck_volume_expr(blocks, g);
@@ -487,6 +489,7 @@ pub fn apply_spatial_reverb(src_wav: &Path, dst_wav: &Path) -> Result<(), String
 /// - voice: дубляж диктора (полный уровень 1.0)
 /// - music: инструментал / эффекты (мягкая огибающая inst_duck_db, напр. -3.5 дБ под речью, 0 дБ в паузах)
 /// - vocals: оригинальный вокал (глубокая огибающая voc_duck_db, напр. -12..-14 дБ под речью, 0 дБ в паузах)
+#[allow(dead_code)]
 pub fn mix_voiceover_hybrid(
     voice: &Path,
     music: &Path,

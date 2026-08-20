@@ -1616,7 +1616,7 @@ fn build_dub(
     }
     // Речевые блоки для дакинга (#106) — из ФАКТИЧЕСКИХ спанов timeline (единый источник: с учётом
     // cursor-ripple и QC-пересинтеза), а не из onset'ов placed.
-    let mut speech_blocks = build_speech_blocks(&laid_spans);
+    let speech_blocks = build_speech_blocks(&laid_spans);
     let dub = dub;
     let dub_dur = media::duration(&dub).unwrap_or(total);
     // Гарантия хронометража: если финальный хвост дорожки вышел за total_dur, аккуратно обрезаем хвост,
