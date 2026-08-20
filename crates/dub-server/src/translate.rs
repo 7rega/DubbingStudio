@@ -6,6 +6,7 @@
 //! пустым — перевод не блокирует транскрипт-стадию analyze (её результат уже валиден).
 
 use dub_core::{Brand, Project, SubStyle};
+use dub_llm::ChatClient;
 use dub_translate::{classify_content_type, ctx_run, CtxConfig, Seg};
 use serde_json::Value;
 
