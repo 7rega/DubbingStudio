@@ -6586,31 +6586,31 @@ function BatchView() {
   return (
     <main className="flex-1 min-h-0 overflow-hidden flex flex-col p-4">
       <div className="max-w-3xl w-full mx-auto flex flex-col min-h-0">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2 shrink-0">
             <button onClick={() => setStage("empty")} className="text-[13px] text-[var(--color-muted)] hover:text-[var(--color-text)] inline-flex items-center gap-1"><ArrowRight size={14} className="rotate-180" />{t("batch.back")}</button>
-            <span className="text-[15px] font-semibold flex items-center gap-2"><FolderDown size={16} className="text-[var(--color-accent)]" />{t("batch.title")}</span>
+            <span className="text-[15px] font-semibold flex items-center gap-2 whitespace-nowrap"><FolderDown size={16} className="text-[var(--color-accent)]" />{t("batch.title")}</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             {/* Тумблер блюр-подложки */}
-            <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap shrink-0" title="Размытая подложка под субтитрами. Выкл = чистый текст без блюра видеоряда.">
+            <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title="Размытая подложка под субтитрами. Выкл = чистый текст без блюра видеоряда.">
               <input type="checkbox" checked={batchSubBlur} disabled={running} onChange={(e) => { setBatchSubBlur(e.target.checked); batchState.subBlur = e.target.checked; }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
-              <span className="whitespace-nowrap">{t("batch.subBlur")}</span>
-              <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded whitespace-nowrap ${batchSubBlur ? "bg-[var(--color-surface-2)] text-[var(--color-muted)]" : "bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"}`}>
+              <span>{t("batch.subBlur")}</span>
+              <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${batchSubBlur ? "bg-[var(--color-surface-2)] text-[var(--color-muted)]" : "bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"}`}>
                 {batchSubBlur ? t("batch.subBlurOn") : t("batch.subBlurOff")}
               </span>
             </label>
             {/* Тумблер Vision */}
-            <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap shrink-0" title={t("comp.visionHint")}>
+            <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title={t("comp.visionHint")}>
               <input type="checkbox" checked={visionOn} disabled={running} onChange={(e) => { const v = e.target.checked; setVisionOn(v); batchState.vision = v; api.setSelection("vision_on", v ? "1" : "0").catch(() => {}); }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
-              <span className="whitespace-nowrap">{t("settings.vision")}</span>
+              <span>{t("batch.vision")}</span>
               {!visionOn && (
-                <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded whitespace-nowrap bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]">
-                  {t("comp.visionFastBadge")}
+                <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]">
+                  {t("batch.visionFast")}
                 </span>
               )}
             </label>
-            <span className="text-[12px] text-[var(--color-muted)] whitespace-nowrap shrink-0">{doneN}/{items.length} · {items.length} {t("batch.files")}</span>
+            <span className="text-[12px] text-[var(--color-muted)] whitespace-nowrap">{doneN}/{items.length} · {items.length} {t("batch.files")}</span>
           </div>
         </div>
 
