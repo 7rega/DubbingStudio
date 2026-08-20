@@ -289,6 +289,7 @@ fn op_regen(p: &mut Project, edit: &Value) -> PatchResult {
     for s in &mut p.segments {
         if s.id == target_id {
             s.dirty = true;
+            s.extra.insert("regenerated".into(), Value::Bool(true));
             found = true;
         } else {
             s.dirty = false;
@@ -307,7 +308,11 @@ fn op_regen_multi(p: &mut Project, edit: &Value) -> PatchResult {
         return Err((400, "missing ids array".into()));
     }
     for s in &mut p.segments {
-        s.dirty = target_ids.contains(&s.id);
+        let is_target = target_ids.contains(&s.id);
+        s.dirty = is_target;
+        if is_target {
+            s.extra.insert("regenerated".into(), Value::Bool(true));
+        }
     }
     Ok(())
 }
@@ -315,6 +320,17 @@ fn op_regen_multi(p: &mut Project, edit: &Value) -> PatchResult {
 /// regen_all — пометить ВСЕ сегменты dirty (ре-TTS всего дубляжа). Порт app.py op=="regen_all".
 fn op_regen_all(p: &mut Project, _edit: &Value) -> PatchResult {
     mark_all_dirty(p);
+    for s in &mut p.segments {
+        s.extra.remove("regenerated");
+    }
+    Ok(())
+}
+
+/// clear_regen — снять отметки перегенерации («Принять») со всех фраз.
+fn op_clear_regen(p: &mut Project, _edit: &Value) -> PatchResult {
+    for s in &mut p.segments {
+        s.extra.remove("regenerated");
+    }
     Ok(())
 }
 
@@ -736,6 +752,7 @@ pub fn apply(p: &mut Project, edit: &Value) -> PatchResult {
         "regen" => op_regen(p, edit),
         "regen_multi" => op_regen_multi(p, edit),
         "regen_all" => op_regen_all(p, edit),
+        "clear_regen" => op_clear_regen(p, edit),
         "gain" => op_gain(p, edit),
         "voiceover_gain" => op_voiceover_gain(p, edit),
         "sub_blur" => op_sub_blur(p, edit),
@@ -1005,4 +1022,52 @@ mod tests {
         apply(&mut p, &json!({"op":"del_blurs","idxs":[1]})).unwrap();
         assert_eq!(p.captions.blur_boxes.len(), 2);
     }
+
+    #[test]
+    fn stable_id_preservation_and_donor_stability_on_delete() {
+        let mut p = Project::default();
+        p.segments.push(dub_core::Segment { id: "s0".into(), start: 0.0, end: 1.0, src_text: "seg0".into(), ..Default::default() });
+        p.segments.push(dub_core::Segment { id: "s1".into(), start: 1.0, end: 2.0, src_text: "seg1".into(), ..Default::default() });
+        p.segments.push(dub_core::Segment { id: "s2".into(), start: 2.0, end: 3.0, src_text: "seg2".into(), voice: Some("donor:s1".into()), ..Default::default() });
+
+        // Удаляем s0 (первый сегмент)
+        apply(&mut p, &json!({"op":"del_segment","id":"s0"})).unwrap();
+
+        // Проверяем: осталось 2 сегмента, но их ID s1 и s2 не изменились
+        assert_eq!(p.segments.len(), 2);
+        assert_eq!(p.segments[0].id, "s1");
+        assert_eq!(p.segments[1].id, "s2");
+
+        // Проверяем: донор в s2 всё ещё указывает на стабильный id s1
+        assert_eq!(p.segments[1].voice.as_deref(), Some("donor:s1"));
+        assert_eq!(p.segments[0].id, "s1"); // Целевой сегмент донора на месте
+    }
+
+    #[test]
+    fn regen_sets_regenerated_flag_and_clear_regen_resets_it() {
+        let mut p = Project::default();
+        p.segments.push(dub_core::Segment { id: "s0".into(), ..Default::default() });
+        p.segments.push(dub_core::Segment { id: "s1".into(), ..Default::default() });
+
+        // op regen на s0
+        apply(&mut p, &json!({"op":"regen","id":"s0"})).unwrap();
+        assert_eq!(p.segments[0].extra.get("regenerated").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(p.segments[1].extra.get("regenerated"), None);
+
+        // op clear_regen
+        apply(&mut p, &json!({"op":"clear_regen"})).unwrap();
+        assert_eq!(p.segments[0].extra.get("regenerated"), None);
+
+        // op regen_multi на s0 и s1
+        apply(&mut p, &json!({"op":"regen_multi","ids":["s0","s1"]})).unwrap();
+        assert_eq!(p.segments[0].extra.get("regenerated").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(p.segments[1].extra.get("regenerated").and_then(|v| v.as_bool()), Some(true));
+
+        // op regen_all сбрасывает флаг со всех
+        apply(&mut p, &json!({"op":"regen_all"})).unwrap();
+        assert_eq!(p.segments[0].extra.get("regenerated"), None);
+        assert_eq!(p.segments[1].extra.get("regenerated"), None);
+    }
 }
+
+

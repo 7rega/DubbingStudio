@@ -1108,7 +1108,7 @@ fn build_dub(
         let mut kept_original = false;
         if need_synth {
             synth_counter += 1;
-            emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (сегмент #{})", fi + 1));
+            emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (фраза #{})", fi + 1));
             if cloud_tts_on {
             // Облачный TTS: wav-байты OpenRouter пишем ПРЯМО в seg-файл (без декода/перекодировки).
             // Голос — из автокастинга по полу спикера (пусто -> дефолт настроек). Провал -> оригинал
@@ -1119,10 +1119,10 @@ fn build_dub(
                 .unwrap_or("");
             match crate::cloud_tts::synth_audio(&paths.models_root, tgt, cv) {
                 Ok(wav) => {
-                    std::fs::write(&raw, &wav).map_err(|e| format!("запись облачного seg{fi}: {e}"))?;
+                    std::fs::write(&raw, &wav).map_err(|e| format!("запись облачного seg_{sid}: {e}"))?;
                 }
                 Err(e) => {
-                    emit(progress, "tts", &format!("⚠ сегмент {fi}: облачный TTS не удался ({e}) — оригинал"));
+                    emit(progress, "tts", &format!("⚠ фраза #{} ({sid}): облачный TTS не удался ({e}) — оригинал", fi + 1));
                     media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
                     kept_original = true;
                 }
@@ -1214,19 +1214,21 @@ fn build_dub(
                         if attempt >= MAX_TTS_ATTEMPTS {
                             if let Some((sm, r, rng)) = best_bad.take() {
                                 emit(progress, "tts", &format!(
-                                    "⚠ сегмент {fi}: {MAX_TTS_ATTEMPTS} сбоев синтеза ({e}) — взята сгенерированная озвучка (размах {rng:.0} дБ)"
+                                    "⚠ фраза #{}: {MAX_TTS_ATTEMPTS} сбоев синтеза ({e}) — взята сгенерированная озвучка (размах {rng:.0} дБ)",
+                                    fi + 1
                                 ));
                                 break (sm, r);
                             } else {
                                 media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
                                 kept_original = true;
                                 emit(progress, "tts", &format!(
-                                    "⚠ сегмент {fi}: {MAX_TTS_ATTEMPTS} сбоев/таймаутов синтеза ({e}) — оставлена оригинальная реплика"
+                                    "⚠ фраза #{}: {MAX_TTS_ATTEMPTS} сбоев/таймаутов синтеза ({e}) — оставлена оригинальная реплика",
+                                    fi + 1
                                 ));
                                 break (Vec::new(), 24_000);
                             }
                         }
-                        emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (сегмент #{}) — {e} (попытка {}/{})", fi + 1, attempt + 1, MAX_TTS_ATTEMPTS));
+                        emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (фраза #{}) — {e} (попытка {}/{})", fi + 1, attempt + 1, MAX_TTS_ATTEMPTS));
                         std::thread::sleep(Duration::from_millis(1000));
                         continue;
                     }
@@ -1243,7 +1245,7 @@ fn build_dub(
                             // избегая сброса на оригинальный вокал.
                             if let Some((sm, r, rng)) = best_bad.take() {
                                 emit(progress, "tts", &format!(
-                                    "⚠ сегмент #{}: все {MAX_TTS_ATTEMPTS} попыток с дефектом ({kind}) — взята сгенерированная озвучка (размах {rng:.0} дБ)",
+                                    "⚠ фраза #{}: все {MAX_TTS_ATTEMPTS} попыток с дефектом ({kind}) — взята сгенерированная озвучка (размах {rng:.0} дБ)",
                                     fi + 1
                                 ));
                                 break (sm, r);
@@ -1251,7 +1253,7 @@ fn build_dub(
                                 media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
                                 kept_original = true;
                                 emit(progress, "tts", &format!(
-                                    "⚠ сегмент #{}: {MAX_TTS_ATTEMPTS} попыток без звука — подставлен оригинал",
+                                    "⚠ фраза #{}: {MAX_TTS_ATTEMPTS} попыток без звука — подставлен оригинал",
                                     fi + 1
                                 ));
                                 break (Vec::new(), sr);
@@ -1260,20 +1262,21 @@ fn build_dub(
                         retried = true;
                         total_retries += 1;
                         let via = if attempt >= 3 { "альт-реф" } else { "temp-бамп" };
-                        emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (сегмент #{}) — дефект ({kind}), регенерация ({via} {}/{})", fi + 1, attempt + 1, MAX_TTS_ATTEMPTS));
+                        emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (фраза #{}) — дефект ({kind}), регенерация ({via} {}/{})", fi + 1, attempt + 1, MAX_TTS_ATTEMPTS));
                     }
                 }
             };
             if !kept_original {
                 let wav = AudiocppEngine::encode_wav(&samples, sr, 1);
-                std::fs::write(&raw, &wav).map_err(|e| format!("запись seg{fi}: {e}"))?;
+                std::fs::write(&raw, &wav).map_err(|e| format!("запись seg_{sid}: {e}"))?;
             }
             // Много ретраев подряд/суммарно = систем. проблема (стенд/VRAM или реф-клипы) → стоп с ошибкой.
             if retried {
                 consec += 1;
                 if consec > CONSECUTIVE_ABORT || total_retries > retry_budget {
                     return Err(format!(
-                        "TTS: слишком много артефактов-гудения (подряд {consec}, всего ретраев {total_retries}) — регенерация не помогает. Вероятно проблема со стендом (модель/VRAM) или с реф-клипами голосов. Остановлено на сегменте {fi}."
+                        "TTS: слишком много артефактов-гудения (подряд {consec}, всего ретраев {total_retries}) — регенерация не помогает. Вероятно проблема со стендом (модель/VRAM) или с реф-клипами голосов. Остановлено на фразе #{}.",
+                        fi + 1
                     ));
                 }
             } else {
@@ -1300,7 +1303,7 @@ fn build_dub(
         let at = onset.max(cursor);
         let nxt = if fi + 1 < n_all { proj.segments[fi + 1].start } else { total };
         let room = (nxt - at).max(0.3);
-        let fitp = wd.join(format!("seg_{:03}_fit.wav", fi));
+        let fitp = wd.join(format!("seg_{sid}_fit.wav"));
 
         // ── MULTI-TAKE: адаптивный отбор дублей ──
         if multitake_on && need_synth && !kept_original && !cloud_tts_on && engine.is_some() {
@@ -1327,7 +1330,7 @@ fn build_dub(
                 emit(
                     progress,
                     "tts",
-                    &format!("сегмент {fi}: первый дубль идеален (отклонение {:.0}%) — пропуск доп. дублей", delta * 100.0),
+                    &format!("фраза #{}: первый дубль идеален (отклонение {:.0}%) — пропуск доп. дублей", fi + 1, delta * 100.0),
                 );
             } else {
                 let _spk_key = s.speaker.clone().unwrap_or_else(|| "0".into());
@@ -1371,7 +1374,7 @@ fn build_dub(
                 // Если лучший дубль — не первый, подменяем raw-файл
                 if best_path != raw {
                     let _ = std::fs::copy(&best_path, &raw);
-                    emit(progress, "tts", &format!("сегмент {fi}: multi-take — выбран дубль ближе к слоту ({best_score:.2}с отклонение)"));
+                    emit(progress, "tts", &format!("фраза #{}: multi-take — выбран дубль ближе к слоту ({best_score:.2}с отклонение)", fi + 1));
                 }
             }
         }
@@ -1545,13 +1548,13 @@ fn build_dub(
                             placed[*pidx].1 = nf;
                             placed[*pidx].2 = nd;
                             fixed = true;
-                            emit(progress, "tts", &format!("QC: сегмент {fi} пересинтезирован (попытка {})", k + 1));
+                            emit(progress, "tts", &format!("QC: фраза #{} пересинтезирована (попытка {})", fi + 1, k + 1));
                             break;
                         }
                     }
                 }
                 if !fixed {
-                    emit(progress, "tts", &format!("⚠ QC: сегмент {fi} («{}») не удалось подтвердить — проверь фразу вручную", tgtq.chars().take(40).collect::<String>()));
+                    emit(progress, "tts", &format!("⚠ QC: фраза #{} («{}») не удалось подтвердить — проверь фразу вручную", fi + 1, tgtq.chars().take(40).collect::<String>()));
                 }
             }
             // финальная сверка пересинтезированных — честный отчёт в журнал
@@ -1570,7 +1573,7 @@ fn build_dub(
                         // Отключён сброс на оригинальное аудио. Сгенерированный TTS-звук ВСЕГДА остаётся
                         // на таймлайне, даже если QC (сверка через ASR) не подтвердил совпадение текста.
                         still += 1;
-                        emit(progress, "tts", &format!("⚠ QC: сегмент {} не совпадает с текстом перевода — оставлена сгенерированная озвучка", qc_list[i].0));
+                        emit(progress, "tts", &format!("⚠ QC: фраза #{} не совпадает с текстом перевода — оставлена сгенерированная озвучка", qc_list[i].0 + 1));
                     }
                 }
                 skipped_final

@@ -3146,23 +3146,27 @@ function MultiTrackTimeline({
                 const isCompact = widthPx < 55;
                 const isTiny = widthPx < 30;
 
-                return (
-                  <div
-                    key={seg.id}
-                    data-seg-block="true"
-                    style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
-                    onPointerDown={(e) => handlePointerDown(e, seg, "move")}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
-                    }}
-                    className={`group/seg absolute top-[5px] h-[46px] rounded-md border flex items-center justify-between text-[11px] cursor-grab active:cursor-grabbing transition-all overflow-hidden ${spkClass} ${
-                      isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""
-                    } ${isLoop ? "border-amber-400 ring-2 ring-amber-400" : ""}`}
-                  >
+                    const isRegen = Boolean(seg.extra?.regenerated);
+                    return (
+                      <div
+                        key={seg.id}
+                        data-seg-block="true"
+                        style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
+                        onPointerDown={(e) => handlePointerDown(e, seg, "move")}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
+                        }}
+                        title={isRegen ? "Фраза перегенерирована вручную" : undefined}
+                        className={`group/seg absolute top-[5px] h-[46px] rounded-md border flex items-center justify-between text-[11px] cursor-grab active:cursor-grabbing transition-all overflow-hidden ${spkClass} ${
+                          isRegen ? "border-t-[3px] border-t-emerald-400 shadow-[inset_0_3px_8px_rgba(52,211,153,0.35)]" : ""
+                        } ${
+                          isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""
+                        } ${isLoop ? "border-amber-400 ring-2 ring-amber-400" : ""}`}
+                      >
                     {/* Left Trim Handle (sleek micro-handle on hover) */}
                     <div
                       onPointerDown={(e) => handlePointerDown(e, seg, "resize-left")}
@@ -4208,6 +4212,12 @@ function Editor() {
         console.error("Failed to patch keep_original:", err);
       }
     }
+    if (p.segments.some((s) => Boolean(s.extra?.regenerated))) {
+      try {
+        const fresh = await api.patch(pid, { op: "clear_regen" });
+        setProject(fresh);
+      } catch { /* ignore */ }
+    }
     await doExport();
   };
 
@@ -4478,6 +4488,30 @@ function Editor() {
                   )}
                   <span>{isAligning ? t("align.working") : t("align.btn")}</span>
                 </button>
+
+                {/* Кнопка «Принять правки» со счётчиком перегенерированных фраз */}
+                {p.segments.some((s) => Boolean(s.extra?.regenerated)) && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const count = p.segments.filter((s) => Boolean(s.extra?.regenerated)).length;
+                        const fresh = await api.patch(pid, { op: "clear_regen" });
+                        setProject(fresh);
+                        bump();
+                        pushActivity(`Приняты правки (${count} фраз)`, "done");
+                        playSfx("notify");
+                      } catch (err) {
+                        await surfaceErr(err);
+                      }
+                    }}
+                    title="Принять перегенерированные фразы и снять отметки"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/50 hover:border-emerald-400 text-emerald-300 hover:text-emerald-200 hover:bg-emerald-500/25 font-semibold text-[11px] transition-all shadow-sm shrink-0"
+                  >
+                    <Check size={12} className="text-emerald-400" />
+                    <span>Принять ({p.segments.filter((s) => Boolean(s.extra?.regenerated)).length})</span>
+                  </button>
+                )}
               </div>
 
               {/* По центру: Готовые пресеты дорожек (1 клик) */}
@@ -4761,12 +4795,22 @@ function Editor() {
                         {visibleSegments.map((seg, i) => {
                           const idx = startIndex + i;
                           const on = isActive(seg);
+                          const isRegen = Boolean(seg.extra?.regenerated);
                           return (
                             <div key={seg.id} ref={on ? activeRef : undefined}
                               onDragOver={(e) => { e.preventDefault(); }}
                               onDrop={(e) => { e.preventDefault(); dropSeg(seg.id); }}
                               onClick={() => { setRendered(false); setScrub(seg.start); }}
-                              className={`rounded-xl p-2 border-l-2 transition-colors cursor-pointer ${dragSegId === seg.id ? "opacity-30 border-dashed border-[var(--color-accent)]" : ""} ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${on ? "bg-[var(--color-surface-2)] border-[var(--color-accent)]" : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"}`}>
+                              title={isRegen ? "Фраза перегенерирована вручную" : undefined}
+                              className={`rounded-xl p-2 border-l-[3px] transition-all cursor-pointer ${
+                                dragSegId === seg.id ? "opacity-30 border-dashed border-[var(--color-accent)]" : ""
+                              } ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${
+                                on
+                                  ? `bg-[var(--color-surface-2)] ${isRegen ? "border-emerald-400 ring-1 ring-emerald-400/40" : "border-[var(--color-accent)]"}`
+                                  : isRegen
+                                  ? "bg-emerald-500/10 border-emerald-400 hover:bg-emerald-500/15"
+                                  : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"
+                              }`}>
                               <div className="flex items-center justify-between gap-1">
                                 <div className="flex items-center gap-1 flex-1 min-w-0">
                                   <button type="button" draggable
@@ -4776,7 +4820,7 @@ function Editor() {
                                     className="cursor-grab active:cursor-grabbing text-[var(--color-muted)] hover:text-[var(--color-accent)] p-0.5 rounded shrink-0">
                                     <GripVertical size={13} />
                                   </button>
-                                  <span className="mono px-1.5 py-0.5 rounded bg-[var(--color-surface)] text-[9px] font-bold text-[var(--color-muted)] border border-[var(--color-border)] shrink-0 opacity-70">#{idx + 1}</span>
+                                  <span className="mono px-1.5 py-0.5 rounded bg-[var(--color-surface)] text-[9px] font-bold text-[var(--color-muted)] border border-[var(--color-border)] shrink-0 opacity-70" title={`Фраза #${idx + 1}\nID: ${seg.id}\nКэш: seg_${seg.id}.wav`}>#{idx + 1}</span>
                                   <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "up"); }} disabled={idx === 0} title="Переместить вверх"
                                     className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronUp size={13} /></button>
                                   <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "down"); }} disabled={idx === p.segments.length - 1} title="Переместить вниз"
@@ -4802,9 +4846,16 @@ function Editor() {
                                       <>
                                         <span>SPK {seg.speaker ?? "0"}</span>
                                         <span className="opacity-50">·</span>
-                                        {seg.voice.startsWith("donor:") || seg.voice.startsWith("clone:") ? (
-                                          <span className="text-cyan-300 font-bold">🧬 #{seg.voice.replace(/^(donor|clone):/, "")}</span>
-                                        ) : (
+                                        {seg.voice.startsWith("donor:") || seg.voice.startsWith("clone:") ? (() => {
+                                          const donorKey = seg.voice.replace(/^(donor|clone):/, "");
+                                          const donorIdx = p.segments.findIndex((s) => s.id === donorKey);
+                                          const displayNum = donorIdx !== -1 ? donorIdx + 1 : donorKey;
+                                          return (
+                                            <span className="text-cyan-300 font-bold" title={`Донор: фраза #${displayNum} (ID: ${donorKey})`}>
+                                              🧬 #{displayNum}
+                                            </span>
+                                          );
+                                        })() : (
                                           <span className="text-purple-300 font-bold">🎙️ {seg.voice}</span>
                                         )}
                                       </>
@@ -5523,7 +5574,17 @@ function Editor() {
           setProject(await api.getProject(pid));
           bump();
           setVoiceMenuSeg(null);
-          pushActivity(voiceVal ? `Назначен голос: ${voiceVal}` : "Голос сброшен на клон проекта", "work");
+          let actLabel = "Голос сброшен на клон проекта";
+          if (voiceVal) {
+            if (voiceVal.startsWith("donor:") || voiceVal.startsWith("clone:")) {
+              const dId = voiceVal.replace(/^(donor|clone):/, "");
+              const dIdx = p.segments.findIndex((s) => s.id === dId);
+              actLabel = `Назначен донор: фраза #${dIdx !== -1 ? dIdx + 1 : dId}`;
+            } else {
+              actLabel = `Назначен голос: ${voiceVal}`;
+            }
+          }
+          pushActivity(actLabel, "work");
         };
 
         const topPos = Math.min(window.innerHeight - 360, Math.max(10, voiceMenuSeg.y));
@@ -5655,7 +5716,16 @@ function Editor() {
                       onChange={(e) => setDonorInput(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && donorInput.trim()) {
-                          setSegVoiceAndSpk(`donor:${donorInput.trim()}`);
+                          const val = donorInput.trim();
+                          const num = parseInt(val, 10);
+                          if (!isNaN(num) && num >= 1 && num <= p.segments.length) {
+                            const target = p.segments[num - 1];
+                            if (target) {
+                              setSegVoiceAndSpk(`donor:${target.id}`);
+                              return;
+                            }
+                          }
+                          setSegVoiceAndSpk(`donor:${val}`);
                         }
                       }}
                       className="w-20 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-1 text-[11px] font-mono focus:border-[var(--color-accent)] focus:outline-none"
@@ -5664,7 +5734,16 @@ function Editor() {
                       type="button"
                       onClick={() => {
                         if (donorInput.trim()) {
-                          setSegVoiceAndSpk(`donor:${donorInput.trim()}`);
+                          const val = donorInput.trim();
+                          const num = parseInt(val, 10);
+                          if (!isNaN(num) && num >= 1 && num <= p.segments.length) {
+                            const target = p.segments[num - 1];
+                            if (target) {
+                              setSegVoiceAndSpk(`donor:${target.id}`);
+                              return;
+                            }
+                          }
+                          setSegVoiceAndSpk(`donor:${val}`);
                         }
                       }}
                       className="px-2 py-1 bg-[var(--color-surface-2)] hover:bg-[var(--color-accent)] text-[var(--color-text)] hover:text-[var(--color-on-accent)] border border-[var(--color-border)] rounded font-semibold text-[10px] transition-colors"
