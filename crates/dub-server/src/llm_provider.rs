@@ -54,17 +54,27 @@ pub struct LlmOpen<'a> {
 /// Открыть провайдер для стадии. Облако — если включено в настройках и есть ключ; иначе локальный
 /// llama-server (для Vision добавляем mmproj, если файл есть). Возвращает Err с человекочитаемой причиной.
 pub fn open(o: &LlmOpen, mode: LlmMode) -> Result<LlmProvider, String> {
-    let stage = if mode == LlmMode::Vision { "vision" } else { "llm" };
-    if crate::models::openrouter_stage_on(o.models_root, stage) {
+    let is_or = if mode == LlmMode::Vision {
+        crate::models::openrouter_stage_on(o.models_root, "vision")
+            || crate::models::openrouter_stage_on(o.models_root, "llm")
+    } else {
+        crate::models::openrouter_stage_on(o.models_root, "llm")
+    };
+
+    if is_or {
         let key = crate::models::openrouter_key(o.models_root)
-            .ok_or("OpenRouter включён, но ключ не задан")?;
+            .ok_or("OpenRouter включён, но API-ключ не задан в настройках")?;
+        let stage = if mode == LlmMode::Vision && crate::models::openrouter_stage_on(o.models_root, "vision") {
+            "vision"
+        } else {
+            "llm"
+        };
         let model = crate::models::openrouter_model(o.models_root, stage);
-        // Модель не выбрана (без хардкода id) — облако невозможно; тихо откатываемся на локаль
-        // вместо пустого id в API (fail-safe, как и вся стадия).
-        if !model.trim().is_empty() {
-            let client = ChatClient::openrouter(key, model).map_err(|e| e.to_string())?;
-            return Ok(LlmProvider::Remote { client });
+        if model.trim().is_empty() {
+            return Err("OpenRouter включён, но модель перевода не выбрана в настройках".into());
         }
+        let client = ChatClient::openrouter(key, model).map_err(|e| e.to_string())?;
+        return Ok(LlmProvider::Remote { client });
     }
 
     if !o.llama_bin.is_file() {

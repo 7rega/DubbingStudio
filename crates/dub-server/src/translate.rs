@@ -6,7 +6,6 @@
 //! пустым — перевод не блокирует транскрипт-стадию analyze (её результат уже валиден).
 
 use dub_core::{Brand, Project, SubStyle};
-use dub_llm::{ChatClient, LlamaServer, ServerOpts};
 use dub_translate::{classify_content_type, ctx_run, CtxConfig, Seg};
 use serde_json::Value;
 
@@ -37,18 +36,18 @@ pub fn classify_content_type_standalone(
     total: f64,
     progress: &Progress,
 ) -> Option<String> {
-    // Без mmproj (vision-проектор) классификация невозможна: слать кадры в text-only модель = молча "real"
-    // с ложным «0 голосов». Нет проектора -> None, вызывающий честно оставит дефолт.
-    if !paths.llama_bin.is_file() || !paths.mt_model.is_file() || !paths.mmproj.is_file() {
-        return None;
-    }
-    let opts = ServerOpts::new(&paths.llama_bin, &paths.mt_model)
-        .with_ubatch(crate::models::sel_num(&paths.models_root, "llama_ubatch").map(|f| f as u32))
-        .with_mmproj(&paths.mmproj);
-    let srv = LlamaServer::start(&opts).ok()?;
-    let client = ChatClient::new(srv.base_url()).ok()?;
+    let prov = crate::llm_provider::open(
+        &crate::llm_provider::LlmOpen {
+            llama_bin: &paths.llama_bin,
+            mt_model: &paths.mt_model,
+            mmproj: &paths.mmproj,
+            models_root: &paths.models_root,
+        },
+        crate::llm_provider::LlmMode::Vision,
+    ).ok()?;
+    let client = prov.client();
     let tmp = paths.work_dir.join("ctype_frame.png");
-    let ct = classify_content_type(&client, &paths.input, &tmp, total, |m| emit(progress, "vision", m));
+    let ct = classify_content_type(client, &paths.input, &tmp, total, |m| emit(progress, "vision", m));
     let _ = std::fs::remove_file(&tmp);
     Some(ct)
 }
@@ -91,18 +90,6 @@ pub fn stage(
     if same_lang && rewrite.is_none() {
         copy_src_to_tgt(proj);
         emit(progress, "translate", "same-lang -> без MT (tgt=исходник)");
-        return;
-    }
-
-    // Поднять сайдкар Gemma (+mmproj для vision). Существование бинаря/весов проверяет start().
-    if !paths.llama_bin.is_file() {
-        emit(progress, "translate", &format!(
-            "перевод пропущен: llama-server не найден ({})", paths.llama_bin.display()));
-        return;
-    }
-    if !paths.mt_model.is_file() {
-        emit(progress, "translate", &format!(
-            "перевод пропущен: GGUF Gemma не найден ({})", paths.mt_model.display()));
         return;
     }
 
