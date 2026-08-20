@@ -3962,11 +3962,24 @@ function Editor() {
   async function doRegen(segId: string) {                            // re-synthesize the TTS for ONE phrase (mark dirty -> /render)
     if (regenId) return;
     setRegenId(segId); pushActivity(t("seg.regen"));
+    setProject({
+      ...p,
+      segments: p.segments.map((s) =>
+        s.id === segId ? { ...s, extra: { ...s.extra, regenerated: true }, dirty: true } : s
+      ),
+    });
     try {
       await api.patch(pid, { op: "regen", id: segId });
       const { job_id } = await api.dubAudio(pid);                     // ре-TTS ТОЛЬКО dirty-сегмент -> свежая озвучка (без сборки видео; финал — на Экспорте)
       await watchDub(job_id);
-      setProject(await api.getProject(pid)); setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify");   // refresh preview + reload the re-rendered dub audio
+      const fresh = await api.getProject(pid);
+      const updated = {
+        ...fresh,
+        segments: fresh.segments.map((s) =>
+          s.id === segId ? { ...s, extra: { ...s.extra, regenerated: true } } : s
+        ),
+      };
+      setProject(updated); setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify");   // refresh preview + reload the re-rendered dub audio
     } catch (e) { await surfaceErr(e); }
     finally { setRegenId(null); }
   }
@@ -4005,11 +4018,24 @@ function Editor() {
     if (!selSegs.size || regenId) return;
     const ids = [...selSegs];
     setRegenId("__bulk__"); pushActivity(t("sel.regenBusy", { n: ids.length }));
+    setProject({
+      ...p,
+      segments: p.segments.map((s) =>
+        ids.includes(s.id) ? { ...s, extra: { ...s.extra, regenerated: true }, dirty: true } : s
+      ),
+    });
     try {
       await api.patch(pid, { op: "regen_multi", ids });
       const { job_id } = await api.dubAudio(pid);
       await watchDub(job_id);
-      setProject(await api.getProject(pid)); setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify"); setSelSegs(new Set());
+      const fresh = await api.getProject(pid);
+      const updated = {
+        ...fresh,
+        segments: fresh.segments.map((s) =>
+          ids.includes(s.id) ? { ...s, extra: { ...s.extra, regenerated: true } } : s
+        ),
+      };
+      setProject(updated); setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify"); setSelSegs(new Set());
     } catch (e) { await surfaceErr(e); }
     finally { setRegenId(null); }
   }
@@ -4820,7 +4846,7 @@ function Editor() {
                                     className="cursor-grab active:cursor-grabbing text-[var(--color-muted)] hover:text-[var(--color-accent)] p-0.5 rounded shrink-0">
                                     <GripVertical size={13} />
                                   </button>
-                                  <span className="mono px-1.5 py-0.5 rounded bg-[var(--color-surface)] text-[9px] font-bold text-[var(--color-muted)] border border-[var(--color-border)] shrink-0 opacity-70" title={`Фраза #${idx + 1}\nID: ${seg.id}\nКэш: seg_${seg.id}.wav`}>#{idx + 1}</span>
+                                  <span className={`mono px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 transition-colors ${isRegen ? "bg-emerald-500/25 text-emerald-300 border-emerald-400 font-extrabold shadow-sm" : "bg-[var(--color-surface)] text-[var(--color-muted)] border-[var(--color-border)] opacity-70"}`} title={`Фраза #${idx + 1}\nID: ${seg.id}\nКэш: seg_${seg.id}.wav${isRegen ? "\n✨ Перегенерирована вручную" : ""}`}>#{idx + 1}</span>
                                   <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "up"); }} disabled={idx === 0} title="Переместить вверх"
                                     className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronUp size={13} /></button>
                                   <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "down"); }} disabled={idx === p.segments.length - 1} title="Переместить вниз"
