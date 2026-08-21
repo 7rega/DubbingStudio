@@ -241,26 +241,28 @@ pub fn extract_vocal_spans(samples: &[f32], sr: u32) -> Vec<SpeechSpan> {
                 }
             }
 
-            // Проверка на ядро речи: высокая энергия ИЛИ наличие гармоник тона/резкой атаки
-            if (e > core_thr || (e > low_thr * 1.5 && v > 0.35)) && first_core_idx.is_none() {
+            // Проверка на ядро речи: обязательное наличие гармоник тона связок (v >= 0.35) или взрывная атака с умеренным тоном
+            let is_voiced = v >= 0.35 && e > low_thr;
+            let is_strong_core = e > core_thr && v >= 0.28;
+            if (is_voiced || is_strong_core) && first_core_idx.is_none() {
                 first_core_idx = Some(i);
             }
         } else if in_span {
             in_span = false;
             let span_end = i;
-            let is_genuine_speech = first_core_idx.is_some() && (max_e > core_thr || max_v > 0.32);
+            // Исключаем вздохи и чистый шум воздуха: ОБЯЗАТЕЛЬНО наличие голосовых гармоник (max_v >= 0.30)
+            let is_genuine_speech = first_core_idx.is_some() && max_v >= 0.30 && max_e > low_thr * 1.3;
 
-            // Исключаем вздохи и чистый шум воздуха
             if is_genuine_speech {
                 let core = first_core_idx.unwrap_or(span_start);
-                raw_spans.push((span_start, span_end, core, max_e, max_v > 0.30));
+                raw_spans.push((span_start, span_end, core, max_e, true));
             }
         }
     }
 
-    if in_span && first_core_idx.is_some() {
+    if in_span && first_core_idx.is_some() && max_v >= 0.30 && max_e > low_thr * 1.3 {
         let span_end = energies.len();
-        raw_spans.push((span_start, span_end, first_core_idx.unwrap(), max_e, max_v > 0.30));
+        raw_spans.push((span_start, span_end, first_core_idx.unwrap(), max_e, true));
     }
 
     // 5. Преобразование индексов в секунды с отсечением предвдоха
