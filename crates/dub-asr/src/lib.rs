@@ -7,11 +7,16 @@
 //! Сегментация словного потока (_segment), transcribe / diarize / transcribe_turns — порт
 //! dubengine/asr.py и dubengine/diarize.py: паузы >0.6с, конец предложения .!?…, макс 8.0с.
 
+mod align;
 mod reconcile;
 mod segment;
 mod speaker_global;
 mod whisper;
 mod window;
+pub use align::{
+    align_bounds, align_segments_to_vocals, extract_vocal_spans, AlignableSegment, SpeechSpan,
+    SegmentBound, MIN_SUBTITLE_GAP, SPEECH_LEAD_IN, SPEECH_TAIL,
+};
 pub use reconcile::{speaker_for_overlap, DiarIndex};
 pub use speaker_global::{
     cluster_embeddings, cosine, map_local_to_global, Embedding, LocalSpeaker, NullEmbedder,

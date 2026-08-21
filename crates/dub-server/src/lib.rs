@@ -2682,65 +2682,22 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         }
 
         if let Ok((samples, sr)) = wavio::read_mono_f32(&wav_path) {
-            let mut cfg = dub_asr::WindowConfig::default();
-            cfg.frame_sec = 0.020; // 20мс кадр для высокой точности
-            cfg.rel_threshold = 0.06; // чувствительность к тихим словам вроде "Hey" и шёпоту
-            cfg.min_silence = 0.20; // 200мс пауза для разделения слов
-            cfg.min_speech = 0.08; // 80мс минимальная речь (не отсекает короткие междометия)
-            let (env, _) = dub_asr::speech_envelope(&samples, sr, cfg.frame_sec);
-            let spans = dub_asr::detect_active_spans(&env, cfg.frame_sec, &cfg);
-            if !spans.is_empty() {
-                let mut last_end = 0.0f64;
-                for seg in &mut proj.segments {
-                    let s_center = (seg.start + seg.end) / 2.0;
-                    let seg_len = (seg.end - seg.start).max(0.1);
-                    // Адаптивный лимит дрейфа: короткие фразы не могут улететь дальше ±0.35..0.85с
-                    let max_drift = (seg_len * 0.6).clamp(0.35, 0.85);
+            let mut bounds: Vec<dub_asr::SegmentBound> = proj
+                .segments
+                .iter()
+                .map(|s| dub_asr::SegmentBound {
+                    start: s.start,
+                    end: s.end,
+                })
+                .collect();
 
-                    // Фильтруем спаны: обязательное физическое пересечение или очень близкое соседство
-                    let local_spans: Vec<&(f64, f64)> = spans
-                        .iter()
-                        .filter(|span| {
-                            let overlap = (span.1.min(seg.end) - span.0.max(seg.start)).max(0.0);
-                            if overlap > 0.01 {
-                                return true;
-                            }
-                            (span.0 - seg.start).abs() <= max_drift && (span.1 - seg.end).abs() <= max_drift
-                        })
-                        .collect();
-
-                    let best = local_spans.iter().max_by(|a, b| {
-                        let overlap_a = (a.1.min(seg.end) - a.0.max(seg.start)).max(0.0);
-                        let overlap_b = (b.1.min(seg.end) - b.0.max(seg.start)).max(0.0);
-                        if (overlap_a - overlap_b).abs() > 0.01 {
-                            overlap_a.partial_cmp(&overlap_b).unwrap()
-                        } else {
-                            let dist_a = ((a.0 + a.1) / 2.0 - s_center).abs();
-                            let dist_b = ((b.0 + b.1) / 2.0 - s_center).abs();
-                            dist_b.partial_cmp(&dist_a).unwrap()
-                        }
-                    });
-
-                    if let Some(span) = best {
-                        let overlap = (span.1.min(seg.end) - span.0.max(seg.start)).max(0.0);
-                        let span_center = (span.0 + span.1) / 2.0;
-                        if overlap <= 0.0 && (span_center - s_center).abs() > max_drift {
-                            last_end = seg.end;
-                            continue;
-                        }
-
-                        let new_start = (span.0 - 0.05).max(last_end).max(0.0);
-                        let new_end = (span.1 + 0.05).max(new_start + 0.1);
-                        if (new_start - seg.start).abs() <= max_drift && (new_end - seg.end).abs() <= max_drift {
-                            if (seg.start - new_start).abs() > 0.02 || (seg.end - new_end).abs() > 0.02 {
-                                seg.start = (new_start * 100.0).round() / 100.0;
-                                seg.end = (new_end * 100.0).round() / 100.0;
-                                seg.dirty = true;
-                                count += 1;
-                            }
-                        }
-                    }
-                    last_end = seg.end;
+            let changes = dub_asr::align_bounds(&mut bounds, &samples, sr);
+            for (i, changed) in changes.into_iter().enumerate() {
+                if changed {
+                    proj.segments[i].start = bounds[i].start;
+                    proj.segments[i].end = bounds[i].end;
+                    proj.segments[i].dirty = true;
+                    count += 1;
                 }
             }
         }
