@@ -4084,6 +4084,25 @@ function Editor() {
     finally { setRegenId(null); }
   }
 
+  async function doBulkSetSpeaker(spk: string) {
+    if (!selSegs.size || regenId) return;
+    let targetSpk = spk;
+    if (spk === "__new__") {
+      const spkNums = p.segments.map((x) => parseInt(x.speaker ?? "0", 10)).filter((n) => !isNaN(n));
+      targetSpk = String(spkNums.length ? Math.max(...spkNums) + 1 : 1);
+    }
+    pushHistory(p); setRendered(false);
+    try {
+      let fresh = p;
+      for (const id of selSegs) {
+        fresh = await api.patch(pid, { op: "segment", id, speaker: targetSpk });
+      }
+      setProject(fresh); bump(); setSelSegs(new Set());
+      pushActivity(t("sel.spkDone", { spk: targetSpk, n: selSegs.size }), "done");
+      playSfx("notify");
+    } catch (err) { await surfaceErr(err); }
+  }
+
   async function assignActorToSegments(targetIds: string[], actorName: string) {
     if (!targetIds.length || regenId) return;
     const name = actorName.trim();
@@ -4873,24 +4892,20 @@ function Editor() {
                             </label>
                           </div>
                         </div>
-                        {selSegs.size > 0 && (
+                        {subsViewMode === "cards" && selSegs.size > 0 && (
                           <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-accent)]/50 bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)] px-2 py-1.5">
                             <div className="flex items-center justify-between">
                               <span className="text-[12px] font-medium">{selSegs.size} {t("sel.count")}</span>
                               <button onClick={() => setSelSegs(new Set())} className="text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><X size={14} /></button>
                             </div>
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  setActorPickerState({ targetIds: [...selSegs], x: rect.left, y: rect.bottom + 4 });
-                                }}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] font-semibold bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-sm hover:brightness-110 transition"
-                              >
-                                <span>🎭 {t("voice.assignActor", "Назначить актёра")}</span>
-                                <ChevronDown size={12} />
-                              </button>
+                              <select value="" onChange={(e) => { if (e.target.value) { doBulkSetSpeaker(e.target.value); e.target.value = ""; } }} disabled={regenId !== null}
+                                title={t("sel.spkHint")}
+                                className="bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[12px] rounded-md px-1.5 py-1 text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none transition-colors cursor-pointer disabled:opacity-40">
+                                <option value="">{t("sel.spkPlaceholder")}</option>
+                                {speakers.map((spk) => <option key={spk} value={spk}>SPK {spk}</option>)}
+                                <option value="__new__">{t("sel.spkNew")}</option>
+                              </select>
                               <button onClick={() => bulkSeg("keep_segments", { keep: true })} disabled={regenId !== null}
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><Music size={13} />{t("sel.keep")}</button>
                               <button onClick={() => bulkSeg("hide_segments", { hidden: true })} disabled={regenId !== null}
@@ -4942,7 +4957,8 @@ function Editor() {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   const rect = e.currentTarget.getBoundingClientRect();
-                                  setActorPickerState({ targetIds: [seg.id], x: rect.left, y: rect.bottom + 4 });
+                                  const targetIds = selSegs.has(seg.id) && selSegs.size > 1 ? [...selSegs] : [seg.id];
+                                  setActorPickerState({ targetIds, x: rect.left, y: rect.bottom + 4 });
                                 }}
                                 className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors max-w-[110px] truncate ${
                                   actorName
