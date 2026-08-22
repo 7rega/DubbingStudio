@@ -3543,6 +3543,21 @@ function Editor() {
   const [donorInput, setDonorInput] = useState<string>("");           // ввод номера фразы-донора для чистого клона
   const [showExportModal, setShowExportModal] = useState(false);
   const [showCastModal, setShowCastModal] = useState(false);
+  const [subsViewMode, setSubsViewMode] = useState<"cards" | "table">("cards");
+  const [actorPickerState, setActorPickerState] = useState<{ targetIds: string[]; x: number; y: number } | null>(null);
+  const [actorInputDraft, setActorInputDraft] = useState("");
+  const [isDragSelecting, setIsDragSelecting] = useState(false);
+  const [dragStartIndex, setDragStartIndex] = useState<number | null>(null);
+  const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    const onMouseUp = () => {
+      setIsDragSelecting(false);
+    };
+    window.addEventListener("mouseup", onMouseUp);
+    return () => window.removeEventListener("mouseup", onMouseUp);
+  }, []);
+
   const [editorTab, setEditorTab] = useState<"subs" | "gen">("subs");
   const [duckOn, setDuckOn] = useState(false);
   const [voiceManualCtrl, setVoiceManualCtrl] = useState(false);
@@ -4068,24 +4083,60 @@ function Editor() {
     } catch (e) { await surfaceErr(e); }
     finally { setRegenId(null); }
   }
-  async function doBulkSetSpeaker(spk: string) {
-    if (!selSegs.size || regenId) return;
-    let targetSpk = spk;
-    if (spk === "__new__") {
-      const spkNums = p.segments.map((x) => parseInt(x.speaker ?? "0", 10)).filter((n) => !isNaN(n));
-      targetSpk = String(spkNums.length ? Math.max(...spkNums) + 1 : 1);
-    }
+
+  async function assignActorToSegments(targetIds: string[], actorName: string) {
+    if (!targetIds.length || regenId) return;
+    const name = actorName.trim();
+    if (!name) return;
     pushHistory(p); setRendered(false);
     try {
       let fresh = p;
-      for (const id of selSegs) {
-        fresh = await api.patch(pid, { op: "segment", id, speaker: targetSpk });
+      for (const id of targetIds) {
+        fresh = await api.patch(pid, { op: "segment", id, speaker: name });
       }
-      setProject(fresh); bump(); setSelSegs(new Set());
-      pushActivity(t("sel.spkDone", { spk: targetSpk, n: selSegs.size }), "done");
+      setProject(fresh); bump();
+      pushActivity(`Назначен актёр «${name}» на ${targetIds.length} реплик`, "done");
       playSfx("notify");
     } catch (err) { await surfaceErr(err); }
   }
+  const handleRowMouseDown = (idx: number, segId: string, e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    if (e.shiftKey && lastClickedIndex !== null) {
+      const start = Math.min(lastClickedIndex, idx);
+      const end = Math.max(lastClickedIndex, idx);
+      const newSel = new Set(e.ctrlKey || e.metaKey ? selSegs : []);
+      for (let i = start; i <= end; i++) {
+        newSel.add(p.segments[i].id);
+      }
+      setSelSegs(newSel);
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      setSelSegs((prev) => {
+        const next = new Set(prev);
+        if (next.has(segId)) next.delete(segId);
+        else next.add(segId);
+        return next;
+      });
+      setLastClickedIndex(idx);
+      return;
+    }
+    setIsDragSelecting(true);
+    setDragStartIndex(idx);
+    setLastClickedIndex(idx);
+    setSelSegs(new Set([segId]));
+  };
+
+  const handleRowMouseEnter = (idx: number) => {
+    if (!isDragSelecting || dragStartIndex === null) return;
+    const start = Math.min(dragStartIndex, idx);
+    const end = Math.max(dragStartIndex, idx);
+    const newSel = new Set<string>();
+    for (let i = start; i <= end; i++) {
+      newSel.add(p.segments[i].id);
+    }
+    setSelSegs(newSel);
+  };
   // гейн дорожки/оригинала: патч без авто-пересведения (применяется при перегенерации/экспорте)
   async function applyGain(op: string, gainDb: number, label: string) {
     if (regenId) return;
@@ -4751,9 +4802,9 @@ function Editor() {
 
         {editorTab === "subs" ? (
           <>
-            {/* Подвкладки: Субтитры | Маска | Тайтлы */}
-            <div className="shrink-0 px-3 pt-2 pb-2 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
-              <div className="inline-flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[11px] w-full">
+            {/* Подвкладки: Субтитры | Маска | Тайтлы + Переключатель вида (Карточки / Таблица) */}
+            <div className="shrink-0 px-3 pt-2 pb-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] flex items-center justify-between gap-2">
+              <div className="inline-flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[11px] flex-1">
                 {([["subs", t("mode.subtitles")], ["blur", `${t("blur.title")} ${(p.captions.blur_boxes || []).length}`],
                   ["titles", `${t("titles.tab")} ${(p.captions.titles || []).length}`]] as const).map(([k, lbl]) => (
                   <button key={k} onClick={() => setLane(k as typeof lane)}
@@ -4762,6 +4813,26 @@ function Editor() {
                   </button>
                 ))}
               </div>
+              {lane === "subs" && (
+                <div className="inline-flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[11px] shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setSubsViewMode("cards")}
+                    title={t("voice.viewCards", "Карточки")}
+                    className={`px-2 py-1 rounded-md transition-colors ${subsViewMode === "cards" ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}
+                  >
+                    📇
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubsViewMode("table")}
+                    title={t("voice.viewTable", "Таблица")}
+                    className={`px-2 py-1 rounded-md transition-colors ${subsViewMode === "table" ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}
+                  >
+                    📋
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Скролл-тело списка субтитров */}
@@ -4782,7 +4853,7 @@ function Editor() {
                         <div className="flex flex-wrap items-center gap-1">
                           <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mr-0.5">{t("sel.pick")}</span>
                           <button onClick={() => toggleMany(idsOf(null))} className={chip}>{t("sel.all")}</button>
-                          {spks.length > 1 && spks.map((spk) => <button key={spk} onClick={() => toggleMany(idsOf(spk))} className={chip}>SPK {spk}</button>)}
+                          {spks.length > 1 && spks.map((spk) => <button key={spk} onClick={() => toggleMany(idsOf(spk))} className={chip}>{spk !== "0" ? spk : "SPK 0"}</button>)}
 
                           <div className="ml-auto inline-flex items-center gap-1.5 shrink-0">
                             <button onClick={handleSaveSubtitles} title="Сохранить субтитры в файл (.srt)"
@@ -4809,13 +4880,17 @@ function Editor() {
                               <button onClick={() => setSelSegs(new Set())} className="text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><X size={14} /></button>
                             </div>
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <select value="" onChange={(e) => { if (e.target.value) { doBulkSetSpeaker(e.target.value); e.target.value = ""; } }} disabled={regenId !== null}
-                                title={t("sel.spkHint")}
-                                className="bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[12px] rounded-md px-1.5 py-1 text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none transition-colors cursor-pointer disabled:opacity-40">
-                                <option value="">{t("sel.spkPlaceholder")}</option>
-                                {speakers.map((spk) => <option key={spk} value={spk}>SPK {spk}</option>)}
-                                <option value="__new__">{t("sel.spkNew")}</option>
-                              </select>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  setActorPickerState({ targetIds: [...selSegs], x: rect.left, y: rect.bottom + 4 });
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] font-semibold bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-sm hover:brightness-110 transition"
+                              >
+                                <span>🎭 {t("voice.assignActor", "Назначить актёра")}</span>
+                                <ChevronDown size={12} />
+                              </button>
                               <button onClick={() => bulkSeg("keep_segments", { keep: true })} disabled={regenId !== null}
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><Music size={13} />{t("sel.keep")}</button>
                               <button onClick={() => bulkSeg("hide_segments", { hidden: true })} disabled={regenId !== null}
@@ -4833,7 +4908,58 @@ function Editor() {
                       </div>
                     );
                   })()}
-                  {(() => {
+                  {subsViewMode === "table" ? (
+                    <div className="rounded-lg border border-[var(--color-border)] overflow-hidden divide-y divide-[var(--color-border)]/40 bg-[var(--color-surface)] select-none">
+                      {p.segments.map((seg, idx) => {
+                        const isSelected = selSegs.has(seg.id);
+                        const isCurrent = scrub >= seg.start && scrub < seg.end;
+                        const actorName = seg.speaker && seg.speaker !== "0" ? seg.speaker : "";
+                        return (
+                          <div
+                            key={seg.id}
+                            onMouseDown={(e) => handleRowMouseDown(idx, seg.id, e)}
+                            onMouseEnter={() => handleRowMouseEnter(idx)}
+                            onDoubleClick={() => { setRendered(false); setScrub(seg.start); }}
+                            className={`flex items-center gap-2 px-2.5 py-1 text-[11px] cursor-pointer transition-colors ${
+                              isSelected
+                                ? "bg-[var(--color-accent)]/20 text-[var(--color-text)] ring-1 ring-inset ring-[var(--color-accent)]/50"
+                                : isCurrent
+                                ? "bg-[var(--color-surface-2)] text-[var(--color-text)]"
+                                : "hover:bg-[var(--color-surface-2)]/60 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                            }`}
+                          >
+                            <span className="mono text-[10px] w-6 shrink-0 opacity-50 font-bold">#{idx + 1}</span>
+                            <span className="mono text-[9.5px] shrink-0 opacity-60 w-11 tabnum">{fmtT(seg.start)}</span>
+                            <span
+                              className="flex-1 min-w-0 truncate text-[11.5px] font-normal text-[var(--color-text)]"
+                              title={`${seg.tgt_text || seg.src_text}\n\n(Двойной клик — перейти к видео)`}
+                            >
+                              {seg.tgt_text || seg.src_text}
+                            </span>
+                            <div className="shrink-0">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  setActorPickerState({ targetIds: [seg.id], x: rect.left, y: rect.bottom + 4 });
+                                }}
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors max-w-[110px] truncate ${
+                                  actorName
+                                    ? "bg-[var(--color-surface-2)] text-emerald-400 border-emerald-500/30 hover:border-emerald-500/60 font-semibold"
+                                    : "bg-transparent text-[var(--color-muted)] border-dashed border-[var(--color-border)] hover:border-[var(--color-muted)] hover:text-[var(--color-text)]"
+                                }`}
+                                title={actorName ? `Актёр: ${actorName}` : "Назначить актёра"}
+                              >
+                                <span className="truncate">{actorName || t("voice.noActor", "+ Актёр")}</span>
+                                <ChevronDown size={10} className="opacity-50 shrink-0" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : ((() => {
                     const VIRTUAL_WINDOW = 50;
                     const CARD_HEIGHT = 120;
                     const totalSegs = p.segments.length;
@@ -5010,7 +5136,7 @@ function Editor() {
                         {bottomSpacer > 0 && <div style={{ height: `${bottomSpacer}px` }} className="w-full pointer-events-none shrink-0" />}
                       </>
                     );
-                  })()}
+                  })())}
                   <button onClick={addSeg} disabled={regenId !== null} title={t("seg.addHint")}
                     className="w-full mt-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
                     <Plus size={14} />{t("seg.add")}
@@ -5627,6 +5753,115 @@ function Editor() {
       </aside>
       <CommandPalette commands={cmds} />
       {showHelp && <ShortcutsHelp onClose={() => setShowHelp(false)} />}
+      {actorPickerState && (() => {
+        const uniqueProjectSpeakers = Array.from(
+          new Set(p.segments.map((s) => s.speaker).filter((s): s is string => Boolean(s && s !== "0")))
+        ).sort();
+
+        const handleApplyActor = async (name: string) => {
+          const trimmed = name.trim();
+          if (!trimmed) return;
+          const ids = actorPickerState.targetIds;
+          setActorPickerState(null);
+          setActorInputDraft("");
+          await assignActorToSegments(ids, trimmed);
+        };
+
+        const topPos = Math.min(window.innerHeight - 340, Math.max(10, actorPickerState.y));
+        const leftPos = Math.min(window.innerWidth - 260, Math.max(10, actorPickerState.x - 120));
+
+        return (
+          <>
+            <div className="fixed inset-0 z-50 bg-transparent" onClick={() => setActorPickerState(null)} />
+            <div
+              style={{ top: `${topPos}px`, left: `${leftPos}px` }}
+              className="fixed z-50 w-64 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl shadow-2xl p-3 space-y-2.5 text-xs select-none"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-[var(--color-border)]/60 pb-1.5">
+                <span className="font-semibold text-white flex items-center gap-1.5">
+                  <span className="text-sm">🎭</span>
+                  {t("voice.assignActor", "Назначить актёра")} ({actorPickerState.targetIds.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActorPickerState(null)}
+                  className="text-[var(--color-muted)] hover:text-white p-0.5 rounded"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+
+              {/* Input for typing new actor name */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleApplyActor(actorInputDraft);
+                }}
+                className="flex items-center gap-1"
+              >
+                <input
+                  type="text"
+                  autoFocus
+                  value={actorInputDraft}
+                  onChange={(e) => setActorInputDraft(e.target.value)}
+                  placeholder={t("voice.enterActorName", "Имя нового актёра…")}
+                  className="flex-1 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-2 py-1 text-xs text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={!actorInputDraft.trim()}
+                  className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-[var(--color-accent)] text-[var(--color-on-accent)] disabled:opacity-40 hover:brightness-110 transition"
+                >
+                  OK
+                </button>
+              </form>
+
+              {/* Voices from voices/cast/ */}
+              {castVoices.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-[10px] uppercase font-semibold text-[var(--color-muted)] tracking-wider">
+                    {t("voice.castFolderVoices", "Файлы из voices/cast:")}
+                  </div>
+                  <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto pr-0.5">
+                    {castVoices.map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => handleApplyActor(v)}
+                        className="px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 hover:border-emerald-500/50 transition-colors truncate max-w-full"
+                      >
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Existing Project Actors */}
+              {uniqueProjectSpeakers.length > 0 && (
+                <div className="space-y-1 border-t border-[var(--color-border)]/40 pt-1.5">
+                  <div className="text-[10px] uppercase font-semibold text-[var(--color-muted)] tracking-wider">
+                    {t("voice.projectActors", "Актёры проекта:")}
+                  </div>
+                  <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-0.5">
+                    {uniqueProjectSpeakers.map((spk) => (
+                      <button
+                        key={spk}
+                        type="button"
+                        onClick={() => handleApplyActor(spk)}
+                        className="px-2 py-0.5 rounded text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-text)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors truncate max-w-full"
+                      >
+                        {spk}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        );
+      })()}
       {showExportModal && (
         <ExportModal
           p={p}
