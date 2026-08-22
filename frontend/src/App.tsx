@@ -3616,14 +3616,15 @@ function Editor() {
   const playSpeed = 1.0;
   const [loopSegId, setLoopSegId] = useState<string | null>(null);
 
-  // Виртуализация списка субтитров (50 карточек в DOM)
+  // Виртуализация списка субтитров (60 карточек в DOM)
   const [subsScrollTop, setSubsScrollTop] = useState(0);
+  const latestSubsScrollTop = useRef(0);
   const subsScrollRaf = useRef<number | null>(null);
   const handleSubsScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const top = e.currentTarget.scrollTop;
+    latestSubsScrollTop.current = e.currentTarget.scrollTop;
     if (subsScrollRaf.current !== null) return;
     subsScrollRaf.current = requestAnimationFrame(() => {
-      setSubsScrollTop(top);
+      setSubsScrollTop(latestSubsScrollTop.current);
       subsScrollRaf.current = null;
     });
   };
@@ -4376,8 +4377,23 @@ function Editor() {
     { label: t("hotkeys.title"), run: () => setShowHelp(true) },
     ...Object.keys(presets).map((n) => ({ label: `${t("preset.title")}: ${n}`, run: () => branch("preset", { name: n }) })),
   ];
+  const subsContainerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [activeId]);
+  const prevActiveIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeId || activeId === prevActiveIdRef.current) return;
+    prevActiveIdRef.current = activeId;
+    if (activeRef.current) {
+      activeRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    } else {
+      const activeIdx = p.segments.findIndex((s) => s.id === activeId);
+      if (activeIdx >= 0 && subsContainerRef.current) {
+        const CARD_ESTIMATE = 135;
+        const targetTop = Math.max(0, activeIdx * CARD_ESTIMATE - subsContainerRef.current.clientHeight / 2);
+        subsContainerRef.current.scrollTo({ top: targetTop, behavior: "smooth" });
+      }
+    }
+  }, [activeId]);
   return (
     <div className="flex-1 grid grid-cols-[1fr_420px] min-h-0">
       {/* Левая / Центральная секция: Видеопревью + Таймлайн на всю ширину */}
@@ -4855,7 +4871,7 @@ function Editor() {
             </div>
 
             {/* Скролл-тело списка субтитров */}
-            <div data-kb-scroll onScroll={handleSubsScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4">
+            <div ref={subsContainerRef} data-kb-scroll onScroll={handleSubsScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4">
               {lane === "subs" && (
                 <div className="space-y-2">
                   {(() => {
@@ -4976,8 +4992,8 @@ function Editor() {
                       })}
                     </div>
                   ) : ((() => {
-                    const VIRTUAL_WINDOW = 50;
-                    const CARD_HEIGHT = 120;
+                    const VIRTUAL_WINDOW = 60;
+                    const CARD_ESTIMATE = 135;
                     const totalSegs = p.segments.length;
 
                     let startIndex = 0;
@@ -4986,19 +5002,11 @@ function Editor() {
                     let bottomSpacer = 0;
 
                     if (totalSegs > VIRTUAL_WINDOW) {
-                      const approxIdx = Math.floor(subsScrollTop / CARD_HEIGHT);
-                      startIndex = Math.max(0, Math.min(approxIdx - 15, totalSegs - VIRTUAL_WINDOW));
-
-                      // Если активная реплика есть (при воспроизведении или клике на таймлайне),
-                      // гарантируем, что она обязательно попадает в окно 50 отображаемых карточек
-                      const activeIdx = activeId ? p.segments.findIndex((s) => s.id === activeId) : -1;
-                      if (activeIdx >= 0 && (activeIdx < startIndex || activeIdx >= startIndex + VIRTUAL_WINDOW)) {
-                        startIndex = Math.max(0, Math.min(activeIdx - 20, totalSegs - VIRTUAL_WINDOW));
-                      }
-
+                      const approxIdx = Math.floor(subsScrollTop / CARD_ESTIMATE);
+                      startIndex = Math.max(0, Math.min(approxIdx - 20, totalSegs - VIRTUAL_WINDOW));
                       endIndex = Math.min(totalSegs, startIndex + VIRTUAL_WINDOW);
-                      topSpacer = startIndex * CARD_HEIGHT;
-                      bottomSpacer = (totalSegs - endIndex) * CARD_HEIGHT;
+                      topSpacer = startIndex * CARD_ESTIMATE;
+                      bottomSpacer = (totalSegs - endIndex) * CARD_ESTIMATE;
                     }
 
                     const visibleSegments = totalSegs > VIRTUAL_WINDOW ? p.segments.slice(startIndex, endIndex) : p.segments;
