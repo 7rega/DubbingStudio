@@ -113,13 +113,17 @@ impl Sampling {
         self.repeat_penalty = Some(r);
         self
     }
+    pub fn repetition_penalty(mut self, r: f32) -> Self {
+        self.repeat_penalty = Some(r);
+        self
+    }
 }
 
 /// Клиент чата к OpenAI-совместимому эндпоинту. По умолчанию — локальный llama-server (base_url =
 /// http://127.0.0.1:PORT, без ключа и без поля model). Для облака (OpenRouter) — `openrouter()`:
 /// base_url = https://openrouter.ai/api, Authorization: Bearer <key>, обязательное поле `model`,
-/// БЕЗ llama-специфичного chat_template_kwargs. Держит blocking reqwest client с большим таймаутом
-/// (генерация целого транскрипта/vision-кадра может идти десятки секунд).
+/// repetition_penalty (вместо локального repeat_penalty), БЕЗ llama-специфичного chat_template_kwargs.
+/// Держит blocking reqwest client с большим таймаутом (генерация целого транскрипта/vision-кадра может идти десятки секунд).
 pub struct ChatClient {
     base_url: String,
     http: reqwest::blocking::Client,
@@ -166,16 +170,13 @@ impl ChatClient {
         self
     }
 
-    /// remote-режим = задан id модели (OpenRouter/OpenAI): шлём `model`, не шлём chat_template_kwargs.
+    /// remote-режим = задан id модели (OpenRouter/OpenAI): шлём `model` и `repetition_penalty`, не шлём chat_template_kwargs.
     pub fn is_remote(&self) -> bool {
         self.model.is_some()
     }
 
-    /// Один вызов /v1/chat/completions -> текст ассистента (сырой, без стрипа <think>). Ретраит на
-    /// сетевых/5xx-ошибках (сервер мог ещё догружать слот). Пустой ответ — не ошибка (вернём "").
-    pub fn chat(&self, messages: &[Message], s: &Sampling) -> Result<String, LlmError> {
-        let url = format!("{}/v1/chat/completions", self.base_url);
-        // top_k/repeat_penalty ВСТАВЛЯЕМ только когда заданы: llama-server отвергает явный null (400).
+    /// Собрать JSON-тело запроса с учётом провайдера (OpenRouter vs локальный llama-server).
+    pub fn build_body(&self, messages: &[Message], s: &Sampling) -> Value {
         let mut body = serde_json::Map::new();
         if let Some(m) = &self.model {
             body.insert("model".into(), json!(m)); // OpenRouter требует id модели; llama-server игнорит
@@ -190,7 +191,13 @@ impl ChatClient {
             body.insert("top_k".into(), json!(k));
         }
         if let Some(rp) = s.repeat_penalty {
-            body.insert("repeat_penalty".into(), json!(rp));
+            if self.is_remote() {
+                // OpenRouter API использует стандартный параметр repetition_penalty
+                body.insert("repetition_penalty".into(), json!(rp));
+            } else {
+                // Локальный llama-server использует repeat_penalty
+                body.insert("repeat_penalty".into(), json!(rp));
+            }
         }
         body.insert("max_tokens".into(), json!(s.max_tokens));
         body.insert("stream".into(), json!(false));
@@ -202,7 +209,14 @@ impl ChatClient {
                 json!({"enable_thinking": false}),
             );
         }
-        let body = Value::Object(body);
+        Value::Object(body)
+    }
+
+    /// Один вызов /v1/chat/completions -> текст ассистента (сырой, без стрипа <think>). Ретраит на
+    /// сетевых/5xx-ошибках (сервер мог ещё догружать слот). Пустой ответ — не ошибка (вернём "").
+    pub fn chat(&self, messages: &[Message], s: &Sampling) -> Result<String, LlmError> {
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let body = self.build_body(messages, s);
 
         let mut last_err = String::new();
         for attempt in 0..=self.retries {
@@ -219,23 +233,17 @@ impl ChatClient {
             match req.send() {
                 Ok(resp) => {
                     let status = resp.status();
-                    if status.is_success() {
-                        let v: Value = resp
-                            .json()
-                            .map_err(|e| LlmError::Http(format!("parse json: {e}")))?;
-                        let txt = v
-                            .pointer("/choices/0/message/content")
-                            .and_then(|c| c.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        return Ok(txt);
-                    }
-                    // 4xx (кроме 429) или неподдерживаемые фичи (not supported) — не ретраим.
                     let text = resp.text().unwrap_or_default();
-                    if (status.as_u16() != 429 && status.as_u16() < 500) || text.contains("not supported") {
-                        return Err(LlmError::Api(format!("{status}: {text}")));
+                    match parse_chat_response(status, &text) {
+                        Ok(txt) => return Ok(txt),
+                        Err(e) => {
+                            // 4xx (кроме 429) или неподдерживаемые фичи (not supported) — не ретраим.
+                            if (status.as_u16() != 429 && status.as_u16() < 500) || text.contains("not supported") {
+                                return Err(e);
+                            }
+                            last_err = e.to_string();
+                        }
                     }
-                    last_err = format!("{status}: {text}");
                 }
                 Err(e) => last_err = e.to_string(),
             }
@@ -247,5 +255,157 @@ impl ChatClient {
             "chat failed after {} retries: {last_err}",
             self.retries + 1
         )))
+    }
+}
+
+/// Разобрать ответ от /v1/chat/completions с извлечением текста и обработкой ошибок API.
+pub(crate) fn parse_chat_response(status: reqwest::StatusCode, text: &str) -> Result<String, LlmError> {
+    if status.is_success() {
+        let v: Value = serde_json::from_str(text)
+            .map_err(|e| LlmError::Http(format!("parse json: {e} (body: {text})")))?;
+
+        if let Some(err) = v.get("error") {
+            let msg = if let Some(m) = err.get("message").and_then(|m| m.as_str()) {
+                m.to_string()
+            } else {
+                err.to_string()
+            };
+            return Err(LlmError::Api(format!("OpenRouter error: {msg}")));
+        }
+
+        let choices = v.get("choices").and_then(|c| c.as_array());
+        if let Some(choices_arr) = choices {
+            if let Some(first_choice) = choices_arr.first() {
+                if let Some(refusal) = first_choice.pointer("/message/refusal").and_then(|r| r.as_str()) {
+                    if !refusal.trim().is_empty() {
+                        return Err(LlmError::Api(format!("model refusal: {refusal}")));
+                    }
+                }
+                let content_val = first_choice.pointer("/message/content");
+                if let Some(s) = content_val.and_then(|c| c.as_str()) {
+                    return Ok(s.to_string());
+                } else if let Some(arr) = content_val.and_then(|c| c.as_array()) {
+                    let combined = arr
+                        .iter()
+                        .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("");
+                    return Ok(combined);
+                } else if let Some(s) = first_choice.get("text").and_then(|t| t.as_str()) {
+                    return Ok(s.to_string());
+                } else if content_val == Some(&Value::Null) {
+                    return Ok(String::new());
+                }
+            } else {
+                return Err(LlmError::Api(format!("empty choices array in response: {text}")));
+            }
+        } else {
+            return Err(LlmError::Api(format!("missing choices in response: {text}")));
+        }
+    }
+
+    let err_msg = if let Ok(json_err) = serde_json::from_str::<Value>(text) {
+        if let Some(m) = json_err.pointer("/error/message").and_then(|m| m.as_str()) {
+            format!("{status}: {m}")
+        } else {
+            format!("{status}: {text}")
+        }
+    } else {
+        format!("{status}: {text}")
+    };
+
+    Err(LlmError::Api(err_msg))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sampling_builder() {
+        let s = Sampling::new(0.7, 0.6, 512).top_k(20).repetition_penalty(1.05);
+        assert_eq!(s.temperature, 0.7);
+        assert_eq!(s.top_p, 0.6);
+        assert_eq!(s.top_k, Some(20));
+        assert_eq!(s.repeat_penalty, Some(1.05));
+        assert_eq!(s.max_tokens, 512);
+    }
+
+    #[test]
+    fn test_body_openrouter_vs_local() {
+        let remote = ChatClient::openrouter("test-key", "google/gemini-2.5-flash").unwrap();
+        let local = ChatClient::new("http://127.0.0.1:8080").unwrap();
+        let s = Sampling::new(0.3, 0.9, 100).top_k(20).repeat_penalty(1.05);
+        let msgs = vec![Message::user_text("Hello")];
+
+        let r_body = remote.build_body(&msgs, &s);
+        assert_eq!(r_body.get("model").and_then(|v| v.as_str()), Some("google/gemini-2.5-flash"));
+        assert_eq!(r_body.get("repetition_penalty").and_then(|v| v.as_f64()), Some(1.05));
+        assert!(r_body.get("repeat_penalty").is_none());
+        assert!(r_body.get("chat_template_kwargs").is_none());
+
+        let l_body = local.build_body(&msgs, &s);
+        assert!(l_body.get("model").is_none());
+        assert_eq!(l_body.get("repeat_penalty").and_then(|v| v.as_f64()), Some(1.05));
+        assert!(l_body.get("repetition_penalty").is_none());
+        assert!(l_body.get("chat_template_kwargs").is_some());
+    }
+
+    #[test]
+    fn test_parse_chat_response_success() {
+        let json_resp = r#"{
+            "id": "gen-123",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Привет, мир!"
+                    },
+                    "finish_reason": "stop"
+                }
+            ]
+        }"#;
+        let res = parse_chat_response(reqwest::StatusCode::OK, json_resp);
+        assert_eq!(res.unwrap(), "Привет, мир!");
+    }
+
+    #[test]
+    fn test_parse_chat_response_parts_array() {
+        let json_resp = r#"{
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "Часть 1 "},
+                            {"type": "text", "text": "Часть 2"}
+                        ]
+                    }
+                }
+            ]
+        }"#;
+        let res = parse_chat_response(reqwest::StatusCode::OK, json_resp);
+        assert_eq!(res.unwrap(), "Часть 1 Часть 2");
+    }
+
+    #[test]
+    fn test_parse_chat_response_api_error_in_200() {
+        let json_resp = r#"{
+            "error": {
+                "message": "User has insufficient credits",
+                "code": 402
+            }
+        }"#;
+        let res = parse_chat_response(reqwest::StatusCode::OK, json_resp);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().to_string(), "api: OpenRouter error: User has insufficient credits");
+    }
+
+    #[test]
+    fn test_parse_chat_response_http_error() {
+        let json_resp = r#"{"error":{"message":"Invalid API key","code":401}}"#;
+        let res = parse_chat_response(reqwest::StatusCode::UNAUTHORIZED, json_resp);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().to_string(), "api: 401 Unauthorized: Invalid API key");
     }
 }
