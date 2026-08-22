@@ -1700,25 +1700,50 @@ fn build_dub(
         // исходного спикера/эмоцию) и ДИНАМИЧЕСКИ приглушается на voiceover_gain_db ПОД переводом,
         // восстанавливаясь после — best-practice (IVA/Wikipedia). В паузах и во время lead-in (0.6с) оригинал 100%.
         let duck_db = proj.audio.voiceover_gain_db.clamp(VOICEOVER_DUCK_MIN_DB, 0.0);
-        emit(progress, "mix", &format!(
-            "voiceover: оригинал {duck_db:+.1} dB ПОД переводом, полный в паузах (динам. огибающая, {} блоков)",
-            speech_blocks.len()));
-        let new_audio = wd.join("new_audio.m4a");
-        // Динамическая огибающая на ОРИГИНАЛ по таймингам перевода. Фолбэк — старое плоское приглушение.
-        if media::mix_env_db(&dub, &audio_hq, &speech_blocks, duck_db, &new_audio).is_err() {
-            emit(progress, "mix", "voiceover: огибающая недоступна -> плоское приглушение");
-            let bed = if duck_db.abs() < 0.05 {
-                audio_hq.clone()
-            } else {
-                let ducked = wd.join("orig_ducked.m4a");
-                match media::gain(&audio_hq, &ducked, duck_db) {
-                    Ok(()) => ducked,
-                    Err(_) => audio_hq.clone(),
-                }
-            };
-            media::mix(&dub, &bed, &new_audio)?;
+
+        let has_vocal_stem = cached_voc.is_file();
+        let duck_mode = if has_vocal_stem { "speech_aware" } else { "full_original" };
+
+        if !has_vocal_stem {
+            emit(progress, "mix", "voiceover: speech-aware ducking unavailable (vocal stem missing) -> fallback: full_original_duck");
         }
-        new_audio
+
+        emit(progress, "mix", &format!(
+            "voiceover: mode={duck_mode}, оригинал {duck_db:+.1} dB ПОД переводом, полный в паузах (sample-accurate ducking, {} блоков)",
+            speech_blocks.len()));
+
+        let mixed_float_wav = wd.join("mixed_float.wav");
+        match media::mix_voiceover_file(
+            &dub,
+            &audio_hq,
+            &speech_blocks,
+            duck_db,
+            &mixed_float_wav,
+            duck_mode,
+        ) {
+            Ok(metrics) => {
+                emit(progress, "mix", &format!(
+                    "voiceover метрики: duck_mode={} sr={} tts_peak={:.2} orig_peak={:.2} mix_peak={:.2} true_peak~{:.2} clip_samples={}",
+                    metrics.duck_mode, metrics.sample_rate, metrics.tts_peak, metrics.original_peak, metrics.mix_peak, metrics.true_peak_est, metrics.clipping_samples
+                ));
+                mixed_float_wav
+            }
+            Err(e) => {
+                emit(progress, "mix", &format!("voiceover: sample-accurate mix failed ({e}) -> fallback ffmpeg mix"));
+                let new_audio = wd.join("new_audio.m4a");
+                let bed = if duck_db.abs() < 0.05 {
+                    audio_hq.clone()
+                } else {
+                    let ducked = wd.join("orig_ducked.m4a");
+                    match media::gain(&audio_hq, &ducked, duck_db) {
+                        Ok(()) => ducked,
+                        Err(_) => audio_hq.clone(),
+                    }
+                };
+                media::mix(&dub, &bed, &new_audio)?;
+                new_audio
+            }
+        }
     } else if let Some(inst) = instrumental {
         // Детерминированный дакинг (#106): фон приглушается на дефолтные −3 дБ (env DUB_DUCK_DB) по
         // кусочно-линейной ОГИБАЮЩЕЙ из точных таймингов речевых блоков — компрессор (sidechaincompress)

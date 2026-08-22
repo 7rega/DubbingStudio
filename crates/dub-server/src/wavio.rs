@@ -92,3 +92,60 @@ pub fn write_mono_f32(path: &Path, data: &[f32], sample_rate: u32) -> Result<(),
     Ok(())
 }
 
+/// Прочитать WAV -> (деинтерливнутые каналы [Vec<f32>; channels], sample_rate).
+/// Поддерживает mono, stereo и multi-channel в 16/24/32-bit PCM и IEEE 32-bit float.
+pub fn read_audio_f32(path: &Path) -> Result<(Vec<Vec<f32>>, u32), String> {
+    let mut r = WavReader::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    let spec = r.spec();
+    let ch = spec.channels.max(1) as usize;
+    let interleaved: Vec<f32> = match spec.sample_format {
+        SampleFormat::Float => r
+            .samples::<f32>()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("read f32: {e}"))?,
+        SampleFormat::Int => {
+            let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
+            r.samples::<i32>()
+                .map(|s| s.map(|v| v as f32 / max))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("read int: {e}"))?
+        }
+    };
+    if ch == 1 {
+        Ok((vec![interleaved], spec.sample_rate))
+    } else {
+        let n_frames = interleaved.len() / ch;
+        let mut channels = vec![Vec::with_capacity(n_frames); ch];
+        for frame in interleaved.chunks(ch) {
+            for (c, &s) in frame.iter().enumerate() {
+                channels[c].push(s);
+            }
+        }
+        Ok((channels, spec.sample_rate))
+    }
+}
+
+/// Записать multi-channel f32 -> WAV IEEE-float32 (интерлив).
+pub fn write_audio_f32(path: &Path, channels: &[Vec<f32>], sample_rate: u32) -> Result<(), String> {
+    if channels.is_empty() {
+        return Err("no channels to write".into());
+    }
+    let n_channels = channels.len() as u16;
+    let n_frames = channels[0].len();
+    let spec = WavSpec {
+        channels: n_channels,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: SampleFormat::Float,
+    };
+    let mut w = WavWriter::create(path, spec).map_err(|e| format!("create {}: {e}", path.display()))?;
+    for i in 0..n_frames {
+        for ch in channels {
+            let s = ch.get(i).copied().unwrap_or(0.0);
+            w.write_sample(s).map_err(|e| format!("write: {e}"))?;
+        }
+    }
+    w.finalize().map_err(|e| format!("finalize: {e}"))?;
+    Ok(())
+}
+

@@ -14,6 +14,7 @@ mod cloud_asr;
 mod cloud_tts;
 mod cloud_voices;
 mod compose;
+pub mod duck;
 mod endpoints;
 mod llm_provider;
 mod openrouter_cli;

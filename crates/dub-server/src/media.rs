@@ -458,18 +458,23 @@ pub fn mix3(track1: &Path, track2: &Path, track3: &Path, out: &Path) -> Result<(
 /// 1.0 в паузах, 10^(duck_db/20) во время речевых блоков с плавными рампами.
 #[allow(dead_code)]
 pub fn duck_envelope_file(src_audio: &Path, blocks: &[SpeechBlock], duck_db: f64, out: &Path) -> Result<(), String> {
-    let g = 10f64.powf(duck_db / 20.0).clamp(0.01, 1.0);
-    let vol = duck_volume_expr(blocks, g);
-    let fc = format!("aformat=channel_layouts=stereo,volume='{vol}':eval=frame");
-    let secs = (duration(src_audio).unwrap_or(0.0) * 2.0).max(600.0) as u64;
-    run_ff_timeout(&[
-        OsStr::new("-y"),
-        OsStr::new("-i"), src_audio.as_os_str(),
-        OsStr::new("-af"), OsStr::new(&fc),
-        OsStr::new("-c:a"), OsStr::new("aac"),
-        OsStr::new("-b:a"), OsStr::new("256k"),
-        out.as_os_str(),
-    ], secs)
+    let (channels, sr) = crate::wavio::read_audio_f32(src_audio)?;
+    if channels.is_empty() {
+        return Err("no audio channels".into());
+    }
+    let n_frames = channels[0].len();
+    let params = DuckEnvelopeParams {
+        duck_db,
+        ..DuckEnvelopeParams::default()
+    };
+    let envelope = generate_duck_envelope(n_frames, sr, blocks, &params);
+    let mut ducked = channels.clone();
+    for ch in ducked.iter_mut() {
+        for (i, sample) in ch.iter_mut().enumerate() {
+            *sample *= envelope[i];
+        }
+    }
+    crate::wavio::write_audio_f32(out, &ducked, sr)
 }
 
 /// Акустическое согласование пространства (Scene Spatial Reverb):
@@ -486,50 +491,84 @@ pub fn apply_spatial_reverb(src_wav: &Path, dst_wav: &Path) -> Result<(), String
 }
 
 /// Гибридный 3-трековый микшинг для профессионального UN Voice-Over:
-/// - voice: дубляж диктора (полный уровень 1.0)
-/// - music: инструментал / эффекты (мягкая огибающая inst_duck_db, напр. -3.5 дБ под речью, 0 дБ в паузах)
-/// - vocals: оригинальный вокал (глубокая огибающая voc_duck_db, напр. -12..-14 дБ под речью, 0 дБ в паузах)
+/// Адаптирован под архитектуру sample-accurate ducking: vocal используется как sidechain/control,
+/// master audio остаётся в audio_hq, сведение выполняется в float32 без промежуточного AAC.
 #[allow(dead_code)]
 pub fn mix_voiceover_hybrid(
     voice: &Path,
-    music: &Path,
-    vocals: &Path,
+    audio_hq: &Path,
+    _vocals: &Path,
     blocks: &[SpeechBlock],
-    inst_duck_db: f64,
+    _inst_duck_db: f64,
     voc_duck_db: f64,
     out: &Path,
 ) -> Result<(), String> {
-    let g_inst = 10f64.powf(inst_duck_db / 20.0).clamp(0.02, 1.0);
-    let g_voc = 10f64.powf(voc_duck_db / 20.0).clamp(0.01, 1.0);
-    let vol_inst = duck_volume_expr(blocks, g_inst);
-    let vol_voc = duck_volume_expr(blocks, g_voc);
-    let fc = format!(
-        "[0:a]aformat=channel_layouts=stereo[v];\
-         [1:a]aformat=channel_layouts=stereo,volume='{vol_inst}':eval=frame[m];\
-         [2:a]aformat=channel_layouts=stereo,volume='{vol_voc}':eval=frame[voc];\
-         [v][m][voc]amix=inputs=3:duration=longest:dropout_transition=0:normalize=0[a]"
-    );
-    let secs = (duration(music).unwrap_or(0.0) * 2.0).max(600.0) as u64;
-    run_ff_timeout(&[
-        OsStr::new("-y"),
-        OsStr::new("-i"), voice.as_os_str(),
-        OsStr::new("-i"), music.as_os_str(),
-        OsStr::new("-i"), vocals.as_os_str(),
-        OsStr::new("-filter_complex"), OsStr::new(&fc),
-        OsStr::new("-map"), OsStr::new("[a]"),
-        OsStr::new("-c:a"), OsStr::new("aac"),
-        OsStr::new("-b:a"), OsStr::new("256k"),
-        out.as_os_str(),
-    ], secs)
+    mix_voiceover_file(voice, audio_hq, blocks, voc_duck_db, out, "speech_aware").map(|_| ())
 }
 
-/// Речевой блок на таймлайне [start,end] — слитые по паузе <1.6с реплики дубляжа. Границы берутся из
-/// ФАКТИЧЕСКИ уложенных сегментов (onset + длительность fit-файла), а не из сырых proj.segments.
-#[derive(Clone, Copy, Debug)]
-pub struct SpeechBlock {
-    pub start: f64,
-    pub end: f64,
+pub use crate::duck::{
+    apply_peak_control, generate_duck_envelope, mix_voiceover_sample_accurate,
+    DiagnosticMetrics, DuckEnvelopeParams, SpeechBlock,
+};
+
+/// Высококачественный ресемплинг аудио через FFmpeg soxr (32-bit float):
+/// aresample=target_sr:resampler=soxr:precision=28
+pub fn resample_soxr(src: &Path, dst: &Path, target_sr: u32) -> Result<(), String> {
+    let target_sr_s = target_sr.to_string();
+    let af = format!("aresample={target_sr_s}:resampler=soxr:precision=28");
+    run_ff(&[
+        OsStr::new("-y"),
+        OsStr::new("-i"), src.as_os_str(),
+        OsStr::new("-af"), OsStr::new(&af),
+        OsStr::new("-c:a"), OsStr::new("pcm_f32le"),
+        dst.as_os_str(),
+    ])
 }
+
+/// Свести Voiceover в 32-bit float WAV с sample-accurate дакингом.
+pub fn mix_voiceover_file(
+    voice_wav: &Path,
+    audio_hq_wav: &Path,
+    blocks: &[SpeechBlock],
+    duck_db: f64,
+    out_wav: &Path,
+    duck_mode: &str,
+) -> Result<DiagnosticMetrics, String> {
+    let (orig_ch, orig_sr) = crate::wavio::read_audio_f32(audio_hq_wav)?;
+    let (tts_ch, tts_sr) = crate::wavio::read_audio_f32(voice_wav)?;
+
+    // Если частота дискретизации не совпадает, передискретизируем TTS через soxr
+    let tts_resampled_ch = if tts_sr != orig_sr {
+        let temp_resampled = out_wav.with_extension("temp_tts_resampled.wav");
+        resample_soxr(voice_wav, &temp_resampled, orig_sr)?;
+        let (ch, _) = crate::wavio::read_audio_f32(&temp_resampled)?;
+        let _ = std::fs::remove_file(&temp_resampled);
+        ch
+    } else {
+        tts_ch
+    };
+
+    let params = DuckEnvelopeParams {
+        duck_db,
+        ..DuckEnvelopeParams::default()
+    };
+
+    let (mut mixed, metrics) = mix_voiceover_sample_accurate(
+        &orig_ch,
+        &tts_resampled_ch,
+        orig_sr,
+        blocks,
+        &params,
+        duck_mode,
+    )?;
+
+    // Стадия Headroom / True-Peak контроля (-1.0 dBFS ceiling)
+    apply_peak_control(&mut mixed, -1.0);
+
+    crate::wavio::write_audio_f32(out_wav, &mixed, orig_sr)?;
+    Ok(metrics)
+}
+
 
 // Параметры детерминированной огибающей дакинга.
 // ВАЖНО: в ДУБЛЯЖЕ фон = сепарированный инструментал (= M&E, оригинального голоса там НЕТ). Проф.практика
