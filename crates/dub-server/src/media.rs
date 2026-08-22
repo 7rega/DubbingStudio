@@ -776,6 +776,7 @@ pub fn mux_multitrack(
     let dl = format!("language={dub_lang}");
     let dt = format!("title={dub_title}");
     let ol = format!("language={orig_lang}");
+    let ot = format!("title={orig_title}");
     let is_mp4 = out
         .extension()
         .and_then(|e| e.to_str())
