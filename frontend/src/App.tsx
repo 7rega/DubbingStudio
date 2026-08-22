@@ -3542,6 +3542,7 @@ function Editor() {
   const [voiceMenuSeg, setVoiceMenuSeg] = useState<{ id: string; x: number; y: number } | null>(null); // всплывающее меню голоса/спикера фразы
   const [donorInput, setDonorInput] = useState<string>("");           // ввод номера фразы-донора для чистого клона
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showCastModal, setShowCastModal] = useState(false);
   const [editorTab, setEditorTab] = useState<"subs" | "gen">("subs");
   const [duckOn, setDuckOn] = useState(false);
   const [voiceManualCtrl, setVoiceManualCtrl] = useState(false);
@@ -4350,6 +4351,23 @@ function Editor() {
             </button>
           </div>
           )}
+          {p.audio.voice.mode === "autocast" && (() => {
+            const uniqueSpeakers = Array.from(new Set(p.segments.map((s) => s.speaker ?? "0"))).sort();
+            const castSet = new Set(castVoices.map((v) => v.trim().toLowerCase()));
+            const matchedCount = uniqueSpeakers.filter((spk) => castSet.has(spk.trim().toLowerCase())).length;
+            return (
+              <button
+                onClick={() => { refreshCastVoices(); setShowCastModal(true); }}
+                title={t("voice.castActorsTitle")}
+                className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-medium border border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shadow-sm"
+              >
+                <span>🎭 {t("voice.castActorsBtn")}</span>
+                <span className="mono text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-muted)]">
+                  {matchedCount}/{uniqueSpeakers.length}
+                </span>
+              </button>
+            );
+          })()}
           <div className="flex-1" />
           <button onClick={doUndo} disabled={!canUndo} title="Ctrl+Z"
             className="p-1.5 rounded-md text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-30 transition-colors"><Undo2 size={16} /></button>
@@ -5829,6 +5847,185 @@ function Editor() {
           onExport={handleConfirmExport}
         />
       )}
+      {showCastModal && (
+        <CastActorsModal
+          p={p}
+          castVoices={castVoices}
+          onRefresh={refreshCastVoices}
+          onClose={() => setShowCastModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Модальное окно «Кастинг актёров» (сопоставление спикеров с файлами voices/cast)
+function CastActorsModal({
+  p,
+  castVoices,
+  onRefresh,
+  onClose,
+}: {
+  p: Project;
+  castVoices: string[];
+  onRefresh: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [playingSample, setPlayingSample] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const toggleSample = (voiceName: string) => {
+    if (playingSample === voiceName) {
+      audioRef.current?.pause();
+      setPlayingSample(null);
+      return;
+    }
+    audioRef.current?.pause();
+    const a = new Audio(api.voiceSampleUrl(voiceName));
+    audioRef.current = a;
+    a.onended = () => setPlayingSample(null);
+    a.play().then(() => setPlayingSample(voiceName)).catch(() => setPlayingSample(null));
+  };
+
+  useEffect(() => {
+    return () => {
+      audioRef.current?.pause();
+    };
+  }, []);
+
+  const spkStats = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const s of p.segments) {
+      const k = s.speaker ?? "0";
+      counts[k] = (counts[k] || 0) + 1;
+    }
+    const castMap = new Map<string, string>();
+    for (const v of castVoices) {
+      castMap.set(v.trim().toLowerCase(), v);
+    }
+    const spks = Object.keys(counts).sort();
+    return spks.map((spk) => {
+      const matched = castMap.get(spk.trim().toLowerCase()) || null;
+      return {
+        speaker: spk,
+        count: counts[spk],
+        matchedVoice: matched,
+      };
+    });
+  }, [p.segments, castVoices]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative w-full max-w-xl max-h-[85vh] flex flex-col rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        {/* Шапка */}
+        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-border)]/70">
+          <div className="flex items-start gap-3">
+            <span className="text-2xl leading-none">🎭</span>
+            <div>
+              <h2 className="text-base font-semibold text-[var(--color-text)] leading-tight">{t("voice.castActorsTitle")}</h2>
+              <div className="text-[11px] text-[var(--color-muted)] mt-1 max-w-md leading-relaxed">
+                {t("voice.castActorsHint")}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => api.openCastFolder()}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shadow-sm"
+              title={t("voice.openCastFolder")}
+            >
+              <FolderOpen size={14} className="text-[var(--color-accent)]" />
+              <span>{t("voice.openCastFolder")}</span>
+            </button>
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="p-1.5 rounded-lg text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] border border-transparent hover:border-[var(--color-border)] transition-colors"
+              title={t("common.refresh", "Обновить")}
+            >
+              <RotateCw size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors ml-1"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* Список спикеров */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-2">
+          {spkStats.length === 0 ? (
+            <div className="text-center py-8 text-sm text-[var(--color-muted)]">
+              (В проекте нет реплик со спикерами)
+            </div>
+          ) : (
+            spkStats.map((item) => (
+              <div
+                key={item.speaker}
+                className="flex items-center justify-between gap-3 p-3 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)]/60 hover:border-[var(--color-border)] transition-colors"
+              >
+                {/* Имя спикера и реплики */}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-sm truncate text-[var(--color-text)]">{item.speaker}</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-muted)] shrink-0">
+                      {item.count} репл.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Статус и кнопка прослушки */}
+                <div className="flex items-center gap-2 shrink-0">
+                  {item.matchedVoice ? (
+                    <>
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                        <Check size={13} className="stroke-[2.5]" />
+                        <span className="truncate max-w-[170px]">{item.matchedVoice}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => toggleSample(item.matchedVoice!)}
+                        title={t("voice.preview")}
+                        className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shadow-sm"
+                      >
+                        {playingSample === item.matchedVoice ? (
+                          <Pause size={14} className="text-[var(--color-accent)]" />
+                        ) : (
+                          <Play size={14} />
+                        )}
+                      </button>
+                    </>
+                  ) : (
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] text-[var(--color-muted)] bg-[var(--color-surface)] border border-[var(--color-border)]">
+                      <RotateCw size={12} className="opacity-60" />
+                      <span>{t("voice.cloneFallback")}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Подвал */}
+        <div className="px-5 py-3 border-t border-[var(--color-border)]/70 bg-[var(--color-surface-2)]/30 flex items-center justify-between text-[11px] text-[var(--color-muted)]">
+          <div>
+            Сопоставлено: <strong className="text-[var(--color-text)] font-semibold">{spkStats.filter((s) => s.matchedVoice).length}</strong> из {spkStats.length}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shadow-sm"
+          >
+            {t("common.close", "Закрыть")}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
