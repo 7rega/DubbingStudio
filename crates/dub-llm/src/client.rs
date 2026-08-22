@@ -237,8 +237,15 @@ impl ChatClient {
                     match parse_chat_response(status, &text) {
                         Ok(txt) => return Ok(txt),
                         Err(e) => {
-                            // 4xx (кроме 429) или неподдерживаемые фичи (not supported) — не ретраим.
-                            if (status.as_u16() != 429 && status.as_u16() < 500) || text.contains("not supported") {
+                            // 4xx (кроме временных 429) или неподдерживаемые фичи (not supported) — не ретраим.
+                            let is_quota_429 = status.as_u16() == 429
+                                && (text.contains("free-models-per-day")
+                                    || text.contains("credits")
+                                    || text.contains("quota"));
+                            if (status.as_u16() != 429 && status.as_u16() < 500)
+                                || text.contains("not supported")
+                                || is_quota_429
+                            {
                                 return Err(e);
                             }
                             last_err = e.to_string();

@@ -39,13 +39,15 @@ fn has_cjk(s: &str) -> bool {
 
 /// _parse_numbered: вытащить строки 'N. перевод' (1..n) в порядке; None для пропущенных.
 fn parse_numbered(text: &str, n: usize) -> Vec<Option<String>> {
-    // re.match(r"\s*(\d+)\s*[.)\]:]\s*(.+)")
-    let re = Regex::new(r"^\s*(\d+)\s*[.)\]:]\s*(.+)").unwrap();
+    let re = Regex::new(r"^\s*(?:[-*#]\s*)?(?:\*\*)?(?:\[)?(\d+)(?:\])?(?:\*\*)?\s*(?:[.)\]:\-]|\*\*\.?|\.\*\*)\s*(.+)").unwrap();
     let mut got: HashMap<usize, String> = HashMap::new();
     for line in text.lines() {
         if let Some(c) = re.captures(line) {
             let i: usize = c[1].parse().unwrap_or(0);
-            let val = c[2].trim();
+            let mut val = c[2].trim();
+            if val.starts_with("**") && val.ends_with("**") && val.len() >= 4 {
+                val = val[2..val.len() - 2].trim();
+            }
             if (1..=n).contains(&i) && !got.contains_key(&i) && !val.is_empty() {
                 // " ".join(m.group(2).split()) — схлопнуть пробелы; защитно снять маркер лимита «(≤NN)».
                 let val = strip_budget_marker(val);

@@ -285,7 +285,7 @@ fn translate_lines(
     }
 
     // re: 'N. <line>' — держим ПОСЛЕДНЕЕ вхождение номера (питон dict-comprehension).
-    let re = Regex::new(r"(?m)^\s*(\d+)[.)\]:]\s*(.+?)\s*$").unwrap();
+    let re = Regex::new(r"(?m)^\s*(?:[-*#]\s*)?(?:\*\*)?(?:\[)?(\d+)(?:\])?(?:\*\*)?\s*(?:[.)\]:\-]|\*\*\.?|\.\*\*)\s*(.+?)\s*$").unwrap();
 
     // БРОНЕБОЙНЫЙ перевод (BORROWINGS #5 / VideoLingo per-chunk degrade): каждый чанк переводим отдельно
     // из рабочего стека. Если запрос НЕ влез в контекст модели (или ЛЮБАЯ ошибка) — рубим чанк пополам и
@@ -373,8 +373,12 @@ numbering, match tone/slang/intent.{budget_rule}{style_c} Use ALL the context be
                 let mut local: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
                 for c in re.captures_iter(&raw) {
                     if let Ok(k) = c[1].parse::<usize>() {
+                        let mut val = c[2].trim();
+                        if val.starts_with("**") && val.ends_with("**") && val.len() >= 4 {
+                            val = val[2..val.len() - 2].trim();
+                        }
                         // защита: модель могла протащить маркер лимита «(≤NN)» в перевод -> вычищаем.
-                        local.insert(k, term_lock(&strip_budget_marker(c[2].trim()), &gloss));
+                        local.insert(k, term_lock(&strip_budget_marker(val), &gloss));
                     }
                 }
                 let mut got = 0usize;
@@ -430,7 +434,7 @@ numbering, match tone/slang/intent.{budget_rule}{style_c} Use ALL the context be
             }
         }
     }
-    if line_texts.len() > SHORT_LINES {
+    if line_texts.len() > SHORT_LINES || fail_lines > 0 {
         log(&format!("  ctx translate: готово — {ok_lines} строк переведено, {fail_lines} на исходнике"));
     }
     Ok(by_n)

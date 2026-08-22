@@ -210,10 +210,22 @@ pub fn stage(
     // как raw_ctx = ce_d в from_artifacts).
     apply_extra(proj, &extra);
 
-    let translated = proj.segments.iter().filter(|s| !s.tgt_text.is_empty()).count();
-    emit(progress, "translate", &format!(
-        "перевод готов: {}/{} строк, тайтлов={}",
-        translated, proj.segments.len(), proj.captions.titles.len()));
+    let actual_translated = proj
+        .segments
+        .iter()
+        .filter(|s| !s.tgt_text.is_empty() && !looks_untranslated(&s.src_text, &s.tgt_text, &proj.tgt_lang))
+        .count();
+    if actual_translated == 0 && !proj.segments.is_empty() {
+        emit(progress, "translate", "⚠ Перевод не выполнен: модель вернула ошибку или исчерпан лимит запросов (текст оставлен исходным)");
+    } else if actual_translated < proj.segments.len() {
+        emit(progress, "translate", &format!(
+            "перевод частично готов: {}/{} строк переведено, тайтлов={}",
+            actual_translated, proj.segments.len(), proj.captions.titles.len()));
+    } else {
+        emit(progress, "translate", &format!(
+            "перевод готов: {}/{} строк, тайтлов={}",
+            actual_translated, proj.segments.len(), proj.captions.titles.len()));
+    }
 }
 
 /// extra (ctx_extra.json) -> типизированные captions.sub_style/sub_y/titles/brands + raw_ctx.
