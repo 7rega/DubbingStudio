@@ -1343,7 +1343,7 @@ async fn create_project(
                             id: format!("seg_{}", i + 1),
                             start: c.start,
                             end: c.end,
-                            speaker: Some("0".to_string()),
+                            speaker: c.speaker.or_else(|| Some("0".to_string())),
                             src_text: c.text.clone(),
                             tgt_text: c.text,
                             voice: None,

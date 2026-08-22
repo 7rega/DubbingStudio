@@ -2,11 +2,12 @@
 //! Даёт точный текст + тайминг; спикеров назначает analyze по диаризации (overlap).
 //! Возвращаем реплики (start, end, text) во временном порядке; пустые/битые блоки пропускаем.
 
-/// Одна реплика субтитров: время в секундах + текст (уже без разметки).
-#[derive(Debug, Clone)]
+/// Одна реплика субтитров: время в секундах + текст (уже без разметки) + опциональный спикер/актёр.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Cue {
     pub start: f64,
     pub end: f64,
+    pub speaker: Option<String>,
     pub text: String,
 }
 
@@ -30,6 +31,38 @@ fn finalize(mut cues: Vec<Cue>) -> Vec<Cue> {
     cues.retain(|c| c.end > c.start && !c.text.trim().is_empty());
     cues.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
     cues
+}
+
+/// Извлечь тег спикера в начале текста, например:
+/// "[Геральт]: Привет" -> (Some("Геральт"), "Привет")
+/// "[Лютик] Привет" -> (Some("Лютик"), "Привет")
+/// "Йеннифэр: Привет" -> (Some("Йеннифэр"), "Привет")
+fn extract_speaker_tag(raw: &str) -> (Option<String>, String) {
+    let t = raw.trim();
+    if t.starts_with('[') {
+        if let Some(close_idx) = t.find(']') {
+            let inside = t[1..close_idx].trim();
+            let after = t[close_idx + 1..].trim();
+            let after = after.strip_prefix(':').map(str::trim).unwrap_or(after);
+            if !inside.is_empty() && !after.is_empty() && !inside.contains('\n') {
+                return (Some(inside.to_string()), after.to_string());
+            }
+        }
+    } else if let Some((spk, rest)) = t.split_once(':') {
+        let spk = spk.trim();
+        let rest = rest.trim();
+        if !spk.is_empty()
+            && spk.chars().count() <= 50
+            && !spk.contains("http")
+            && !spk.contains('/')
+            && !spk.contains('\n')
+            && !rest.is_empty()
+            && !spk.chars().all(|c| c.is_ascii_digit())
+        {
+            return (Some(spk.to_string()), rest.to_string());
+        }
+    }
+    (None, t.to_string())
 }
 
 // ─── SRT ─────────────────────────────────────────────────────────────────────
@@ -56,7 +89,12 @@ fn parse_srt(content: &str) -> Vec<Cue> {
         if body.is_empty() {
             continue;
         }
-        out.push(Cue { start, end, text: strip_markup(&body) });
+        let clean = strip_markup(&body);
+        let (speaker, text) = extract_speaker_tag(&clean);
+        if text.is_empty() {
+            continue;
+        }
+        out.push(Cue { start, end, speaker, text });
     }
     out
 }
@@ -112,6 +150,7 @@ fn parse_ass(content: &str) -> Vec<Cue> {
         }
         let i_start = fmt.iter().position(|f| f == "start");
         let i_end = fmt.iter().position(|f| f == "end");
+        let i_name = fmt.iter().position(|f| f == "name" || f == "actor");
         let i_text = fmt.iter().position(|f| f == "text").unwrap_or(fmt.len() - 1);
         // splitn на кол-во полей: последнее поле (text) забирает весь хвост с запятыми.
         let cols: Vec<&str> = rest.splitn(fmt.len(), ',').collect();
@@ -124,8 +163,29 @@ fn parse_ass(content: &str) -> Vec<Cue> {
             (Some(a), Some(b)) => (a, b),
             _ => continue,
         };
+        let raw_name = get(i_name).unwrap_or("");
+        let mut speaker = if !raw_name.is_empty()
+            && !raw_name.eq_ignore_ascii_case("default")
+            && !raw_name.eq_ignore_ascii_case("*default")
+        {
+            Some(raw_name.to_string())
+        } else {
+            None
+        };
         let body = cols.get(i_text).copied().unwrap_or("");
-        out.push(Cue { start, end, text: strip_markup(body) });
+        let clean = strip_markup(body);
+        let (tag_spk, text) = if speaker.is_none() {
+            extract_speaker_tag(&clean)
+        } else {
+            (None, clean)
+        };
+        if speaker.is_none() {
+            speaker = tag_spk;
+        }
+        if text.is_empty() {
+            continue;
+        }
+        out.push(Cue { start, end, speaker, text });
     }
     out
 }
@@ -220,6 +280,29 @@ mod tests {
         assert!((c[0].start - 1.0).abs() < 1e-6);
         assert!((c[0].end - 3.5).abs() < 1e-6);
         assert_eq!(c[0].text, "Hello, there world"); // запятая в тексте сохранена, теги убраны
+        assert_eq!(c[0].speaker, None);
+    }
+
+    #[test]
+    fn ass_with_actor_name() {
+        let s = "[Script Info]\nTitle: x\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:03.50,Default,Геральт,0,0,0,,Привет, Лютик!\nDialogue: 0,0:00:04.00,0:00:06.00,Italics,Лютик,0,0,0,,Привет, друг!\n";
+        let c = parse(s, "ass");
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].speaker.as_deref(), Some("Геральт"));
+        assert_eq!(c[0].text, "Привет, Лютик!");
+        assert_eq!(c[1].speaker.as_deref(), Some("Лютик"));
+        assert_eq!(c[1].text, "Привет, друг!");
+    }
+
+    #[test]
+    fn srt_with_speaker_tags() {
+        let s = "1\n00:00:01,000 --> 00:00:04,000\n[Геральт]: Привет, Лютик!\n\n2\n00:00:05,000 --> 00:00:08,000\nЛютик: Здравствуй!";
+        let c = parse(s, "srt");
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].speaker.as_deref(), Some("Геральт"));
+        assert_eq!(c[0].text, "Привет, Лютик!");
+        assert_eq!(c[1].speaker.as_deref(), Some("Лютик"));
+        assert_eq!(c[1].text, "Здравствуй!");
     }
 
     #[test]

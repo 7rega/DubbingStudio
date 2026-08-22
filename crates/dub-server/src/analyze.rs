@@ -684,11 +684,18 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                 } else {
                     (c.text, String::new())
                 };
+                let spk = c.speaker.unwrap_or_else(|| {
+                    if turns.is_empty() {
+                        "0".to_string()
+                    } else {
+                        speaker_for(c.start, c.end, turns)
+                    }
+                });
                 Segment {
                     id: format!("s{i}"),
                     start: c.start,
                     end: c.end,
-                    speaker: Some(speaker_for(c.start, c.end, turns)),
+                    speaker: Some(spk),
                     src_text,
                     tgt_text,
                     voice: None,
@@ -698,7 +705,15 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                 }
             })
             .collect();
-        let n = diar.as_ref().map(|d| d.n_speakers).unwrap_or(1).max(1);
+        let unique_spks: std::collections::HashSet<&str> = segs
+            .iter()
+            .filter_map(|s| s.speaker.as_deref())
+            .collect();
+        let n = if !unique_spks.is_empty() {
+            unique_spks.len()
+        } else {
+            diar.as_ref().map(|d| d.n_speakers).unwrap_or(1).max(1)
+        };
         emit(progress, "asr", &format!("субтитры импортированы: {} реплик, {} спикер(ов)", segs.len(), n));
         (segs, n)
     } else if crate::models::openrouter_asr_on(&paths.models_root) {

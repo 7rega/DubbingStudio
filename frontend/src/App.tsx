@@ -3370,6 +3370,29 @@ function parseSrtTime(tStr: string): number {
   return parseFloat(clean) || 0;
 }
 
+function extractSpeakerFromText(raw: string): { speaker: string; text: string } {
+  const trimmed = raw.trim();
+  const bracketMatch = trimmed.match(/^\[([^\]\n]+)\]:?\s*(.*)$/s);
+  if (bracketMatch) {
+    const inside = bracketMatch[1].trim();
+    const rest = bracketMatch[2].trim();
+    if (inside && rest) {
+      const spk = inside.replace(/^(?:speaker|spk|спикер|actor)[_\s:-]*/i, "").trim() || inside;
+      return { speaker: spk, text: rest };
+    }
+  }
+  const colonMatch = trimmed.match(/^([^:\n]{1,50}):\s+(.+)$/s);
+  if (colonMatch) {
+    const inside = colonMatch[1].trim();
+    const rest = colonMatch[2].trim();
+    if (inside && rest && !inside.includes("http") && !inside.includes("/") && !/^\d+$/.test(inside)) {
+      const spk = inside.replace(/^(?:speaker|spk|спикер|actor)[_\s:-]*/i, "").trim() || inside;
+      return { speaker: spk, text: rest };
+    }
+  }
+  return { speaker: "", text: trimmed };
+}
+
 function parseSrtAssText(content: string): { start: number; end: number; speaker: string; text: string }[] {
   const results: { start: number; end: number; speaker: string; text: string }[] = [];
   const lines = content.replace(/\r\n/g, "\n").split("\n");
@@ -3377,52 +3400,42 @@ function parseSrtAssText(content: string): { start: number; end: number; speaker
   const isAss = lines.some((l) => l.trim().startsWith("[Events]") || l.trim().startsWith("Dialogue:"));
 
   if (isAss) {
-    let startIdx = 1, endIdx = 2, styleIdx = 3, nameIdx = 4, textIdx = 9;
+    let startIdx = 1, endIdx = 2, nameIdx = 4, textIdx = 9;
     for (const line of lines) {
       const trimmed = line.trim();
       if (trimmed.startsWith("Format:")) {
         const fields = trimmed.substring(7).split(",").map((f) => f.trim().toLowerCase());
         const s = fields.indexOf("start"); if (s !== -1) startIdx = s;
         const e = fields.indexOf("end"); if (e !== -1) endIdx = e;
-        const st = fields.indexOf("style"); if (st !== -1) styleIdx = st;
         const n = fields.indexOf("name"); if (n !== -1) nameIdx = n;
+        const a = fields.indexOf("actor"); if (a !== -1) nameIdx = a;
         const t = fields.indexOf("text"); if (t !== -1) textIdx = t;
       } else if (trimmed.startsWith("Dialogue:")) {
         const parts = trimmed.substring(9).split(",");
         if (parts.length > textIdx) {
           const startStr = parts[startIdx]?.trim() || "0";
           const endStr = parts[endIdx]?.trim() || "0";
-          const styleStr = styleIdx !== -1 ? (parts[styleIdx]?.trim() || "") : "";
           const nameStr = nameIdx !== -1 ? (parts[nameIdx]?.trim() || "") : "";
           const textRaw = parts.slice(textIdx).join(",");
           let textClean = textRaw.replace(/\\N/gi, " ").replace(/\{[^}]+\}/g, "").trim();
 
-          // Извлекаем спикера: Name -> Style -> префикс в тексте
+          // Извлекаем спикера: строго из колонки Name (Актёр) или из явного тега в начале текста
           let spk = "";
-          if (nameStr && nameStr !== "Default" && nameStr !== "*Default") {
-            const m = nameStr.match(/^(?:speaker|spk|спикер|actor)[_\s-]*([a-zA-Z0-9_-]+)$/i);
-            spk = m ? m[1] : nameStr;
-          }
-          if (!spk && styleStr && styleStr !== "Default" && styleStr !== "*Default") {
-            const m = styleStr.match(/^(?:speaker|spk|спикер|actor)[_\s-]*([a-zA-Z0-9_-]+)$/i);
-            if (m) {
-              spk = m[1];
-            } else if (/^\d+$/.test(styleStr)) {
-              spk = styleStr;
-            }
+          if (nameStr && !nameStr.toLowerCase().startsWith("default") && !nameStr.toLowerCase().startsWith("*default")) {
+            const stripped = nameStr.replace(/^(?:speaker|spk|спикер|actor)[_\s:-]*/i, "").trim();
+            spk = stripped || nameStr;
           }
           if (!spk) {
-            const tm = textClean.match(/^\[(?:speaker|spk|спикер|actor)?\s*([a-zA-Z0-9_-]+)\]\s*(.*)$/i) ||
-                       textClean.match(/^(?:speaker|spk|спикер|actor)\s*([a-zA-Z0-9_-]+):\s*(.*)$/i);
-            if (tm) {
-              spk = tm[1];
-              textClean = tm[2].trim();
+            const extracted = extractSpeakerFromText(textClean);
+            if (extracted.speaker) {
+              spk = extracted.speaker;
+              textClean = extracted.text;
             }
           }
 
           const start = parseSrtTime(startStr);
           const end = parseSrtTime(endStr);
-          if (end > start) {
+          if (end > start && textClean) {
             results.push({ start, end, speaker: spk || "0", text: textClean });
           }
         }
@@ -3446,16 +3459,12 @@ function parseSrtAssText(content: string): { start: number; end: number; speaker
       const rawText = bLines.slice(timeLineIdx + 1).join(" ");
       let textClean = rawText.replace(/<[^>]+>/g, "").trim();
 
-      let spk = "";
-      const tm = textClean.match(/^\[(?:speaker|spk|спикер|actor)?\s*([a-zA-Z0-9_-]+)\]\s*(.*)$/i) ||
-                 textClean.match(/^(?:speaker|spk|спикер|actor)\s*([a-zA-Z0-9_-]+):\s*(.*)$/i);
-      if (tm) {
-        spk = tm[1];
-        textClean = tm[2].trim();
-      }
+      const extracted = extractSpeakerFromText(textClean);
+      const spk = extracted.speaker || "0";
+      textClean = extracted.text;
 
       if (end > start && textClean) {
-        results.push({ start, end, speaker: spk || "0", text: textClean });
+        results.push({ start, end, speaker: spk, text: textClean });
       }
     }
   }
@@ -3834,12 +3843,9 @@ function Editor() {
         const z = (n: number, w = 2) => String(n).padStart(w, "0");
         return `${Math.floor(ms / 360000)}:${z(Math.floor((ms % 360000) / 6000))}:${z(Math.floor((ms % 6000) / 100))}.${z(ms % 100)}`;
       };
-      const speakers = Array.from(new Set(p.segments.map(s => s.speaker ?? "0"))).sort();
-      const header = `[Script Info]\nTitle: Dub Studio Export\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n` +
-        speakers.map(spk => `Style: Speaker_${spk},Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1`).join("\n") +
-        `\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
+      const header = `[Script Info]\nTitle: Dub Studio Export\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
 
-      const content = header + p.segments.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Speaker_${s.speaker ?? "0"},${s.speaker ?? "0"},0,0,0,,${stripHiggsTags(s.tgt_text || s.src_text || "").replace(/\n/g, "\\N")}`).join("\n");
+      const content = header + p.segments.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Default,${s.speaker ?? "0"},0,0,0,,${stripHiggsTags(s.tgt_text || s.src_text || "").replace(/\n/g, "\\N")}`).join("\n");
       await api.putProject(pid, p);
 
       if ("showSaveFilePicker" in window) {
@@ -7051,11 +7057,8 @@ function TranscriptView() {
       const z = (n: number, w = 2) => String(n).padStart(w, "0");
       return `${Math.floor(ms / 360000)}:${z(Math.floor((ms % 360000) / 6000))}:${z(Math.floor((ms % 6000) / 100))}.${z(ms % 100)}`;
     };
-    const speakers = Array.from(new Set(rows.map(s => s.speaker ?? "0"))).sort();
-    const header = `[Script Info]\nTitle: Dub Studio Export\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n` +
-      speakers.map(spk => `Style: Speaker_${spk},Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1`).join("\n") +
-      `\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
-    const events = rows.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Speaker_${s.speaker ?? "0"},,0,0,0,,${stripHiggsTags(s.src_text || "").replace(/\n/g, "\\N")}`).join("\n");
+    const header = `[Script Info]\nTitle: Dub Studio Export\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
+    const events = rows.map((s) => `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Default,${s.speaker ?? "0"},0,0,0,,${stripHiggsTags(s.src_text || "").replace(/\n/g, "\\N")}`).join("\n");
     dl("transcript.ass", header + events);
   };
 
