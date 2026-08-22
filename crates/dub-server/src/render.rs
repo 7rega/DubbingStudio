@@ -578,7 +578,9 @@ fn build_dub(
     let cached_voc = stems.join("vocals.wav");
     let cached_inst = stems.join("instrumental.wav");
 
-    let _needs_clone = proj.audio.voice.mode == "clone" || proj.audio.voice.name.as_deref().unwrap_or("").split(',').any(|s| s.trim() == crate::voice_slots::CLONE_SLOT);
+    let _needs_clone = proj.audio.voice.mode == "clone"
+        || proj.audio.voice.mode == "autocast"
+        || proj.audio.voice.name.as_deref().unwrap_or("").split(',').any(|s| s.trim() == crate::voice_slots::CLONE_SLOT);
     let want_inst = keep_music && !voiceover;
     let needs_clean_vocals = true; // ВСЕГДА пытаемся получить чистый вокал для референса (TTS/клонирование работает лучше)
     let mut did_sep = false;
@@ -646,13 +648,51 @@ fn build_dub(
     }
 
     // клон-референс. voice.mode="voice" -> реф из пака/записи (voices/<name>.wav|mp3) НА КАЖДОГО спикера.
+    // voice.mode="autocast" -> строгий поиск в voices/cast/<speaker>.wav|mp3, иначе клон оригинала.
     // Имя — CSV; позиция = отсортированный спикер (как во фронте: speaker ?? "0", лексикографически),
     // пустой слот берёт первое непустое имя. Иначе (clone) — длиннейшая реплика спикера из вокала.
     // Слот "-" (CLONE_SLOT, авто-распределение #114) — этот спикер остаётся на КЛОНИРОВАНИИ: пак-реф
     // не строим, его identity-реф добавляется ниже из вокала (spk_refs). Существующие CSV без "-"
     // ведут себя как раньше.
     let mut clone_slot_spks: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let pack_refs: std::collections::BTreeMap<String, PathBuf> = if dirty_count > 0 && proj.audio.voice.mode == "voice" {
+    let cast_dir = paths.voices_dir.join("cast");
+    let pack_refs: std::collections::BTreeMap<String, PathBuf> = if dirty_count > 0 && proj.audio.voice.mode == "autocast" {
+        // Режим «Авто-кастинг»: строгий поиск файлов голосов в voices/cast/<speaker>.wav|mp3
+        let mut map = std::collections::BTreeMap::new();
+        let mut cast_files: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
+        if let Ok(rd) = std::fs::read_dir(&cast_dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                if ext == "wav" || ext == "mp3" {
+                    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                        cast_files.insert(stem.trim().to_lowercase(), p);
+                    }
+                }
+            }
+        }
+        let sorted: Vec<String> = proj
+            .segments
+            .iter()
+            .map(|s| s.speaker.clone().unwrap_or_else(|| "0".to_string()))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        for (i, spk) in sorted.iter().enumerate() {
+            let key = spk.trim().to_lowercase();
+            if let Some(src) = cast_files.get(&key) {
+                let out = wd.join(format!("ref_cast_{i}.wav"));
+                if media::trim(src, &out, 0.0, paths.ref_secs, 16_000).is_ok() {
+                    map.insert(spk.clone(), out);
+                } else {
+                    clone_slot_spks.insert(spk.clone());
+                }
+            } else {
+                clone_slot_spks.insert(spk.clone()); // Не найден в voices/cast/ -> клон оригинала
+            }
+        }
+        map
+    } else if dirty_count > 0 && proj.audio.voice.mode == "voice" {
         let names: Vec<&str> = proj.audio.voice.name.as_deref().unwrap_or("").split(',').map(|s| s.trim()).collect();
         let first_named = names
             .iter()
@@ -1056,11 +1096,17 @@ fn build_dub(
                     None
                 }
             } else {
-                // Кастомный голос из библиотеки (voices/<name>.wav/mp3)
+                // Кастомный голос из библиотеки (voices/<name>.wav/mp3 или voices/cast/<name>.wav/mp3)
                 let voice_file = ["wav", "mp3"]
                     .iter()
-                    .map(|e| paths.voices_dir.join(format!("{v}.{e}")))
-                    .find(|p| p.is_file());
+                    .map(|e| paths.voices_dir.join("cast").join(format!("{v}.{e}")))
+                    .find(|p| p.is_file())
+                    .or_else(|| {
+                        ["wav", "mp3"]
+                            .iter()
+                            .map(|e| paths.voices_dir.join(format!("{v}.{e}")))
+                            .find(|p| p.is_file())
+                    });
                 if let Some(vf) = voice_file {
                     let out = wd.join(format!("ref_voice_{sid}.wav"));
                     // Копируем во временный ASCII-файл, чтобы MinGW FFmpeg под Windows гарантированно открыл путь без сбоев кодировки
@@ -1072,7 +1118,11 @@ fn build_dub(
                     let _ = std::fs::remove_file(&temp_in);
                     if trim_ok && out.is_file() {
                         // Подтягиваем текст расшифровки сэмпла .txt, если он есть в каталоге (Higgs клонирует чище)
-                        let txt_file = paths.voices_dir.join(format!("{v}.txt"));
+                        let txt_file = if paths.voices_dir.join("cast").join(format!("{v}.txt")).is_file() {
+                            paths.voices_dir.join("cast").join(format!("{v}.txt"))
+                        } else {
+                            paths.voices_dir.join(format!("{v}.txt"))
+                        };
                         let txt_content = std::fs::read_to_string(&txt_file).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
                         Some((out, txt_content))
                     } else {

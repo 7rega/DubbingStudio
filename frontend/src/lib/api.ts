@@ -133,6 +133,8 @@ export const api = {
   voicesDownloadPack: () => fetch(`${BASE}/voices/download-pack`, { method: "POST" }).then(j<{ job_id: string }>),
   voicesCatalog: () => getJson<{ voices: { name: string; gender: string; url: string }[] }>("/voices/catalog"),
   voicesGet: (name: string) => postJson<{ ok: boolean; voices?: string[]; error?: string }>("/voices/get", { name }),
+  openCastFolder: () => postJson<{ ok: boolean }>("/voices/open-cast", {}),
+  getCastVoices: () => getJson<{ voices: string[] }>("/voices/cast"),
   voiceSampleUrl: (name: string) => `${BASE}/voices/sample?name=${encodeURIComponent(name)}`,   // прослушка выбранного голоса (<audio>)
   voicesRename: (from: string, to: string) => postJson<{ voices: string[] }>("/voices/rename", { from, to }),
   voicesDelete: (name: string) => postJson<{ voices: string[] }>("/voices/delete", { name }),

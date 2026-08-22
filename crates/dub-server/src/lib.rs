@@ -275,6 +275,7 @@ impl AppState {
         let voices_dir = std::env::var("DUBENGINE_VOICES")
             .map(PathBuf::from)
             .unwrap_or_else(|_| repo_root.join("voices"));
+        let _ = std::fs::create_dir_all(voices_dir.join("cast"));
         AppState {
             repo_root,
             workspace,
@@ -369,6 +370,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/record/stop", post(record_stop))
         .route("/voices/download-pack", post(voices_download_pack))
         .route("/voices/catalog", get(voices_catalog))
+        .route("/voices/cast", get(voices_cast_list))
+        .route("/voices/open-cast", post(voices_open_cast))
         .route("/voices/sample", get(voice_sample))
         .route("/voices/get", post(voices_get))
         .route("/voices/rename", post(voices_rename))
@@ -613,7 +616,22 @@ async fn voices_list(State(st): State<AppState>) -> Json<Value> {
     Json(json!({ "voices": list_voice_names(&st.voices_dir) }))
 }
 
-/// GET /voices/sample?name=<name> — отдать аудио-сэмпл голоса (voices/<name>.wav|.mp3) с Range для <audio>
+/// GET /voices/cast — список голосов из каталога voices/cast/.
+async fn voices_cast_list(State(st): State<AppState>) -> Json<Value> {
+    let cast_dir = st.voices_dir.join("cast");
+    let _ = std::fs::create_dir_all(&cast_dir);
+    Json(json!({ "voices": list_voice_names(&cast_dir) }))
+}
+
+/// POST /voices/open-cast — открыть каталог voices/cast/ в Проводнике.
+async fn voices_open_cast(State(st): State<AppState>) -> Json<Value> {
+    let cast_dir = st.voices_dir.join("cast");
+    let _ = std::fs::create_dir_all(&cast_dir);
+    reveal_in_explorer(cast_dir.to_string_lossy().to_string());
+    Json(json!({ "ok": true }))
+}
+
+/// GET /voices/sample?name=<name> — отдать аудио-сэмпл голоса (voices/<name>.wav|.mp3 или voices/cast/<name>.wav|.mp3) с Range для <audio>
 /// (прослушка выбранного голоса в UI). sanitize защищает от path-traversal.
 async fn voice_sample(
     State(st): State<AppState>,
@@ -625,6 +643,10 @@ async fn voice_sample(
         return (StatusCode::BAD_REQUEST, "no name").into_response();
     }
     for ext in ["wav", "mp3"] {
+        let cast_p = st.voices_dir.join("cast").join(format!("{name}.{ext}"));
+        if cast_p.is_file() {
+            return serve_file_range(&cast_p, req, None).await;
+        }
         let p = st.voices_dir.join(format!("{name}.{ext}"));
         if p.is_file() {
             return serve_file_range(&p, req, None).await;

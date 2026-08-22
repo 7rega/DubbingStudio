@@ -3508,6 +3508,18 @@ function Editor() {
   const [selTitles, setSelTitles] = useState<Set<number>>(new Set()); // multi-select: titles
   const [fonts, setFonts] = useState<Record<string, string>>({});
   const [voiceList, setVoiceList] = useState<string[]>([]);
+  const [castVoices, setCastVoices] = useState<string[]>([]);
+  const refreshCastVoices = async () => {
+    try {
+      const r = await api.getCastVoices();
+      setCastVoices(r.voices || []);
+    } catch { /* ignore */ }
+  };
+  useEffect(() => {
+    if (p.audio.voice.mode === "autocast") {
+      refreshCastVoices();
+    }
+  }, [p.audio.voice.mode]);
   const [spkVoiceBusy, setSpkVoiceBusy] = useState<string | null>(null);
   const [voicePreview, setVoicePreview] = useState<string | null>(null);   // имя проигрываемого сэмпла голоса
   const voicePreviewAudio = useRef<HTMLAudioElement | null>(null);
@@ -5436,8 +5448,35 @@ function Editor() {
                   <Plus size={13} />{t("voice.addSpeaker")}
                 </button>
 
-                {p.audio.voice.mode !== "voice" && (
+                {p.audio.voice.mode === "clone" && (
                   <div className="text-[10px] text-[var(--color-muted)] leading-snug">{t("voice.recordHint")}</div>
+                )}
+                {p.audio.voice.mode === "autocast" && (
+                  <div className="space-y-2 p-2.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+                    <div className="flex items-center justify-between gap-2">
+                      <button type="button" onClick={() => api.openCastFolder()}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px] font-medium bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shadow-sm">
+                        <FolderOpen size={14} className="text-[var(--color-accent)]" />
+                        <span>{t("voice.openCastFolder")}</span>
+                      </button>
+                      <button type="button" onClick={refreshCastVoices} title={t("common.refresh", "Обновить")}
+                        className="p-1.5 rounded-md text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface)] border border-transparent hover:border-[var(--color-border)] transition-colors">
+                        <RotateCw size={13} />
+                      </button>
+                    </div>
+                    <div className="text-[11px] text-[var(--color-muted)] leading-snug">
+                      {t("voice.castHint")}
+                    </div>
+                    {castVoices.length > 0 ? (
+                      <div className="text-[10px] text-[var(--color-accent)] font-medium">
+                        {t("voice.castCount", { n: castVoices.length })}
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-[var(--color-muted)] italic">
+                        {t("voice.castEmpty", "(Папка cast пуста)")}
+                      </div>
+                    )}
+                  </div>
                 )}
                 {p.audio.voice.mode === "voice" && (() => {
                   const spks = [...new Set(p.segments.map((s) => s.speaker ?? "0"))].sort();
