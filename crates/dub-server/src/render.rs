@@ -1156,7 +1156,7 @@ fn build_dub(
             let n: u64 = s.speaker.as_deref().unwrap_or("0").parse::<u64>().unwrap_or_else(|_| {
                 s.speaker.as_deref().unwrap_or("0").bytes().fold(42u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
             });
-            (n + 1) * 77777 + 42
+            ((n % 10_000) + 1) * 10_000 + 42
         };
 
         // Синтез ТОЛЬКО если сегмент dirty (правился текст/спикер/голос) ИЛИ нет кэша. Реф-клипы
