@@ -662,41 +662,59 @@ fn mix_env_g(voice: &Path, music: &Path, blocks: &[SpeechBlock], g: f64, out: &P
 
 /// Финальная нормализация программы по EBU R128 (ffmpeg loudnorm): интегральная громкость к I LUFS
 /// + true-peak лимитер к TP dBTP. Решение юзера (best-practice, НЕ питон): ставится последним шагом на
-/// смиксованную дорожку — держит целевую громкость соцсетей и ловит пики (пофразного клэмпа поэтому нет).
+/// смиксованную дорожку — держит целевую громкость соцсетей и ловит пики.
+/// Явно фиксируем sample_rates=44100 и -ar 44100 (фильтр loudnorm внутри апсемплит до 192к, без явного
+/// флага AAC-энкодер выбирал 96 кГц).
 pub fn loudnorm(src: &Path, dst: &Path, i: f64, tp: f64, lra: f64) -> Result<(), String> {
-    let af = format!("aformat=channel_layouts=stereo,loudnorm=I={i}:TP={tp}:LRA={lra}");
+    let af = format!("aformat=channel_layouts=stereo:sample_rates=44100,loudnorm=I={i}:TP={tp}:LRA={lra},aformat=sample_rates=44100");
     run_ff(&[
         OsStr::new("-y"), OsStr::new("-i"), src.as_os_str(),
         OsStr::new("-af"), OsStr::new(&af),
+        OsStr::new("-ar"), OsStr::new("44100"),
         OsStr::new("-c:a"), OsStr::new("aac"), OsStr::new("-b:a"), OsStr::new("192k"), dst.as_os_str(),
     ])
 }
 
-/// Усилить всю дорожку на `gain_db` dB (монтажный гейн, наша opt-in фича). Перекодирование в aac.
+/// Усилить всю дорожку на `gain_db` dB (монтажный гейн, наша opt-in фича). Перекодирование в aac 44.1k.
 pub fn gain(src: &Path, dst: &Path, gain_db: f64) -> Result<(), String> {
-    let af = format!("aformat=channel_layouts=stereo,volume={gain_db}dB");
+    let af = format!("aformat=channel_layouts=stereo:sample_rates=44100,volume={gain_db}dB");
     run_ff(&[
         OsStr::new("-y"), OsStr::new("-i"), src.as_os_str(),
         OsStr::new("-af"), OsStr::new(&af),
+        OsStr::new("-ar"), OsStr::new("44100"),
         OsStr::new("-c:a"), OsStr::new("aac"), OsStr::new("-b:a"), OsStr::new("192k"), dst.as_os_str(),
     ])
 }
 
-/// Смуксить видео (copy) + аудио (aac). БЕЗ -shortest (выход по длиннейшему потоку). Порт media.mux.
-/// -af aformat=cl=stereo нормализует channel layout (mono-дубляж от hound = "1 channels (FL)", AAC
-/// его отвергает -22); на уже-стерео входе это no-op. +faststart двигает moov в начало (мгновенный
-/// старт воспроизведения по сети/в webview) — на mp4 no-op для локального файла, но полезен при раздаче.
+/// Смуксить видео (copy) + аудио. БЕЗ -shortest (выход по длиннейшему потоку). Порт media.mux.
+/// Если входное аудио уже в формате AAC (.m4a), поток копируется без перекодирования (-c:a copy).
 pub fn mux(video: &Path, audio: &Path, out: &Path) -> Result<(), String> {
-    run_ff(&[
-        OsStr::new("-y"), OsStr::new("-i"), video.as_os_str(), OsStr::new("-i"), audio.as_os_str(),
-        OsStr::new("-map"), OsStr::new("0:v:0"), OsStr::new("-map"), OsStr::new("1:a:0?"),
-        OsStr::new("-af"), OsStr::new("aformat=channel_layouts=stereo"),
-        // Дубляж-микс перекодируется в AAC — держим высокий битрейт (256k), чтобы не терять качество (дефолт
-        // ffmpeg ~128k занижал звук). Это ТОЛЬКО для сгенерированного дубляжа; оригинал идёт через mux_keep_audio.
-        OsStr::new("-c:v"), OsStr::new("copy"), OsStr::new("-c:a"), OsStr::new("aac"),
-        OsStr::new("-b:a"), OsStr::new("256k"),
-        OsStr::new("-movflags"), OsStr::new("+faststart"), out.as_os_str(),
-    ])
+    let is_m4a = audio
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("m4a") || e.eq_ignore_ascii_case("aac"))
+        .unwrap_or(false);
+
+    if is_m4a {
+        run_ff(&[
+            OsStr::new("-y"), OsStr::new("-i"), video.as_os_str(), OsStr::new("-i"), audio.as_os_str(),
+            OsStr::new("-map"), OsStr::new("0:v:0"), OsStr::new("-map"), OsStr::new("1:a:0?"),
+            OsStr::new("-c:v"), OsStr::new("copy"),
+            OsStr::new("-c:a"), OsStr::new("copy"),
+            OsStr::new("-movflags"), OsStr::new("+faststart"), out.as_os_str(),
+        ])
+    } else {
+        run_ff(&[
+            OsStr::new("-y"), OsStr::new("-i"), video.as_os_str(), OsStr::new("-i"), audio.as_os_str(),
+            OsStr::new("-map"), OsStr::new("0:v:0"), OsStr::new("-map"), OsStr::new("1:a:0?"),
+            OsStr::new("-af"), OsStr::new("aformat=channel_layouts=stereo:sample_rates=44100"),
+            OsStr::new("-ar"), OsStr::new("44100"),
+            OsStr::new("-c:v"), OsStr::new("copy"),
+            OsStr::new("-c:a"), OsStr::new("aac"),
+            OsStr::new("-b:a"), OsStr::new("192k"),
+            OsStr::new("-movflags"), OsStr::new("+faststart"), out.as_os_str(),
+        ])
+    }
 }
 
 /// Смуксить видео (copy) + ОРИГИНАЛЬНУЮ аудиодорожку БЕЗ перекодирования (`-c:a copy`). Для режимов, где
@@ -758,34 +776,58 @@ pub fn mux_multitrack(
     let dl = format!("language={dub_lang}");
     let dt = format!("title={dub_title}");
     let ol = format!("language={orig_lang}");
-    let ot = format!("title={orig_title}");
     let is_mp4 = out
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("mp4"))
         .unwrap_or(true);
+    let is_m4a = dub_audio
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("m4a") || e.eq_ignore_ascii_case("aac"))
+        .unwrap_or(false);
+
     let mut args: Vec<&OsStr> = vec![
         OsStr::new("-y"),
         OsStr::new("-i"), video.as_os_str(),
         OsStr::new("-i"), dub_audio.as_os_str(),
         OsStr::new("-i"), orig_source.as_os_str(),
-        OsStr::new("-filter_complex"), OsStr::new("[1:a]aformat=channel_layouts=stereo[dub]"),
-        OsStr::new("-map"), OsStr::new("0:v:0"),
-        OsStr::new("-map"), OsStr::new("[dub]"),
-        // без `?`: вызов гарантирует аудио в источнике (has_audio) — иначе -disposition:a:1 валит команду.
-        OsStr::new("-map"), OsStr::new("2:a:0"),
-        OsStr::new("-c:v"), OsStr::new("copy"),
-        // дубляж (a:0) — сгенерированный микс, перекод в AAC на высоком битрейте (256k)
-        OsStr::new("-c:a:0"), OsStr::new("aac"), OsStr::new("-b:a:0"), OsStr::new("256k"),
-        OsStr::new("-metadata:s:a:0"), OsStr::new(&dl),
-        OsStr::new("-metadata:s:a:0"), OsStr::new(&dt),
-        // оригинал (a:1) — КОПИЯ без перекода: сохраняем каналы (5.1)/частоту/битрейт/кодек как в источнике
-        OsStr::new("-c:a:1"), OsStr::new("copy"),
-        OsStr::new("-metadata:s:a:1"), OsStr::new(&ol),
-        OsStr::new("-metadata:s:a:1"), OsStr::new(&ot),
-        OsStr::new("-disposition:a:0"), OsStr::new("default"),
-        OsStr::new("-disposition:a:1"), OsStr::new("0"),
     ];
+
+    if is_m4a {
+        args.extend([
+            OsStr::new("-map"), OsStr::new("0:v:0"),
+            OsStr::new("-map"), OsStr::new("1:a:0"),
+            OsStr::new("-map"), OsStr::new("2:a:0"),
+            OsStr::new("-c:v"), OsStr::new("copy"),
+            OsStr::new("-c:a:0"), OsStr::new("copy"),
+            OsStr::new("-metadata:s:a:0"), OsStr::new(&dl),
+            OsStr::new("-metadata:s:a:0"), OsStr::new(&dt),
+            OsStr::new("-c:a:1"), OsStr::new("copy"),
+            OsStr::new("-metadata:s:a:1"), OsStr::new(&ol),
+            OsStr::new("-metadata:s:a:1"), OsStr::new(&ot),
+            OsStr::new("-disposition:a:0"), OsStr::new("default"),
+            OsStr::new("-disposition:a:1"), OsStr::new("0"),
+        ]);
+    } else {
+        args.extend([
+            OsStr::new("-filter_complex"), OsStr::new("[1:a]aformat=channel_layouts=stereo:sample_rates=44100[dub]"),
+            OsStr::new("-map"), OsStr::new("0:v:0"),
+            OsStr::new("-map"), OsStr::new("[dub]"),
+            OsStr::new("-map"), OsStr::new("2:a:0"),
+            OsStr::new("-c:v"), OsStr::new("copy"),
+            OsStr::new("-c:a:0"), OsStr::new("aac"), OsStr::new("-b:a:0"), OsStr::new("192k"),
+            OsStr::new("-ar:a:0"), OsStr::new("44100"),
+            OsStr::new("-metadata:s:a:0"), OsStr::new(&dl),
+            OsStr::new("-metadata:s:a:0"), OsStr::new(&dt),
+            OsStr::new("-c:a:1"), OsStr::new("copy"),
+            OsStr::new("-metadata:s:a:1"), OsStr::new(&ol),
+            OsStr::new("-metadata:s:a:1"), OsStr::new(&ot),
+            OsStr::new("-disposition:a:0"), OsStr::new("default"),
+            OsStr::new("-disposition:a:1"), OsStr::new("0"),
+        ]);
+    }
+
     if is_mp4 {
         args.push(OsStr::new("-movflags"));
         args.push(OsStr::new("+faststart"));
