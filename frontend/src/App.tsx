@@ -4435,12 +4435,12 @@ function Editor() {
     } else {
       const activeIdx = p.segments.findIndex((s) => s.id === activeId);
       if (activeIdx >= 0 && subsContainerRef.current) {
-        const CARD_ESTIMATE = 135;
-        const targetTop = Math.max(0, activeIdx * CARD_ESTIMATE - subsContainerRef.current.clientHeight / 2);
+        const ROW_ESTIMATE = subsViewMode === "table" ? 28 : 135;
+        const targetTop = Math.max(0, activeIdx * ROW_ESTIMATE - subsContainerRef.current.clientHeight / 2);
         subsContainerRef.current.scrollTo({ top: targetTop, behavior: "smooth" });
       }
     }
-  }, [activeId]);
+  }, [activeId, subsViewMode]);
   return (
     <div className="flex-1 grid grid-cols-[1fr_420px] min-h-0">
       {/* Левая / Центральная секция: Видеопревью + Таймлайн на всю ширину */}
@@ -4995,6 +4995,7 @@ function Editor() {
                         return (
                           <div
                             key={seg.id}
+                            ref={isCurrent ? activeRef : undefined}
                             onMouseDown={(e) => handleRowMouseDown(idx, seg.id, e)}
                             onMouseEnter={() => handleRowMouseEnter(idx)}
                             onDoubleClick={() => { setRendered(false); setScrub(seg.start); }}
