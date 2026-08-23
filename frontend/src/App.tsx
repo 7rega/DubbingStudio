@@ -5008,12 +5008,21 @@ function Editor() {
                           >
                             <span className="mono text-[10px] w-6 shrink-0 opacity-50 font-bold">#{idx + 1}</span>
                             <span className="mono text-[9.5px] shrink-0 opacity-60 w-11 tabnum">{fmtT(seg.start)}</span>
-                            <span
-                              className="flex-1 min-w-0 truncate text-[11.5px] font-normal text-[var(--color-text)]"
-                              title={`${seg.tgt_text || seg.src_text}\n\n(Двойной клик — перейти к видео)`}
-                            >
-                              {seg.tgt_text || seg.src_text}
-                            </span>
+                            <input
+                              type="text"
+                              value={seg.tgt_text ?? seg.src_text ?? ""}
+                              onChange={(e) => patchSeg(seg.id, e.target.value)}
+                              onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  (e.target as HTMLInputElement).blur();
+                                }
+                              }}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              title={`${seg.tgt_text || seg.src_text || ""}\n\n(Двойной клик по строке — перейти к видео)`}
+                              placeholder="Текст перевода…"
+                              className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-surface)] rounded px-1.5 py-0.5 text-[11.5px] text-[var(--color-text)] focus:outline-none transition-colors truncate"
+                            />
                             <div className="shrink-0">
                               <button
                                 type="button"
@@ -6194,6 +6203,30 @@ function Editor() {
         <CastActorsModal
           p={p}
           castVoices={castVoices}
+          voiceList={voiceList}
+          onAssignSpeakerVoice={async (speaker, voiceName) => {
+            const targetSegs = p.segments.filter((s) => (s.speaker ?? "0") === speaker);
+            if (!targetSegs.length) return;
+            pushHistory(p);
+            setRendered(false);
+            try {
+              let fresh = p;
+              for (const seg of targetSegs) {
+                fresh = await api.patch(pid, {
+                  op: "segment",
+                  id: seg.id,
+                  voice: voiceName ?? "",
+                });
+              }
+              setProject(fresh);
+              bump();
+              const msg = voiceName ? `Назначен голос «${voiceName}» для ${speaker}` : `Сброшен на авто-кастинг для ${speaker}`;
+              pushActivity(msg, "done");
+              playSfx("notify");
+            } catch (e) {
+              await surfaceErr(e);
+            }
+          }}
           onRefresh={refreshCastVoices}
           onClose={() => setShowCastModal(false)}
         />
@@ -6202,15 +6235,19 @@ function Editor() {
   );
 }
 
-// Модальное окно «Кастинг актёров» (сопоставление спикеров с файлами voices/cast)
+// Модальное окно «Кастинг актёров» (сопоставление спикеров с файлами voices/cast + ручной выбор из voices/)
 function CastActorsModal({
   p,
   castVoices,
+  voiceList,
+  onAssignSpeakerVoice,
   onRefresh,
   onClose,
 }: {
   p: Project;
   castVoices: string[];
+  voiceList: string[];
+  onAssignSpeakerVoice: (speaker: string, voiceName: string | null) => Promise<void>;
   onRefresh: () => Promise<void>;
   onClose: () => void;
 }) {
@@ -6239,9 +6276,13 @@ function CastActorsModal({
 
   const spkStats = useMemo(() => {
     const counts: Record<string, number> = {};
+    const assignedVoiceMap: Record<string, string | null> = {};
     for (const s of p.segments) {
       const k = s.speaker ?? "0";
       counts[k] = (counts[k] || 0) + 1;
+      if (s.voice && assignedVoiceMap[k] === undefined) {
+        assignedVoiceMap[k] = s.voice;
+      }
     }
     const castMap = new Map<string, string>();
     for (const v of castVoices) {
@@ -6249,18 +6290,21 @@ function CastActorsModal({
     }
     const spks = Object.keys(counts).sort();
     return spks.map((spk) => {
-      const matched = castMap.get(spk.trim().toLowerCase()) || null;
+      const manualVoice = assignedVoiceMap[spk] || null;
+      const matchedCast = castMap.get(spk.trim().toLowerCase()) || null;
       return {
         speaker: spk,
         count: counts[spk],
-        matchedVoice: matched,
+        manualVoice,
+        matchedCast,
+        effectiveVoice: manualVoice || matchedCast,
       };
     });
   }, [p.segments, castVoices]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="relative w-full max-w-xl max-h-[85vh] flex flex-col rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <div className="relative w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
         {/* Шапка */}
         <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-border)]/70">
           <div className="flex items-start gap-3">
@@ -6307,58 +6351,86 @@ function CastActorsModal({
               (В проекте нет реплик со спикерами)
             </div>
           ) : (
-            spkStats.map((item) => (
-              <div
-                key={item.speaker}
-                className="flex items-center justify-between gap-3 p-3 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)]/60 hover:border-[var(--color-border)] transition-colors"
-              >
-                {/* Имя спикера и реплики */}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-sm truncate text-[var(--color-text)]">{item.speaker}</span>
-                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-muted)] shrink-0">
-                      {item.count} репл.
-                    </span>
+            spkStats.map((item) => {
+              const currentValue = item.manualVoice ?? "__auto__";
+              return (
+                <div
+                  key={item.speaker}
+                  className="flex items-center justify-between gap-3 p-3 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)]/60 hover:border-[var(--color-border)] transition-colors"
+                >
+                  {/* Имя спикера и реплики */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-sm truncate text-[var(--color-text)]">{item.speaker}</span>
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-muted)] shrink-0">
+                        {item.count} репл.
+                      </span>
+                    </div>
                   </div>
-                </div>
 
-                {/* Статус и кнопка прослушки */}
-                <div className="flex items-center gap-2 shrink-0">
-                  {item.matchedVoice ? (
-                    <>
-                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                        <Check size={13} className="stroke-[2.5]" />
-                        <span className="truncate max-w-[170px]">{item.matchedVoice}</span>
+                  {/* Селектор голоса + Статус + Кнопка прослушки */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <select
+                      value={currentValue}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        onAssignSpeakerVoice(item.speaker, val === "__auto__" ? null : val);
+                      }}
+                      className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-xs text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none max-w-[200px] transition-colors"
+                    >
+                      <option value="__auto__">
+                        {item.matchedCast ? `✨ Авто (cast: ${item.matchedCast})` : "✨ Авто (cast / клон)"}
+                      </option>
+                      {voiceList.length > 0 && (
+                        <optgroup label="Общая библиотека voices/">
+                          {voiceList.map((v) => (
+                            <option key={v} value={v}>
+                              🎙️ {v}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+
+                    {/* Статус-бейдж */}
+                    {item.effectiveVoice ? (
+                      <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shrink-0">
+                        <Check size={12} className="stroke-[2.5]" />
+                        <span>{item.manualVoice ? "Вручную" : "Найдено"}</span>
                       </div>
+                    ) : (
+                      <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] text-[var(--color-muted)] bg-[var(--color-surface)] border border-[var(--color-border)] shrink-0">
+                        <RotateCw size={11} className="opacity-60" />
+                        <span>Клон</span>
+                      </div>
+                    )}
+
+                    {/* Кнопка прослушки (только если есть голос для проигрывания) */}
+                    {item.effectiveVoice && (
                       <button
                         type="button"
-                        onClick={() => toggleSample(item.matchedVoice!)}
+                        onClick={() => toggleSample(item.effectiveVoice!)}
                         title={t("voice.preview")}
-                        className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shadow-sm"
+                        className="w-8 h-8 inline-flex items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shadow-sm shrink-0"
                       >
-                        {playingSample === item.matchedVoice ? (
+                        {playingSample === item.effectiveVoice ? (
                           <Pause size={14} className="text-[var(--color-accent)]" />
                         ) : (
                           <Play size={14} />
                         )}
                       </button>
-                    </>
-                  ) : (
-                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] text-[var(--color-muted)] bg-[var(--color-surface)] border border-[var(--color-border)]">
-                      <RotateCw size={12} className="opacity-60" />
-                      <span>{t("voice.cloneFallback")}</span>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 
         {/* Подвал */}
         <div className="px-5 py-3 border-t border-[var(--color-border)]/70 bg-[var(--color-surface-2)]/30 flex items-center justify-between text-[11px] text-[var(--color-muted)]">
           <div>
-            Сопоставлено: <strong className="text-[var(--color-text)] font-semibold">{spkStats.filter((s) => s.matchedVoice).length}</strong> из {spkStats.length}
+            С голосом: <strong className="text-[var(--color-text)] font-semibold">{spkStats.filter((s) => s.effectiveVoice).length}</strong> из {spkStats.length}
           </div>
           <button
             type="button"
