@@ -1200,6 +1200,8 @@ function DropZone() {
     return Number.isFinite(v) ? v : -12;
   });
   const setVoGainSaved = (v: number) => { setVoGain(v); localStorage.setItem("dub-vo-gain", String(v)); };
+  const [voDuckMode, setVoDuckMode] = useState<string>(() => localStorage.getItem("dub-vo-duck-mode") ?? "dynamic");
+  const setVoDuckModeSaved = (v: string) => { setVoDuckMode(v); localStorage.setItem("dub-vo-duck-mode", v); };
   // Стиль перевода (#112): выбор пресета + свой текст. Персистятся как глобальный дефолт для будущих запусков.
   const [trStyle, setTrStyle] = useState<string>(() => localStorage.getItem("dub-tr-style-choice") ?? "");
   const [trStyleCustom, setTrStyleCustom] = useState<string>(() => localStorage.getItem("dub-tr-style-custom") ?? "");
@@ -1389,7 +1391,7 @@ function DropZone() {
       const effNumSpeakers = audio === "transcribe" ? mainTranscribeSpeakers : 0;
       const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers, audioOnly ? false : visionOn);
       await api.watchJob(job_id, (e) => { if (e.type === "progress") s.setProgress(e.stage || "", e.msg || "", e.pct ?? null); });
-      if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain });   // громкость оригинала со старта -> рендер ниже подхватит
+      if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain, mode: voDuckMode });   // громкость и режим дакинга со старта -> рендер ниже подхватит
       // Блюр-подложка под субтитрами — опция дубляжа/субтитров (дефолт вкл). Патчим, когда сабы вжигаются.
       if (eBurn && eSubs !== "none" && !audioOnly) await api.patch(project_id, { op: "sub_blur", on: subBlur });
       // Сохранить оригинальную дорожку (#113): 2-я аудиодорожка при mux рендера. Только dub/voiceover, не аудио-режим.
@@ -1817,16 +1819,52 @@ function DropZone() {
                         )}
                       </>
                     )}
-                    {/* ЗАКАДРОВЫЙ: громкость оригинала под переводом — глобальный дефолт. */}
+                    {/* ЗАКАДРОВЫЙ: громкость оригинала под переводом и режим дакинга — глобальные дефолты. */}
                     {showVoGain && (
-                      <div className="mt-2">
-                        <div className="flex items-center justify-between text-[11px] mb-1">
-                          <span className="text-[var(--color-muted)]">{t("comp.origGain")}</span>
-                          <span className="mono text-[11px] text-[var(--color-text)]">{voGain.toFixed(1)} dB</span>
+                      <div className="mt-2 space-y-2">
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] mb-1">
+                            <span className="text-[var(--color-muted)]">{t("comp.origGain")}</span>
+                            <span className="mono text-[11px] text-[var(--color-text)]">{voGain.toFixed(1)} dB</span>
+                          </div>
+                          <input type="range" min={-24} max={0} step={0.5} value={voGain}
+                            onChange={(e) => setVoGainSaved(parseFloat(e.target.value))}
+                            className="w-full accent-[var(--color-accent)]" />
                         </div>
-                        <input type="range" min={-24} max={0} step={0.5} value={voGain}
-                          onChange={(e) => setVoGainSaved(parseFloat(e.target.value))}
-                          className="w-full accent-[var(--color-accent)]" />
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] mb-1">
+                            <span className="text-[var(--color-muted)]">{t("voice.duckMode")}</span>
+                            <div className="inline-flex p-0.5 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-md">
+                              <button
+                                type="button"
+                                onClick={() => setVoDuckModeSaved("dynamic")}
+                                title={t("voice.duckDynamicHint")}
+                                className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                                  voDuckMode !== "flat"
+                                    ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-sm"
+                                    : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                                }`}
+                              >
+                                {t("voice.duckDynamic")}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setVoDuckModeSaved("flat")}
+                                title={t("voice.duckFlatHint")}
+                                className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                                  voDuckMode === "flat"
+                                    ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-sm"
+                                    : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                                }`}
+                              >
+                                {t("voice.duckFlat")}
+                              </button>
+                            </div>
+                          </div>
+                          <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+                            {voDuckMode === "flat" ? t("voice.duckFlatHint") : t("voice.duckDynamicHint")}
+                          </div>
+                        </div>
                       </div>
                     )}
                   </Accordion>
@@ -1856,7 +1894,7 @@ function DropZone() {
       <input ref={inputRef} type="file" accept={MEDIA_ACCEPT} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); }} />
       <input ref={batchRef} type="file" multiple accept={MEDIA_ACCEPT} className="hidden"
-        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; s.setStage("batch"); } }} />
+        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.voDuckMode = voDuckMode; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; s.setStage("batch"); } }} />
 
       {/* Модальное окно "Все проекты" со скроллом и поиском */}
       {allProjectsModal && (
@@ -4197,6 +4235,15 @@ function Editor() {
   }
   async function doGain(gainDb: number) { return applyGain("gain", gainDb, t("voice.gain")); }                 // монтажный гейн всей дорожки
   async function doVoiceoverGain(gainDb: number) { return applyGain("voiceover_gain", gainDb, t("voice.origGain")); }  // громкость оригинала под переводом
+  async function doVoiceoverDuck(mode: string) {                                                                         // режим дакинга (динамический vs статичный)
+    if (regenId) return;
+    setRegenId("__all__"); pushActivity(t("voice.duckMode"));
+    try {
+      const fresh = await api.patch(pid, { op: "voiceover_duck", mode });
+      setProject(fresh); setRendered(false);
+    } catch (e) { await surfaceErr(e); }
+    finally { setRegenId(null); }
+  }
   async function doRegenAll() {                                      // re-synthesize the WHOLE dub (after switching the pack voice/speaker, or to re-roll)
     if (regenId) return;
     setRegenId("__all__"); pushActivity(t("voice.regenAll"));       // sentinel: disables per-seg regen buttons, no per-seg spinner
@@ -5691,16 +5738,53 @@ function Editor() {
                 </div>
 
                 {p.mode === "voiceover" && (
-                  <div className="pt-2">
-                    <div className="flex items-center justify-between text-[11px] mb-1">
-                      <span className="text-[var(--color-muted)]">{t("voice.origGain")}</span>
-                      <span className="mono text-[11px] text-[var(--color-text)]">{(voGainDraft ?? p.audio.voiceover_gain_db ?? -12).toFixed(1)} dB</span>
+                  <div className="pt-2 space-y-2">
+                    <div>
+                      <div className="flex items-center justify-between text-[11px] mb-1">
+                        <span className="text-[var(--color-muted)]">{t("voice.origGain")}</span>
+                        <span className="mono text-[11px] text-[var(--color-text)]">{(voGainDraft ?? p.audio.voiceover_gain_db ?? -12).toFixed(1)} dB</span>
+                      </div>
+                      <input type="range" min={-24} max={0} step={0.5} value={voGainDraft ?? p.audio.voiceover_gain_db ?? -12}
+                        onChange={(e) => setVoGainDraft(parseFloat(e.target.value))}
+                        onPointerUp={async () => { if (voGainDraft != null) { await doVoiceoverGain(voGainDraft); setVoGainDraft(null); } }}
+                        className="w-full accent-[var(--color-accent)]" />
+                      <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.origGainHint")}</div>
                     </div>
-                    <input type="range" min={-24} max={0} step={0.5} value={voGainDraft ?? p.audio.voiceover_gain_db ?? -12}
-                      onChange={(e) => setVoGainDraft(parseFloat(e.target.value))}
-                      onPointerUp={async () => { if (voGainDraft != null) { await doVoiceoverGain(voGainDraft); setVoGainDraft(null); } }}
-                      className="w-full accent-[var(--color-accent)]" />
-                    <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.origGainHint")}</div>
+
+                    <div>
+                      <div className="flex items-center justify-between text-[11px] mb-1">
+                        <span className="text-[var(--color-muted)]">{t("voice.duckMode")}</span>
+                        <div className="inline-flex p-0.5 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-md">
+                          <button
+                            type="button"
+                            onClick={() => doVoiceoverDuck("dynamic")}
+                            title={t("voice.duckDynamicHint")}
+                            className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                              (p.audio.voiceover_duck ?? "dynamic") !== "flat"
+                                ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-sm"
+                                : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                            }`}
+                          >
+                            {t("voice.duckDynamic")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => doVoiceoverDuck("flat")}
+                            title={t("voice.duckFlatHint")}
+                            className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                              (p.audio.voiceover_duck ?? "dynamic") === "flat"
+                                ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-sm"
+                                : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                            }`}
+                          >
+                            {t("voice.duckFlat")}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+                        {(p.audio.voiceover_duck ?? "dynamic") === "flat" ? t("voice.duckFlatHint") : t("voice.duckDynamicHint")}
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -6980,8 +7064,8 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
 }
 
 // Пакетная обработка: DropZone кладёт выбранные файлы + настройки сюда, BatchView читает (без раздувания стора).
-const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; funnyOn: boolean; funny: string; voGain: number; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
-  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") !== "0" : true, funnyOn: false, funny: "", voGain: -12, trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
+const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; funnyOn: boolean; funny: string; voGain: number; voDuckMode: string; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
+  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") !== "0" : true, funnyOn: false, funny: "", voGain: -12, voDuckMode: "dynamic", trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
 
 type BatchItem = { name: string; status: "queued" | "analyzing" | "rendering" | "done" | "error"; pid: string | null; pct: number | null; stage?: string; detail?: string; msg?: string };
 
@@ -6991,7 +7075,7 @@ function BatchView() {
   const { t } = useTranslation();
   const setStage = useStore((s) => s.setStage);
   const filesRef = useRef<File[]>(batchState.files);
-  const { tgt, src, audio, subs, burn, detectText, subBlur, funnyOn, funny, voGain, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
+  const { tgt, src, audio, subs, burn, detectText, subBlur, funnyOn, funny, voGain, voDuckMode, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
   const visionOn = useStore((s) => s.visionOn);
   const setVisionOn = useStore((s) => s.setVisionOn);
   const [batchSubBlur, setBatchSubBlur] = useState(subBlur);
@@ -7032,7 +7116,7 @@ function BatchView() {
             upd({ pct: e.pct ?? null, stage: e.stage, detail: e.msg || stepText || undefined });
           }
         });
-        if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain });   // громкость оригинала со старта -> общий для всех проектов батча
+        if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain, mode: voDuckMode });   // громкость и режим дакинга со старта -> общий для всех проектов батча
         // Блюр-подложка под субтитрами: патчим в проект перед рендером
         if (fBurn && fSubs !== "none" && !ao) await api.patch(project_id, { op: "sub_blur", on: batchSubBlur });
         // Сохранить оригинальную дорожку (#113): 2-я дорожка при mux. Только dub/voiceover, не аудио-файл.

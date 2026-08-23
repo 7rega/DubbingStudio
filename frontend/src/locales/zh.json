@@ -117,6 +117,10 @@
     "gainHint": "增强整条音轨（重新生成/导出时应用）。",
     "origGain": "原声音量",
     "origGainHint": "旁白：原声轨道在译文下方的音量。",
+    "duckMode": "闪避模式",
+    "duckDynamic": "动态",
+    "duckFlat": "静态",
+    "duckModeHint": "动态 — 仅在配音说话时压低原声（停顿处100%）；静态 — 始终压低整条原声轨道。",
     "langSearch": "搜索语言…",
     "noMatch": "无匹配项"
   },

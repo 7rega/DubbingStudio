@@ -73,6 +73,11 @@ pub struct Audio {
     /// Дефолт -12 dB: перевод на ~8-10 LU громче фона (broadcast-практика), оригинал слышно, но приглушённо.
     #[serde(default = "default_voiceover_gain")]
     pub voiceover_gain_db: f64,
+    /// Режим дакинга в закадровой озвучке (#voiceover):
+    /// "dynamic" (дефолт) — новый DSP sample-accurate дакинг под речью диктора, 100% в паузах.
+    /// "flat" — классическое плоское приглушение всей дорожки оригинала целиком на voiceover_gain_db.
+    #[serde(default = "default_voiceover_duck")]
+    pub voiceover_duck: String,
     /// Экспортировать ВТОРУЮ звуковую дорожку с оригиналом (дубляж — default 1-я, оригинал — 2-я).
     /// false = один трек как раньше. Только dub/voiceover (в nodub/transcribe оригинал уже основной).
     #[serde(default)]
@@ -96,6 +101,10 @@ fn default_voiceover_gain() -> f64 {
     -12.0
 }
 
+fn default_voiceover_duck() -> String {
+    "dynamic".to_string()
+}
+
 fn default_container() -> String {
     "mp4".to_string()
 }
@@ -109,6 +118,7 @@ impl Default for Audio {
             translate_style: String::new(),
             gain_db: 0.0,
             voiceover_gain_db: default_voiceover_gain(),
+            voiceover_duck: default_voiceover_duck(),
             keep_original_track: false,
             container: default_container(),
             content_type: String::new(),

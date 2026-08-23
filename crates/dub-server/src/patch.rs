@@ -374,6 +374,19 @@ fn op_voiceover_gain(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(g) = f(edit, "gain_db") {
         p.audio.voiceover_gain_db = g.clamp(-40.0, 0.0);
     }
+    if let Some(m) = s(edit, "mode").or_else(|| s(edit, "duck_mode")) {
+        let m = m.to_lowercase();
+        p.audio.voiceover_duck = if m == "flat" || m == "static" { "flat".into() } else { "dynamic".into() };
+    }
+    Ok(())
+}
+
+/// Режим дакинга в режиме voiceover (закадровый): "dynamic" (DSP) | "flat" (постоянный гейн).
+fn op_voiceover_duck(p: &mut Project, edit: &Value) -> PatchResult {
+    if let Some(m) = s(edit, "mode").or_else(|| s(edit, "duck_mode")) {
+        let m = m.to_lowercase();
+        p.audio.voiceover_duck = if m == "flat" || m == "static" { "flat".into() } else { "dynamic".into() };
+    }
     Ok(())
 }
 
@@ -755,6 +768,7 @@ pub fn apply(p: &mut Project, edit: &Value) -> PatchResult {
         "clear_regen" => op_clear_regen(p, edit),
         "gain" => op_gain(p, edit),
         "voiceover_gain" => op_voiceover_gain(p, edit),
+        "voiceover_duck" => op_voiceover_duck(p, edit),
         "sub_blur" => op_sub_blur(p, edit),
         "keep_original" => op_keep_original(p, edit),
         "reorder_segments" => op_reorder_segments(p, edit),

@@ -117,6 +117,10 @@
     "gainHint": "Amplificar toda a faixa (ao regenerar/exportar).",
     "origGain": "Volume original",
     "origGainHint": "Locução: volume da faixa original sob a tradução.",
+    "duckMode": "Modo de ducking",
+    "duckDynamic": "Dinâmico",
+    "duckFlat": "Estático",
+    "duckModeHint": "Dinâmico — reduz o original apenas durante a fala (100% em pausas); Estático — reduz toda a faixa original de forma uniforme.",
     "langSearch": "Buscar idioma…",
     "noMatch": "Nenhum resultado"
   },

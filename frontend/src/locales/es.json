@@ -117,6 +117,10 @@
     "gainHint": "Amplificar toda la pista (al regenerar/exportar).",
     "origGain": "Volumen original",
     "origGainHint": "Voz superpuesta: volumen de la pista original bajo la traducción.",
+    "duckMode": "Modo de atenuación",
+    "duckDynamic": "Dinámico",
+    "duckFlat": "Estático",
+    "duckModeHint": "Dinámico — atenúa el original solo durante la voz (100% en pausas); Estático — reduce toda la pista original por igual.",
     "langSearch": "Buscar idioma…",
     "noMatch": "Sin coincidencias"
   },

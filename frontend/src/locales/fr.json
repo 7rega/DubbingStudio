@@ -117,6 +117,10 @@
     "gainHint": "Amplifier toute la piste (au rendu/export).",
     "origGain": "Volume d’origine",
     "origGainHint": "Voix off : volume de la piste originale sous la traduction.",
+    "duckMode": "Mode d’atténuation",
+    "duckDynamic": "Dynamique",
+    "duckFlat": "Statique",
+    "duckModeHint": "Dynamique — atténue l’original uniquement pendant la voix (100% en pause) ; Statique — atténue toute la piste d’origine.",
     "langSearch": "Rechercher une langue…",
     "noMatch": "Aucun résultat"
   },
