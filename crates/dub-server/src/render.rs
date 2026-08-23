@@ -732,27 +732,28 @@ fn build_dub(
     // ref_texts: расшифровка реф-клипа НА СПИКЕРА (Higgs клонирует качественнее с ref_text). Клон-режим —
     // src_text выбранного сегмента; пак-режим — АВТОТРАНСКРИПЦИЯ 12с-клипа (как Higgs build_speaker_reference;
     // пак-.txt = полный 3-мин транскрипт, к 12с не подходит). ASR best-effort: сбой -> None (не хуже прежнего).
-    let (spk_refs, mut ref_texts, alt_refs) = if dirty_count == 0 {
+    // Определяем сегменты, которым РЕАЛЬНО требуется клон-референс из оригинального вокала:
+    // Сегмент НЕ требует клон-реф из вокала, если:
+    // 1) У него задан индивидуальный голос seg.voice (из библиотеки voices/ или voices/cast/)
+    // 2) ИЛИ его спикер найден в pack_refs (из папки cast/ или пака)
+    let segs_needing_vocal_clone: Vec<(usize, &dub_core::Segment)> = segs
+        .iter()
+        .filter(|(_, s)| {
+            if s.voice.as_ref().is_some_and(|v| !v.trim().is_empty()) {
+                return false;
+            }
+            let spk = s.speaker.as_deref().unwrap_or("0");
+            !pack_refs.contains_key(spk)
+        })
+        .cloned()
+        .collect();
+
+    let (spk_refs, mut ref_texts, alt_refs) = if dirty_count == 0 || segs_needing_vocal_clone.is_empty() {
         (std::collections::BTreeMap::new(), std::collections::BTreeMap::new(), std::collections::BTreeMap::new())
-    } else if use_pack {
-        if clone_slot_spks.is_empty() {
-            (std::collections::BTreeMap::new(), std::collections::BTreeMap::new(), std::collections::BTreeMap::new())
-        } else {
-            // Клон-слоты "-" (#114): identity-рефы из вокала ТОЛЬКО для спикеров на клоне —
-            // build_speaker_refs строит рефы по спикерам переданных сегментов, фильтруем их.
-            let segs_clone: Vec<(usize, &dub_core::Segment)> = segs
-                .iter()
-                .filter(|(_, s)| clone_slot_spks.contains(s.speaker.as_deref().unwrap_or("0")))
-                .cloned()
-                .collect();
-            let mut asr = crate::models::build_engine(&paths.asr);
-            build_speaker_refs(&segs_clone, &vocals16, wd, paths.ref_secs, asr.as_mut(), progress)?
-        }
     } else {
-        // Скоринг кандидатов + REF-QC (транскрипт каждого кандидата сверяется с его src_text,
-        // брак -> следующий) — ref_text выставляется ВНУТРИ по фактически услышанному.
+        // Скоринг кандидатов + REF-QC ТОЛЬКО для спикеров, реально нуждающихся в клоне из вокала
         let mut asr = crate::models::build_engine(&paths.asr);
-        build_speaker_refs(&segs, &vocals16, wd, paths.ref_secs, asr.as_mut(), progress)?
+        build_speaker_refs(&segs_needing_vocal_clone, &vocals16, wd, paths.ref_secs, asr.as_mut(), progress)?
     };
     if dirty_count > 0 && use_pack {
         // Реф-транскрипция выбранным движком (Parakeet/Whisper), а НЕ захардкоженным Parakeet — иначе у

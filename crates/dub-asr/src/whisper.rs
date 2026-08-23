@@ -273,12 +273,19 @@ impl WhisperAsr {
         // r239.1 — старый onefile r192 флага НЕ знает, ему не передаём). Главный рычаг скорости на GPU.
         let is_xxl = self.bin.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.to_ascii_lowercase().contains("xxl"));
         if is_xxl {
+            let mut has_batched = false;
             if let Some(args_str) = &self.xxl_args {
                 for arg in args_str.split_whitespace() {
                     if !arg.is_empty() {
+                        if arg == "--batched" {
+                            has_batched = true;
+                        }
                         cmd.arg(arg);
                     }
                 }
+            }
+            if self.device == "cuda" && !has_batched {
+                cmd.arg("--batched");
             }
         } else {
             // Для классического faster-whisper (не XXL) жестко включаем Silero VAD и защиту от зацикливания
@@ -387,6 +394,23 @@ impl AsrEngine for WhisperAsr {
         let l = lang.trim();
         if !l.is_empty() && l != "auto" {
             cmd.arg("--language").arg(l);
+        }
+        let is_xxl = self.bin.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.to_ascii_lowercase().contains("xxl"));
+        if is_xxl {
+            let mut has_batched = false;
+            if let Some(args_str) = &self.xxl_args {
+                for arg in args_str.split_whitespace() {
+                    if !arg.is_empty() {
+                        if arg == "--batched" {
+                            has_batched = true;
+                        }
+                        cmd.arg(arg);
+                    }
+                }
+            }
+            if self.device == "cuda" && !has_batched {
+                cmd.arg("--batched");
+            }
         }
         cmd.env("HF_HUB_OFFLINE", "1").env("TRANSFORMERS_OFFLINE", "1");
         if let Some(dir) = self.bin.parent() {
