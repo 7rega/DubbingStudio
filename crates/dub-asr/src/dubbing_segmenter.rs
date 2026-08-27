@@ -156,9 +156,7 @@ pub fn word_ends_clause(word: &str) -> bool {
 #[derive(Debug, Clone)]
 struct BoundaryCandidate {
     pub word_index: usize,
-    pub timestamp: f64,
     pub pause: f64,
-    pub duration_from_start: f64,
     pub ends_sentence: bool,
     pub ends_clause: bool,
     pub score: f64,
@@ -273,9 +271,7 @@ impl DubbingSegmenter {
 
         BoundaryCandidate {
             word_index: word_idx,
-            timestamp: curr.end,
             pause,
-            duration_from_start: dur,
             ends_sentence: ends_sent,
             ends_clause: ends_cl,
             score,
@@ -325,9 +321,7 @@ impl DubbingSegmenter {
                     chosen_end_idx = j;
                     best_boundary = Some(BoundaryCandidate {
                         word_index: j,
-                        timestamp: curr.end,
                         pause,
-                        duration_from_start: dur,
                         ends_sentence: word_ends_sentence(&curr.word),
                         ends_clause: word_ends_clause(&curr.word),
                         score: 100.0,
@@ -341,9 +335,7 @@ impl DubbingSegmenter {
                     chosen_end_idx = j;
                     best_boundary = Some(BoundaryCandidate {
                         word_index: j,
-                        timestamp: curr.end,
                         pause: 0.0,
-                        duration_from_start: dur,
                         ends_sentence: word_ends_sentence(&curr.word),
                         ends_clause: word_ends_clause(&curr.word),
                         score: 100.0,
@@ -360,9 +352,7 @@ impl DubbingSegmenter {
                     chosen_end_idx = j;
                     best_boundary = Some(BoundaryCandidate {
                         word_index: j,
-                        timestamp: curr.end,
                         pause,
-                        duration_from_start: dur,
                         ends_sentence: word_ends_sentence(&curr.word),
                         ends_clause: word_ends_clause(&curr.word),
                         score: 90.0,
@@ -457,9 +447,7 @@ impl DubbingSegmenter {
 
             let bound_info = best_boundary.unwrap_or_else(|| BoundaryCandidate {
                 word_index: chosen_end_idx,
-                timestamp: seg_end,
                 pause: 0.0,
-                duration_from_start: seg_dur,
                 ends_sentence: false,
                 ends_clause: false,
                 score: 0.0,
