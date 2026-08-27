@@ -20,8 +20,8 @@ pub use align::{
 };
 pub use dubbing_segmenter::{
     is_clause_punct, is_terminal_punct, word_ends_clause, word_ends_sentence, BoundaryDebugInfo,
-    DubbingSegmenter, SegmenterConfig, WordWithTimestamp, DEFAULT_HARD_DURATION,
-    DEFAULT_IDEAL_DURATION, DEFAULT_TARGET_DURATION,
+    DubbingSegment, DubbingSegmenter, SegmenterConfig, SpeakerTurn, WordWithTimestamp,
+    DEFAULT_HARD_DURATION, DEFAULT_IDEAL_DURATION, DEFAULT_TARGET_DURATION,
 };
 pub use reconcile::{speaker_for_overlap, DiarIndex};
 pub use speaker_global::{

@@ -767,8 +767,8 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
             .unwrap_or(false)
             || std::env::var("DUB_SEGMENTER").map(|v| v == "1" || v == "new").unwrap_or(false);
 
-        let segs: Vec<Segment> = if use_dubbing_segmenter {
-            emit(progress, "asr", "сегментация: DubbingSegmenter (хронометраж под TTS, без обрывов фраз)");
+        let (segs, nsp): (Vec<Segment>, usize) = if use_dubbing_segmenter {
+            emit(progress, "asr", "сегментация: DubbingSegmenter (строгие границы спикеров + хронометраж под TTS)");
             let mut all_words: Vec<dub_asr::WordWithTimestamp> = Vec::new();
             for s in &ts {
                 for w in &s.words {
@@ -785,17 +785,57 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
             let segmenter = dub_asr::DubbingSegmenter::new();
             let (new_segs, debug_infos) = segmenter.segment_with_debug(&all_words);
             let fallbacks = debug_infos.iter().filter(|d| d.is_fallback).count();
+            let spk_splits = debug_infos.iter().filter(|d| d.is_speaker_boundary).count();
             emit(
                 progress,
                 "asr",
                 &format!(
-                    "DubbingSegmenter: собрано {} реплик (fallback: {})",
+                    "DubbingSegmenter: собрано {} реплик (границ спикеров: {}, fallback: {})",
                     new_segs.len(),
+                    spk_splits,
                     fallbacks
                 ),
             );
 
-            new_segs
+            let project_segs: Vec<Segment> = new_segs
+                .into_iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let words: Vec<Value> = s
+                        .words
+                        .iter()
+                        .map(|w| json!({ "word": w.word, "start": w.start, "end": w.end }))
+                        .collect();
+                    let mut extra = serde_json::Map::new();
+                    extra.insert("words".into(), Value::Array(words));
+                    // Спикер берется напрямую из DubbingSegment (гарантия ONE DUBBING SEGMENT = ONE SPEAKER)
+                    let spk = s.speaker.unwrap_or_else(|| "0".to_string());
+                    Segment {
+                        id: format!("s{i}"),
+                        start: s.start,
+                        end: s.end,
+                        speaker: Some(spk),
+                        src_text: s.text,
+                        tgt_text: String::new(),
+                        voice: None,
+                        dirty: false,
+                        ckpt: None,
+                        extra,
+                    }
+                })
+                .collect();
+            let unique_spks: std::collections::HashSet<&str> = project_segs
+                .iter()
+                .filter_map(|s| s.speaker.as_deref())
+                .collect();
+            let num_spk = if !unique_spks.is_empty() {
+                unique_spks.len()
+            } else {
+                nsp
+            };
+            (project_segs, num_spk)
+        } else {
+            let s_list = ts
                 .into_iter()
                 .enumerate()
                 .map(|(i, s)| {
@@ -824,39 +864,9 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                         extra,
                     }
                 })
-                .collect()
-        } else {
-            ts.into_iter()
-                .enumerate()
-                .map(|(i, s)| {
-                    let words: Vec<Value> = s
-                        .words
-                        .iter()
-                        .map(|w| json!({ "word": w.word, "start": w.start, "end": w.end }))
-                        .collect();
-                    let mut extra = serde_json::Map::new();
-                    extra.insert("words".into(), Value::Array(words));
-                    let spk = if turns.is_empty() {
-                        "0".to_string()
-                    } else {
-                        speaker_for(s.start, s.end, turns)
-                    };
-                    Segment {
-                        id: format!("s{i}"),
-                        start: s.start,
-                        end: s.end,
-                        speaker: Some(spk),
-                        src_text: s.text,
-                        tgt_text: String::new(),
-                        voice: None,
-                        dirty: false,
-                        ckpt: None,
-                        extra,
-                    }
-                })
-                .collect()
+                .collect();
+            (s_list, nsp)
         };
-        (segs, nsp)
     };
 
     // Слияние коротких огрызков (#115): whisper режет «If they find you» на «If» + «they find you.» —

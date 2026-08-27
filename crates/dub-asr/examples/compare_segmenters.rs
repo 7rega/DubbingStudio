@@ -1,10 +1,10 @@
 //! Бенчмарк и сравнительный анализ: OLD pipeline (segment_words + merge_short_turns)
-//! против NEW (DubbingSegmenter).
+//! против NEW (DubbingSegmenter со строгими границами спикеров).
 //!
 //! Запуск: cargo run --example compare_segmenters -p dub-asr
 
 use dub_asr::{
-    is_terminal_punct, segment_words, word_ends_sentence, DubbingSegmenter, Segment, Word,
+    segment_words, word_ends_sentence, DubbingSegment, DubbingSegmenter, Segment, Word,
     WordWithTimestamp,
 };
 
@@ -13,8 +13,6 @@ fn run_old_pipeline(words: &[WordWithTimestamp]) -> Vec<Segment> {
     let raw_words: Vec<Word> = words.iter().cloned().map(Into::into).collect();
     let mut segs = segment_words(&raw_words, 0.6, 8.0);
 
-    // merge_short_turns из analyze.rs:
-    // GAP=0.35, OVERLAP=0.2, SHORT=1.6, MAX_DUR=12.0, MAX_CH=200
     if segs.len() < 2 {
         return segs;
     }
@@ -54,6 +52,8 @@ fn run_old_pipeline(words: &[WordWithTimestamp]) -> Vec<Segment> {
 pub struct PipelineMetrics {
     pub total_segments: usize,
     pub broken_phrases: usize,
+    pub multi_speaker_segments: usize,
+    pub speaker_boundary_splits: usize,
     pub avg_duration: f64,
     pub max_duration: f64,
     pub min_duration: f64,
@@ -63,12 +63,17 @@ pub struct PipelineMetrics {
     pub emergency_fallback_count: usize,
 }
 
-pub fn evaluate_segments(segs: &[Segment], fallback_count: usize) -> PipelineMetrics {
+pub fn evaluate_dubbing_segments(
+    segs: &[DubbingSegment],
+    fallback_count: usize,
+    spk_splits: usize,
+) -> PipelineMetrics {
     if segs.is_empty() {
         return PipelineMetrics::default();
     }
 
     let mut broken = 0usize;
+    let mut multi_spk = 0usize;
     let mut dur_sum = 0.0f64;
     let mut max_dur = 0.0f64;
     let mut min_dur = f64::MAX;
@@ -96,7 +101,12 @@ pub fn evaluate_segments(segs: &[Segment], fallback_count: usize) -> PipelineMet
             micro += 1;
         }
 
-        // Проверка: завершено ли предложение или это оборванный кусок (кроме последнего)
+        // Проверка: есть ли слова с другим спикером
+        let has_alien = s.words.iter().any(|w| w.speaker != s.speaker);
+        if has_alien {
+            multi_spk += 1;
+        }
+
         let is_last = i + 1 == segs.len();
         let ends_sent = word_ends_sentence(&s.text);
         if !ends_sent && !is_last {
@@ -107,6 +117,8 @@ pub fn evaluate_segments(segs: &[Segment], fallback_count: usize) -> PipelineMet
     PipelineMetrics {
         total_segments: segs.len(),
         broken_phrases: broken,
+        multi_speaker_segments: multi_spk,
+        speaker_boundary_splits: spk_splits,
         avg_duration: dur_sum / segs.len() as f64,
         max_duration: max_dur,
         min_duration: min_dur,
@@ -119,61 +131,40 @@ pub fn evaluate_segments(segs: &[Segment], fallback_count: usize) -> PipelineMet
 
 fn main() {
     println!("===============================================================================");
-    println!("         DUBBING STUDIO SEGMENTER BENCHMARK: OLD vs NEW (DubbingSegmenter)     ");
+    println!("     DUBBING STUDIO SEGMENTER BENCHMARK: SPEAKER BOUNDARIES & TTS TUNING       ");
     println!("===============================================================================");
 
     let segmenter = DubbingSegmenter::new();
 
-    // ── Тестовый корпус 1: Диалог с естественными паузами на вдох (0.65–0.8с) ──
-    let mut dialogue_words = Vec::new();
-    let mut t = 0.0f64;
-    let sentences = vec![
-        ("We went to the local grocery store and", 6, 0.45, 0.70), // вдох 0.70с -> старый ASR режет!
-        ("bought some delicious fresh apples.", 5, 0.50, 1.20),
-        ("It was really surprising how cheap everything was today,", 8, 0.45, 0.65), // пауза 0.65с -> старый ASR режет!
-        ("especially considering the current market prices.", 6, 0.50, 1.50),
-        ("Do you think we should go back tomorrow morning?", 9, 0.40, 1.80),
-        ("Yes, absolutely, I would love to grab more fresh bread.", 10, 0.42, 2.00),
+    // ── ТЕСТОВЫЙ КОРПУС 1: Диалог нескольких спикеров (A -> B -> A) ──
+    let dialogue_words = vec![
+        WordWithTimestamp::new("Hello,", 0.0, 0.4).with_speaker("A"),
+        WordWithTimestamp::new("I", 0.5, 0.7).with_speaker("A"),
+        WordWithTimestamp::new("wanted", 0.8, 1.2).with_speaker("A"),
+        WordWithTimestamp::new("to", 1.3, 1.4).with_speaker("A"),
+        WordWithTimestamp::new("tell", 1.5, 1.8).with_speaker("A"),
+        WordWithTimestamp::new("you", 1.9, 2.1).with_speaker("A"),
+        WordWithTimestamp::new("something.", 2.2, 3.0).with_speaker("A"),
+        WordWithTimestamp::new("What?", 3.2, 3.8).with_speaker("B"),
+        WordWithTimestamp::new("It's", 4.0, 4.3).with_speaker("A"),
+        WordWithTimestamp::new("about", 4.4, 4.8).with_speaker("A"),
+        WordWithTimestamp::new("yesterday.", 4.9, 5.8).with_speaker("A"),
     ];
-
-    for (text, word_count, word_dur, end_pause) in sentences {
-        let parts: Vec<&str> = text.split_whitespace().collect();
-        for (i, p) in parts.iter().enumerate() {
-            let st = t;
-            let en = st + word_dur;
-            dialogue_words.push(WordWithTimestamp::new(*p, st, en));
-            t = en;
-            if i + 1 == parts.len() {
-                t += end_pause;
-            } else {
-                t += 0.04;
-            }
-        }
-    }
 
     let old_segs = run_old_pipeline(&dialogue_words);
     let (new_segs, debug) = segmenter.segment_with_debug(&dialogue_words);
     let fallbacks = debug.iter().filter(|d| d.is_fallback).count();
+    let spk_splits = debug.iter().filter(|d| d.is_speaker_boundary).count();
 
-    let old_m = evaluate_segments(&old_segs, 0);
-    let new_m = evaluate_segments(&new_segs, fallbacks);
+    let new_m = evaluate_dubbing_segments(&new_segs, fallbacks, spk_splits);
 
-    println!("\n[ТЕСТ 1: Естественный диалог с паузами на вдох]");
-    println!("  OLD pipeline -> Сегментов: {}, Оборванных фраз: {}, Средняя длит: {:.2}с, Макс: {:.2}с",
-        old_m.total_segments, old_m.broken_phrases, old_m.avg_duration, old_m.max_duration);
-    println!("  NEW Segmenter -> Сегментов: {}, Оборванных фраз: {}, Средняя длит: {:.2}с, Макс: {:.2}с",
-        new_m.total_segments, new_m.broken_phrases, new_m.avg_duration, new_m.max_duration);
+    println!("\n[ТЕСТ 1: Диалог A -> B -> A]");
+    println!("  OLD pipeline -> Сегментов: {} (старый pipeline не учитывал границы диаризации на уровне слов)", old_segs.len());
+    println!("  NEW Segmenter -> Сегментов: {}, Сегментов с >1 спикером: {} (0 гарантировано!)", new_m.total_segments, new_m.multi_speaker_segments);
+    println!("  Границ спикеров зафиксировано: {}, Fallbacks: {}", new_m.speaker_boundary_splits, new_m.emergency_fallback_count);
 
-    println!("\n  Примеры OLD:");
-    for (i, s) in old_segs.iter().enumerate() {
-        println!("    [{:.1}s - {:.1}s] ({:.2}s) \"{}\"", s.start, s.end, s.end - s.start, s.text);
-    }
-    println!("\n  Примеры NEW:");
+    println!("\n  Сегменты NEW:");
     for (i, s) in new_segs.iter().enumerate() {
-        println!("    [{:.1}s - {:.1}s] ({:.2}s) \"{}\"", s.start, s.end, s.end - s.start, s.text);
+        println!("    [{}] [Spk: {:?}] [{:.1}s - {:.1}s] ({:.2}s) \"{}\"", i, s.speaker, s.start, s.end, s.end - s.start, s.text);
     }
-
-    println!("\n===============================================================================");
-    println!("                         ИТОГОВЫЙ СРАВНИТЕЛЬНЫЙ АНАЛИЗ                         ");
-    println!("===============================================================================");
 }
