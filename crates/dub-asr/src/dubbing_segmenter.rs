@@ -409,7 +409,6 @@ impl DubbingSegmenter {
                     best_boundary = Some(BoundaryCandidate {
                         word_index: j,
                         pause,
-                        duration_from_start: dur,
                         ends_sentence: word_ends_sentence(&curr.word),
                         ends_clause: word_ends_clause(&curr.word),
                         score: 90.0,
