@@ -1203,11 +1203,11 @@ fn build_dub(
             let alt = alt_refs.get(&spk_key);
             let tgt_chars = tgt.chars().filter(|c| c.is_alphanumeric()).count();
             // КАП ТОКЕНОВ ПО ДЛИТЕЛЬНОСТИ (ENGINES_FINDINGS §1.1, issue #151): в движке НЕТ авто-капа —
-            // без него короткая фраза может уйти в 40с гула до max_new_tokens=2048. Кодек 25-75 ток/с
-            // (версии разнятся) — берём консервативные 75: cap = ceil(dur×75×1.5)+32, floor 64.
+            // без него короткая фраза может уйти в 40с гула до max_tokens=768. Кодек 25-75 ток/с
+            // (версии разнятся) — берём консервативные 75: cap = ceil(dur×75×1.5)+32, floor 128.
             // Таргет-длительность = длительность оригинальной реплики (у дубля тот же слот).
             let expected_dur = (s.end - s.start).max(0.6);
-            let tok_cap: u32 = (((expected_dur * 75.0 * 1.5).ceil() as u32) + 32).clamp(64, 2048);
+            let tok_cap: u32 = (((expected_dur * 75.0 * 1.5).ceil() as u32) + 32).clamp(128, 768);
             
             // Динамическая адаптация темпа (Speech Rate): если текст плотный (>14 знаков/сек), понижаем
             // температуру и зажимаем повторы, выговаривая текст собранно; если редкий — повышаем.
@@ -1244,18 +1244,18 @@ fn build_dub(
                 let seed = spk_seed_base + attempt as u64;
                 let opts = match attempt {
                     0 | 3 => format!(
-                        "{{\"temperature\":{base_temp:.2},\"top_p\":0.95,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7{base_ras_rep},\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
+                        "{{\"temperature\":{base_temp:.2},\"top_p\":0.95,\"top_k\":50,\"max_tokens\":{tok_cap},\"ras_win_len\":7{base_ras_rep},\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
                     ),
                     1 => format!(
-                        "{{\"temperature\":{:.2},\"top_p\":0.95,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                        "{{\"temperature\":{:.2},\"top_p\":0.95,\"top_k\":50,\"max_tokens\":{tok_cap},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
                         (base_temp * 0.85).clamp(0.08, 0.35)
                     ),
                     2 => format!(
-                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50,\"max_tokens\":{tok_cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
                         (base_temp * 0.65).clamp(0.08, 0.25)
                     ),
                     _ => format!(
-                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50,\"max_tokens\":{tok_cap},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
                         (base_temp * 0.75).clamp(0.08, 0.30)
                     ),
                 };
@@ -1400,13 +1400,13 @@ fn build_dub(
                 // Multi-take обязан наследовать индивидуальный голос/донор сегмента (ref_wav / ref_text)
                 let ref_wav_mt = ref_wav.clone();
                 let ref_text_mt = ref_text.clone();
-                let tok_cap: u32 = ((((s.end - s.start).max(0.6) * 75.0 * 1.5).ceil() as u32) + 32).clamp(64, 2048);
+                let tok_cap: u32 = ((((s.end - s.start).max(0.6) * 75.0 * 1.5).ceil() as u32) + 32).clamp(128, 768);
                 for take_i in 1..=2u64 {
                     let take_path = wd.join(format!("seg_{sid}_take{take_i}.wav"));
                     let seed = spk_seed_base + take_i * 100 + 77;
                     let temp = if take_i == 1 { (user_voice_temp * 0.90).clamp(0.08, 0.40) } else { (user_voice_temp * 1.15).clamp(0.10, 0.45) };
                     let opts = format!(
-                        "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50,\"max_new_tokens\":{tok_cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
+                        "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50,\"max_tokens\":{tok_cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
                     );
                     let rt_mt = ref_text_mt.as_deref();
                     let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(45));
@@ -1572,8 +1572,8 @@ fn build_dub(
                 // до 3 свежих попыток (низкая temperature по ENGINES_FINDINGS §1.3 + кап токенов §1.1):
                 // альт-реф 0.3 → альт-реф 0.15+RAS1 → основной 0.10 с новым seed
                 let e_dur = (s.end - s.start).max(0.6);
-                let cap: u32 = (((e_dur * 75.0 * 1.5).ceil() as u32) + 32).clamp(64, 2048);
-                let base = format!("\"top_k\":50,\"max_new_tokens\":{cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true");
+                let cap: u32 = (((e_dur * 75.0 * 1.5).ceil() as u32) + 32).clamp(128, 768);
+                let base = format!("\"top_k\":50,\"max_tokens\":{cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true");
                 let mut fixed = false;
                 for (k, (rw, rt, opts)) in {
                     let mut plan: Vec<(&PathBuf, Option<&str>, String)> = Vec::new();
