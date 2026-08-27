@@ -345,10 +345,12 @@ impl Asr {
                             let mut ws: Vec<Word> = r
                                 .tokens
                                 .into_iter()
-                                .map(|t| Word {
-                                    word: t.text.trim().to_string(),
-                                    start: end_abs(t.start as f64) + off,
-                                    end: (t.end as f64).max(t.start as f64) + off,
+                                .map(|t| {
+                                    Word::new(
+                                        t.text.trim(),
+                                        end_abs(t.start as f64) + off,
+                                        (t.end as f64).max(t.start as f64) + off,
+                                    )
                                 })
                                 .filter(|w| !w.word.is_empty())
                                 .collect();
@@ -402,7 +404,7 @@ impl Asr {
                 if end <= start {
                     end = audio_end.max(start);
                 }
-                Some(Word { word: word.to_string(), start, end })
+                Some(Word::new(word, start, end))
             })
             .collect())
     }
@@ -822,7 +824,7 @@ mod dedup_tests {
     use super::*;
 
     fn w(word: &str, start: f64, end: f64) -> Word {
-        Word { word: word.into(), start, end }
+        Word::new(word, start, end)
     }
 
     #[test]

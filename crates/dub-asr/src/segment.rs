@@ -1,7 +1,7 @@
 //! Сегментация словного потока в реплики дубляжа. Порт _segment из dubengine/asr.py:
 //! разрыв на паузах > max_gap, конце предложения (.!?…) или превышении max_dur.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Дефолтные параметры сегментации: разрыв на паузе > SEG_MAX_GAP сек (вдох до 0.8с) и
 /// безопасные диапазоны длины для TTS (зелёная зона до 12.0с, жёсткий потолок 15.0с).
@@ -10,11 +10,29 @@ pub const SEG_IDEAL_DUR: f64 = 12.0;
 pub const SEG_MAX_DUR: f64 = 15.0;
 
 /// Слово со временем (секунды).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Word {
     pub word: String,
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
+    pub is_asr_boundary: bool,
+}
+
+impl Word {
+    pub fn new(word: impl Into<String>, start: f64, end: f64) -> Self {
+        Self {
+            word: word.into(),
+            start,
+            end,
+            is_asr_boundary: false,
+        }
+    }
+
+    pub fn with_boundary(mut self, is_boundary: bool) -> Self {
+        self.is_asr_boundary = is_boundary;
+        self
+    }
 }
 
 /// Сегмент дубляжа: [start,end] + текст + список слов. Тот же контракт, что в Python-движке.
@@ -84,8 +102,9 @@ pub fn segment_words(words: &[Word], max_gap: f64, max_dur: f64) -> Vec<Segment>
             // 1. Пауза больше допустимого (напр. >0.8с)
             let is_long_pause = gap > max_gap;
 
-            // 2. Жёлтая зона (12–15с): мягкий разрыв на запятой или паузе >=0.35с
-            let is_soft_split = dur >= SEG_IDEAL_DUR && (ends_clause(&last.word) || gap >= 0.35);
+            // 2. Жёлтая зона (12–15с): мягкий разрыв на границе Whisper/VAD, запятой или паузе >=0.35с
+            let is_soft_split = dur >= SEG_IDEAL_DUR
+                && (last.is_asr_boundary || ends_clause(&last.word) || gap >= 0.35);
 
             // 3. Жёсткий лимит (>15с)
             let is_hard_limit = dur >= max_dur;
@@ -173,5 +192,24 @@ mod tests {
         let segs = segment_words(&words, 0.8, 15.0);
         assert!(segs.len() >= 2);
         assert!(segs[0].text.ends_with("here,"));
+    }
+
+    #[test]
+    fn yellow_zone_splits_on_asr_boundary() {
+        // Фраза >12.0с без пунктуации, но на 12.5с граница сегмента Whisper/VAD -> делится по границе Whisper
+        let mut words = Vec::new();
+        for i in 0..20 {
+            let mut word = w("word", i as f64 * 0.65, i as f64 * 0.65 + 0.60);
+            if i == 19 {
+                word = word.with_boundary(true);
+            }
+            words.push(word);
+        }
+        for i in 0..5 {
+            words.push(w("continuation", 13.5 + i as f64 * 0.5, 13.5 + i as f64 * 0.5 + 0.45));
+        }
+        let segs = segment_words(&words, 0.8, 15.0);
+        assert!(segs.len() >= 2);
+        assert_eq!(segs[0].words.len(), 20);
     }
 }

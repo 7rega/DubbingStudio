@@ -516,7 +516,8 @@ fn parse_whisper_json(txt: &str) -> Vec<Word> {
         let ws = seg.get("words").and_then(|w| w.as_array());
         match ws {
             Some(arr) if !arr.is_empty() => {
-                for w in arr {
+                let count = arr.len();
+                for (idx, w) in arr.iter().enumerate() {
                     let word = w
                         .get("word")
                         .or_else(|| w.get("text"))
@@ -529,7 +530,8 @@ fn parse_whisper_json(txt: &str) -> Vec<Word> {
                     }
                     let start = w.get("start").and_then(|x| x.as_f64()).unwrap_or(0.0);
                     let end = w.get("end").and_then(|x| x.as_f64()).unwrap_or(start);
-                    words.push(Word { word, start, end: end.max(start) });
+                    let is_last = idx + 1 == count;
+                    words.push(Word::new(word, start, end.max(start)).with_boundary(is_last));
                 }
             }
             _ => {
@@ -538,7 +540,7 @@ fn parse_whisper_json(txt: &str) -> Vec<Word> {
                 if !word.is_empty() {
                     let start = seg.get("start").and_then(|x| x.as_f64()).unwrap_or(0.0);
                     let end = seg.get("end").and_then(|x| x.as_f64()).unwrap_or(start);
-                    words.push(Word { word, start, end: end.max(start) });
+                    words.push(Word::new(word, start, end.max(start)).with_boundary(true));
                 }
             }
         }
@@ -560,7 +562,9 @@ mod tests {
         let ws = parse_whisper_json(j);
         assert_eq!(ws.len(), 2);
         assert_eq!(ws[0].word, "Hello");
+        assert!(!ws[0].is_asr_boundary);
         assert_eq!(ws[1].word, "world.");
+        assert!(ws[1].is_asr_boundary);
         assert!((ws[1].end - 0.8).abs() < 1e-6);
     }
 
