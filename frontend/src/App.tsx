@@ -653,7 +653,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [emoRefOn, setEmoRefOn] = useState(true);
   const [voLeadIn, setVoLeadIn] = useState(true);
   const [dubReverbMatch, setDubReverbMatch] = useState(true);
-  const [dubbingSegmenter, setDubbingSegmenter] = useState(false);
+  const [segmenterMode, setSegmenterMode] = useState<"classic" | "natural">("classic");
   useEffect(() => {
     api.capabilities().then((c) => {
       setBench(c.selection?.bench === "1");
@@ -665,7 +665,8 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       setEmoRefOn(c.selection?.emo_ref_on !== "0");
       setVoLeadIn(c.selection?.vo_lead_in !== "0");
       setDubReverbMatch(c.selection?.dub_reverb_match !== "0");
-      setDubbingSegmenter(c.selection?.dubbing_segmenter === "1");
+      const isNat = c.selection?.segmenter_mode === "natural" || c.selection?.dubbing_segmenter === "1";
+      setSegmenterMode(isNat ? "natural" : "classic");
     }).catch(() => {});
   }, []);
   return (
@@ -722,18 +723,35 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${qcAsr ? "left-[18px]" : "left-0.5"}`} />
               </button>
             </label>
-            {/* Сегментация для дубляжа (DubbingSegmenter) */}
-            <label className="flex items-center justify-between gap-3 mb-2.5" title="Экспериментальный сегментатор: собирает цельные законченные фразы (до 12.5–14с) без обрывов на вдохах и 8-секундных отсечках">
+            {/* Режим сегментации реплик (Classic / Natural) */}
+            <label className="flex items-center justify-between gap-3 mb-2.5" title="Classic: стандартные реплики до 8 сек. Natural: цельные фразы до 12.5–14 сек для естественной озвучки Higgs TTS без обрывов на вдохах">
               <div className="min-w-0 flex-1">
-                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
+                <div className="flex items-center gap-2">
                   <Layers size={14} className="text-[var(--color-accent-2)]" />
-                  Сегментатор для дубляжа (DubbingSegmenter)
+                  <span className="text-[13px] text-[var(--color-text)] font-medium">
+                    Сегментация реплик:
+                  </span>
+                  <span className={`text-[11px] px-1.5 py-0.5 rounded font-semibold ${segmenterMode === "natural" ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]" : "bg-[var(--color-surface-2)] text-[var(--color-muted)]"}`}>
+                    {segmenterMode === "natural" ? "Natural / Dubbing" : "Classic (8s)"}
+                  </span>
+                </div>
+                <span className="block text-[10px] text-[var(--color-muted)]">
+                  {segmenterMode === "natural"
+                    ? "цельные фразы (до 12.5–14с) для озвучки Higgs v3 без обрывов"
+                    : "классический режим (жесткая отсечка на 8 сек)"}
                 </span>
-                <span className="block text-[10px] text-[var(--color-muted)]">цельные фразы для озвучки Higgs v3 (без обрывов на вдохах)</span>
               </div>
-              <button onClick={() => { const v = !dubbingSegmenter; setDubbingSegmenter(v); api.setSelection("dubbing_segmenter", v ? "1" : "0").catch(() => {}); }} title="Сегментатор для дубляжа"
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${dubbingSegmenter ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${dubbingSegmenter ? "left-[18px]" : "left-0.5"}`} />
+              <button
+                onClick={() => {
+                  const next = segmenterMode === "natural" ? "classic" : "natural";
+                  setSegmenterMode(next);
+                  api.setSelection("segmenter_mode", next).catch(() => {});
+                  api.setSelection("dubbing_segmenter", next === "natural" ? "1" : "0").catch(() => {});
+                }}
+                title={`Режим сегментации: ${segmenterMode === "natural" ? "Natural" : "Classic"}`}
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${segmenterMode === "natural" ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${segmenterMode === "natural" ? "left-[18px]" : "left-0.5"}`} />
               </button>
             </label>
             {/* Контроль длительности фраз */}

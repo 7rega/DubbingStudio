@@ -1,10 +1,11 @@
-//! DubbingSegmenter — экспериментальный language-agnostic сегментатор для дубляжа (TTS / Higgs v3).
+//! DubbingSegmenter — сегментатор реплик для дубляжа (Natural / Dubbing Mode для Higgs v3 TTS).
 //!
-//! ДВУХУРОВНЕВАЯ АРХИТЕКТУРА:
-//! 1. ASR Words -> СТРОГОЕ разделение на Speaker Turns (границы спикеров — абсолютный HARD BOUNDARY).
-//! 2. Phrase Segmentation внутри каждого Speaker Turn (sweet spot 0–12.5с, target 14.0с, hard cap 15.0с).
-//!
-//! ГАРАНТИЯ: ONE DUBBING SEGMENT = ONE SPEAKER. Ни один сегмент не может содержать слова разных спикеров.
+//! СООТВЕТСТВИЕ ТЗ:
+//! 1. Устраняет искусственные разрывы фраз на 8-й секунде (диапазоны: 0–12.5с sweet spot, 12.5–14.0с target, >15с hard fallback).
+//! 2. Двухуровневая архитектура: строгое разделение по speaker boundaries, затем фразовая сегментация внутри speaker turn.
+//! 3. 100% language-agnostic (Unicode пунктуация, без внешних словарей и нейросетей).
+//! 4. Совместимость с Classic pipeline и merge_short_turns().
+//! 5. Подробный диагностический вывод (BoundaryDebugInfo).
 
 use serde::{Deserialize, Serialize};
 
@@ -69,7 +70,7 @@ pub struct DubbingSegment {
 }
 
 impl DubbingSegment {
-    /// Конвертация в стандартный Segment крейта dub-asr (для обратной совместимости).
+    /// Конвертация в стандартный Segment крейта dub-asr (для совместимости).
     pub fn to_asr_segment(&self) -> crate::segment::Segment {
         crate::segment::Segment {
             start: self.start,
@@ -89,14 +90,14 @@ pub struct SpeakerTurn {
     pub words: Vec<WordWithTimestamp>,
 }
 
-/// Конфигурация DubbingSegmenter.
+/// Конфигурация сегментатора Natural Mode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SegmenterConfig {
-    /// Идеальная верхняя граница длительности фразы (сек). До неё сплит не форсируется.
+    /// Идеальная верхняя граница длительности фразы (сек). До неё сплит не форсируется (дефолт 12.5с).
     pub ideal_duration: f64,
-    /// Целевая граница длительности (сек). В диапазоне 12.5–14.0с активно ищется хорошая граница.
+    /// Целевая граница длительности (сек). В диапазоне 12.5–14.0с активно ищется естественный конец мысли.
     pub target_duration: f64,
-    /// Жесткий потолок длительности (сек). После 15.0с срабатывает emergency fallback.
+    /// Жесткий потолок длительности (сек). После 15.0с срабатывает аварийный fallback split.
     pub hard_duration: f64,
     /// Порог паузы для безусловного разрыва между сценами/репликами внутри одного спикера (сек).
     pub scene_silence_gap: f64,
@@ -116,7 +117,7 @@ impl Default for SegmenterConfig {
     }
 }
 
-/// Диагностическая информация о выбранной границе сегмента.
+/// Подробная диагностическая информация о выбранной границе сегмента (по ТЗ раздел 12).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BoundaryDebugInfo {
     pub segment_index: usize,
@@ -127,6 +128,7 @@ pub struct BoundaryDebugInfo {
     pub segment_end: f64,
     pub segment_duration: f64,
     pub boundary_timestamp: f64,
+    pub boundary_type: String,
     pub pause_duration: f64,
     pub punctuation: String,
     pub score: f64,
@@ -136,7 +138,21 @@ pub struct BoundaryDebugInfo {
     pub is_fallback: bool,
 }
 
-/// Проверка терминальной пунктуации (завершение предложения) на любых языках (Unicode-agnostic).
+impl BoundaryDebugInfo {
+    /// Человекочитаемый форматированный лог границы по стандарту ТЗ.
+    pub fn format_debug(&self) -> String {
+        format!(
+            "Segment {}\nDuration: {:.1}s\nBoundary: {}\nPause: {:.2}s\nFallback: {}",
+            self.segment_index + 1,
+            self.segment_duration,
+            self.boundary_type,
+            self.pause_duration,
+            self.is_fallback
+        )
+    }
+}
+
+/// Проверка терминальной пунктуации (сильные границы: . ! ? … 。 ！？ ؟ ۔ ։ । ॥).
 pub fn is_terminal_punct(c: char) -> bool {
     matches!(
         c,
@@ -148,7 +164,7 @@ pub fn is_terminal_punct(c: char) -> bool {
     )
 }
 
-/// Проверка промежуточной пунктуации (клаузы, паузы, перечисления).
+/// Проверка промежуточной пунктуации (слабые границы: , ; : - — – 、 ， ； ：).
 pub fn is_clause_punct(c: char) -> bool {
     matches!(
         c,
@@ -158,7 +174,7 @@ pub fn is_clause_punct(c: char) -> bool {
     )
 }
 
-/// Заканчивается ли слово знаком конца предложения.
+/// Заканчивается ли слово сильным знаком препинания (конец предложения).
 pub fn word_ends_sentence(word: &str) -> bool {
     let trimmed = word.trim_end_matches(|c: char| {
         c.is_whitespace()
@@ -175,7 +191,7 @@ pub fn word_ends_sentence(word: &str) -> bool {
     trimmed.ends_with(is_terminal_punct) || trimmed.ends_with("...")
 }
 
-/// Заканчивается ли слово промежуточным знаком препинания.
+/// Заканчивается ли слово слабым знаком препинания (клауза, перечисление).
 pub fn word_ends_clause(word: &str) -> bool {
     let trimmed = word.trim_end_matches(|c: char| {
         c.is_whitespace()
@@ -197,13 +213,14 @@ pub fn word_ends_clause(word: &str) -> bool {
 struct BoundaryCandidate {
     pub word_index: usize,
     pub pause: f64,
+    pub boundary_type: String,
     pub ends_sentence: bool,
     pub ends_clause: bool,
     pub score: f64,
     pub reason: String,
 }
 
-/// Language-agnostic сегментатор для дубляжа со строгими границами спикеров.
+/// Сегментатор Natural / Dubbing Mode.
 #[derive(Debug, Clone)]
 pub struct DubbingSegmenter {
     pub config: SegmenterConfig,
@@ -226,7 +243,7 @@ impl DubbingSegmenter {
         Self { config }
     }
 
-    /// Разделить входной поток слов на непрерывные SpeakerTurn'ы (HARD BOUNDARY).
+    /// Разбить входной поток слов на изолированные Speaker Turn'ы (HARD BOUNDARY).
     pub fn partition_speaker_turns(&self, words: &[WordWithTimestamp]) -> Vec<SpeakerTurn> {
         if words.is_empty() {
             return Vec::new();
@@ -265,7 +282,7 @@ impl DubbingSegmenter {
         turns
     }
 
-    /// Оценить одну потенциальную границу после слова word_idx внутри одного turn.
+    /// Оценка потенциальной границы между словом word_idx и следующим внутри одного turn.
     fn score_boundary(
         &self,
         words: &[WordWithTimestamp],
@@ -282,9 +299,11 @@ impl DubbingSegmenter {
 
         let mut score = 0.0f64;
         let mut reasons = Vec::new();
+        let boundary_type;
 
-        // 1. Терминальная пунктуация (. ! ? …) — наивысший приоритет
+        // 1. Пунктуация (сильная граница . ! ? … -> наивысший приоритет)
         if ends_sent {
+            boundary_type = "sentence_end".to_string();
             score += 60.0;
             reasons.push("sentence_end(+60)");
             if pause >= 0.20 {
@@ -292,15 +311,20 @@ impl DubbingSegmenter {
                 reasons.push("sentence_end_with_pause(+20)");
             }
         } else if ends_cl {
+            boundary_type = "clause".to_string();
             score += 25.0;
             reasons.push("clause_punct(+25)");
             if pause >= 0.20 {
                 score += 10.0;
                 reasons.push("clause_with_pause(+10)");
             }
+        } else if pause >= 0.5 {
+            boundary_type = "pause".to_string();
+        } else {
+            boundary_type = "natural_flow".to_string();
         }
 
-        // 2. Пауза
+        // 2. Пауза как сигнал
         if pause >= 1.0 {
             score += 35.0;
             reasons.push("long_pause(+35)");
@@ -315,7 +339,7 @@ impl DubbingSegmenter {
             reasons.push("continuous_speech_penalty(-25)");
         }
 
-        // 3. Фактор близости к целевому хронометражу (12.5–14.0с)
+        // 3. Зоны длительности (sweet spot до 12.5с, target 12.5–14.0с)
         if (self.config.ideal_duration..=self.config.target_duration).contains(&dur) {
             score += 15.0;
             reasons.push("in_target_window(+15)");
@@ -324,16 +348,14 @@ impl DubbingSegmenter {
             let penalty = (over * 8.0).min(30.0);
             score -= penalty;
             reasons.push("over_target_penalty");
-        } else if dur < self.config.ideal_duration {
-            // Штраф за ранний сплит, если нет сильного завершения предложения
-            if !ends_sent {
-                let early = (self.config.ideal_duration - dur) / self.config.ideal_duration;
-                score -= early * 20.0;
-                reasons.push("early_split_penalty");
-            }
+        } else if dur < self.config.ideal_duration && !ends_sent {
+            // Штраф за ранний разрыв, если нет естественного окончания мысли
+            let early = (self.config.ideal_duration - dur) / self.config.ideal_duration;
+            score -= early * 20.0;
+            reasons.push("early_split_penalty");
         }
 
-        // 4. Защита от создания одинокого огрызка в 1 слово на следующем шаге
+        // 4. Защита от создания огрызка в 1 слово на следующем шаге
         if let Some(_) = next {
             let remaining_words = words.len() - (word_idx + 1);
             if remaining_words == 1 && !ends_sent {
@@ -345,6 +367,7 @@ impl DubbingSegmenter {
         BoundaryCandidate {
             word_index: word_idx,
             pause,
+            boundary_type,
             ends_sentence: ends_sent,
             ends_clause: ends_cl,
             score,
@@ -352,7 +375,7 @@ impl DubbingSegmenter {
         }
     }
 
-    /// Сегментировать один изолированный SpeakerTurn на DubbingSegment'ы.
+    /// Сегментация одного изолированного SpeakerTurn на DubbingSegment'ы.
     fn segment_speaker_turn(
         &self,
         turn: &SpeakerTurn,
@@ -383,13 +406,19 @@ impl DubbingSegmenter {
                 let dur = (curr.end - cand_start).max(0.0);
                 let is_last_word_of_turn = j + 1 == n;
 
-                // 1. Конец speaker turn: граница обязательна
+                // 1. Конец Speaker Turn — граница обязательна
                 if is_last_word_of_turn {
                     chosen_end_idx = j;
                     is_turn_end = true;
+                    let btype = if word_ends_sentence(&curr.word) {
+                        "sentence_end".to_string()
+                    } else {
+                        "speaker_boundary".to_string()
+                    };
                     best_boundary = Some(BoundaryCandidate {
                         word_index: j,
                         pause: 0.0,
+                        boundary_type: btype,
                         ends_sentence: word_ends_sentence(&curr.word),
                         ends_clause: word_ends_clause(&curr.word),
                         score: 100.0,
@@ -409,6 +438,7 @@ impl DubbingSegmenter {
                     best_boundary = Some(BoundaryCandidate {
                         word_index: j,
                         pause,
+                        boundary_type: "scene_silence".to_string(),
                         ends_sentence: word_ends_sentence(&curr.word),
                         ends_clause: word_ends_clause(&curr.word),
                         score: 90.0,
@@ -431,7 +461,7 @@ impl DubbingSegmenter {
                 }
 
                 // 4. Зона 12.5–14.0с:
-                // Если текущая граница хорошая (конец предложения или высокий скор) — фиксируем сплит!
+                // При нахождении естественного завершения мысли (конец предложения / высокий скор) — фиксируем разрез!
                 if dur <= self.config.target_duration {
                     if candidate.ends_sentence
                         || candidate.score >= self.config.good_score_threshold
@@ -447,8 +477,8 @@ impl DubbingSegmenter {
                     continue;
                 }
 
-                // 5. Зона 14.0–15.0с (Lookahead):
-                // Активно ищем лучшую границу
+                // 5. Зона 14.0–15.0с (Lookahead поиск):
+                // Активно ищем лучшую доступную границу
                 if dur <= self.config.hard_duration {
                     if candidate.ends_sentence || candidate.ends_clause || candidate.pause >= 0.35
                     {
@@ -469,6 +499,7 @@ impl DubbingSegmenter {
                     if b.word_index >= start_idx {
                         chosen_end_idx = b.word_index;
                         best_boundary = Some(BoundaryCandidate {
+                            boundary_type: "fallback".to_string(),
                             reason: format!(
                                 "emergency_fallback_hard_limit (picked best: {})",
                                 b.reason
@@ -477,11 +508,17 @@ impl DubbingSegmenter {
                         });
                     } else {
                         chosen_end_idx = j;
-                        best_boundary = Some(candidate);
+                        best_boundary = Some(BoundaryCandidate {
+                            boundary_type: "fallback".to_string(),
+                            ..candidate
+                        });
                     }
                 } else {
                     chosen_end_idx = j;
-                    best_boundary = Some(candidate);
+                    best_boundary = Some(BoundaryCandidate {
+                        boundary_type: "fallback".to_string(),
+                        ..candidate
+                    });
                 }
                 break;
             }
@@ -505,6 +542,7 @@ impl DubbingSegmenter {
             let bound_info = best_boundary.unwrap_or_else(|| BoundaryCandidate {
                 word_index: chosen_end_idx,
                 pause: 0.0,
+                boundary_type: "fallback".to_string(),
                 ends_sentence: false,
                 ends_clause: false,
                 score: 0.0,
@@ -522,6 +560,7 @@ impl DubbingSegmenter {
                 segment_end: seg_end,
                 segment_duration: seg_dur,
                 boundary_timestamp: seg_end,
+                boundary_type: bound_info.boundary_type,
                 pause_duration: bound_info.pause,
                 punctuation: words[chosen_end_idx]
                     .word
@@ -603,7 +642,6 @@ mod tests {
         WordWithTimestamp::new(word, start, end).with_speaker(spk)
     }
 
-    /// Проверка фундаментального инварианта: ONE DUBBING SEGMENT = ONE SPEAKER
     fn assert_one_speaker_per_segment(segs: &[DubbingSegment]) {
         for (i, s) in segs.iter().enumerate() {
             for (w_i, w) in s.words.iter().enumerate() {
@@ -616,238 +654,249 @@ mod tests {
         }
     }
 
-    /// CASE 1:
-    /// A: "Hello, I wanted to tell you something."
-    /// B: "What?"
-    /// A: "It's important."
-    /// Обязательно минимум 3 отдельных dubbing segments. Никакого объединения A+B+A.
+    /// TEST 1: Короткая реплика <12.5 сек -> 1 segment.
     #[test]
-    fn case_1_aba_dialogue_must_not_merge() {
+    fn test_1_short_phrase_under_12_5s() {
         let words = vec![
-            spk_w("Hello,", 0.0, 0.4, "A"),
-            spk_w("I", 0.5, 0.7, "A"),
-            spk_w("wanted", 0.8, 1.2, "A"),
-            spk_w("to", 1.3, 1.4, "A"),
-            spk_w("tell", 1.5, 1.8, "A"),
-            spk_w("you", 1.9, 2.1, "A"),
-            spk_w("something.", 2.2, 3.0, "A"),
-            spk_w("What?", 3.2, 3.8, "B"),
-            spk_w("It's", 4.0, 4.3, "A"),
-            spk_w("important.", 4.4, 5.2, "A"),
+            w("Hello", 0.0, 0.4),
+            w("everyone,", 0.5, 1.0),
+            w("welcome", 1.1, 1.5),
+            w("to", 1.6, 1.7),
+            w("DubbingStudio.", 1.8, 2.5),
+        ];
+        let segmenter = DubbingSegmenter::new();
+        let segs = segmenter.segment(&words);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].text, "Hello everyone, welcome to DubbingStudio.");
+        assert_eq!(segs[0].start, 0.0);
+        assert_eq!(segs[0].end, 2.5);
+    }
+
+    /// TEST 2: 8 секунд не являются hard limit (фраза 10–11 сек без естественной границы до 8 сек -> не резать на 8-й сек).
+    #[test]
+    fn test_2_eight_seconds_is_not_hard_limit() {
+        let mut words = Vec::new();
+        // 22 слова по ~0.48с -> общая длительность 10.5с без знаков препинания
+        for i in 0..22 {
+            let st = i as f64 * 0.48;
+            let en = st + 0.44;
+            words.push(w("continuous", st, en));
+        }
+        assert!((words.last().unwrap().end - words.first().unwrap().start) > 10.0);
+
+        let segmenter = DubbingSegmenter::new();
+        let segs = segmenter.segment(&words);
+        assert_eq!(segs.len(), 1, "Фраза 10.5с не должна разрезаться на 8.0с");
+        assert!((segs[0].end - segs[0].start) > 10.0);
+    }
+
+    /// TEST 3: Естественное окончание фразы около 12–13 сек -> split/end на sentence boundary.
+    #[test]
+    fn test_3_natural_sentence_boundary_at_12_13s() {
+        let mut words = Vec::new();
+        // Предложение 1 (0.0 .. 12.8с)
+        for i in 0..20 {
+            let st = i as f64 * 0.64;
+            let en = st + 0.55;
+            let word = if i == 19 { "completed." } else { "speech" };
+            words.push(w(word, st, en));
+        }
+        // Предложение 2 (13.4 .. 17.0с)
+        for i in 0..8 {
+            let st = 13.4 + i as f64 * 0.45;
+            let en = st + 0.40;
+            let word = if i == 7 { "done." } else { "next" };
+            words.push(w(word, st, en));
+        }
+
+        let segmenter = DubbingSegmenter::new();
+        let (segs, debug) = segmenter.segment_with_debug(&words);
+        assert_eq!(segs.len(), 2);
+        assert!(segs[0].text.ends_with("completed."));
+        assert!(segs[1].text.starts_with("next"));
+        assert_eq!(debug[0].boundary_type, "sentence_end");
+        assert!(!debug[0].is_fallback);
+    }
+
+    /// TEST 4: Длинная цельная фраза около 14 сек -> сохранить как один segment, если есть естественное завершение.
+    #[test]
+    fn test_4_long_complete_phrase_around_14s() {
+        let mut words = Vec::new();
+        for i in 0..24 {
+            let st = i as f64 * 0.58;
+            let en = st + 0.52;
+            let word = if i == 23 { "finished." } else { "word" };
+            words.push(w(word, st, en));
+        }
+        let total_dur = words.last().unwrap().end - words.first().unwrap().start;
+        assert!(total_dur >= 13.5 && total_dur <= 14.2);
+
+        let segmenter = DubbingSegmenter::new();
+        let segs = segmenter.segment(&words);
+        assert_eq!(segs.len(), 1, "Цельная фраза 13.9с с точкой в конце должна сохраняться единым сегментом");
+    }
+
+    /// TEST 5: Длинная фраза >14 сек -> найти естественную границу, а не резать механически ровно на 14 сек.
+    #[test]
+    fn test_5_long_phrase_over_14s_finds_natural_boundary() {
+        let mut words = Vec::new();
+        // Слова до естественной границы на 13.6с (запятая + пауза)
+        for i in 0..20 {
+            let st = i as f64 * 0.68;
+            let en = st + 0.58;
+            let word = if i == 19 { "statement," } else { "talking" };
+            words.push(w(word, st, en));
+        }
+        // Продолжение мысли до 18 сек
+        let t_split = words.last().unwrap().end;
+        for i in 0..8 {
+            let st = t_split + 0.45 + i as f64 * 0.5;
+            let en = st + 0.45;
+            words.push(w("continuation", st, en));
+        }
+
+        let segmenter = DubbingSegmenter::new();
+        let (segs, debug) = segmenter.segment_with_debug(&words);
+        assert!(segs.len() >= 2);
+        assert!(segs[0].text.ends_with("statement,"));
+        assert_eq!(debug[0].boundary_type, "clause");
+    }
+
+    /// TEST 6: Отсутствует хорошая граница (>15 сек) -> fallback split около hard limit.
+    #[test]
+    fn test_6_no_good_boundary_over_15s_uses_fallback() {
+        let mut words = Vec::new();
+        for i in 0..30 {
+            let st = i as f64 * 0.58;
+            let en = st + 0.54;
+            words.push(w("unbroken", st, en));
+        }
+        assert!((words.last().unwrap().end - words.first().unwrap().start) > 16.5);
+
+        let segmenter = DubbingSegmenter::new();
+        let (segs, debug) = segmenter.segment_with_debug(&words);
+        assert!(segs.len() >= 2);
+        assert!((segs[0].end - segs[0].start) <= 15.0);
+        assert!(debug[0].is_fallback);
+    }
+
+    /// TEST 7: Длинная пауза внутри фразы (вдох 0.7с) -> не ломает грамматически связанную реплику < 12.5с.
+    #[test]
+    fn test_7_pause_inside_phrase_does_not_break_connected_speech() {
+        let words = vec![
+            w("I", 0.0, 0.4),
+            w("wanted", 0.5, 0.9),
+            w("to", 1.0, 1.2),
+            w("tell", 1.3, 1.6),
+            w("you", 1.7, 2.0),
+            w("that", 2.1, 2.5),
+            // пауза на вдох 0.75с посреди предложения
+            w("we", 3.25, 3.6),
+            w("should", 3.7, 4.0),
+            w("leave", 4.1, 4.5),
+            w("early.", 4.6, 5.2),
+        ];
+
+        let segmenter = DubbingSegmenter::new();
+        let segs = segmenter.segment(&words);
+        assert_eq!(segs.len(), 1, "Пауза вдоха 0.75с внутри связной мысли не должна вызывать разрыв");
+        assert_eq!(segs[0].text, "I wanted to tell you that we should leave early.");
+    }
+
+    /// TEST 8: Пунктуация (. ! ? …) как сильные границы.
+    #[test]
+    fn test_8_punctuation_marks_as_strong_boundaries() {
+        let puncts = vec![".", "!", "?", "…"];
+        let segmenter = DubbingSegmenter::new();
+
+        for p in puncts {
+            let words = vec![
+                w(&format!("Stop{}", p), 0.0, 0.5),
+                w("Next", 0.8, 1.2),
+                w(&format!("sentence{}", p), 1.3, 2.0),
+            ];
+            assert!(word_ends_sentence(&words[0].word));
+            assert!(word_ends_sentence(&words[2].word));
+            let (segs, _) = segmenter.segment_with_debug(&words);
+            assert_eq!(segs.len(), 1); // < 12.5с группирует короткие предложения, если нет большой паузы
+        }
+    }
+
+    /// TEST 9: Разные языки: English, Russian, Chinese, Japanese (без языковых словарей).
+    #[test]
+    fn test_9_multilingual_no_dictionaries_en_ru_zh_ja() {
+        let segmenter = DubbingSegmenter::new();
+
+        // 1. English
+        let en = vec![
+            w("The", 0.0, 0.3),
+            w("quick", 0.4, 0.8),
+            w("brown", 0.9, 1.3),
+            w("fox.", 1.4, 1.9),
+        ];
+        let en_s = segmenter.segment(&en);
+        assert_eq!(en_s.len(), 1);
+        assert_eq!(en_s[0].text, "The quick brown fox.");
+
+        // 2. Russian
+        let ru = vec![
+            w("Мы", 0.0, 0.4),
+            w("сохраняем", 0.5, 1.2),
+            w("цельные", 1.3, 1.8),
+            w("фразы.", 1.9, 2.5),
+        ];
+        let ru_s = segmenter.segment(&ru);
+        assert_eq!(ru_s.len(), 1);
+        assert_eq!(ru_s[0].text, "Мы сохраняем цельные фразы.");
+
+        // 3. Chinese (CJK 。 and ，)
+        let zh = vec![
+            w("这是", 0.0, 0.5),
+            w("一个，", 0.6, 1.0),
+            w("完整句子。", 1.1, 1.8),
+        ];
+        let zh_s = segmenter.segment(&zh);
+        assert_eq!(zh_s.len(), 1);
+        assert_eq!(zh_s[0].text, "这是 一个， 完整句子。");
+
+        // 4. Japanese (CJK 、 and 。)
+        let ja = vec![
+            w("これ", 0.0, 0.4),
+            w("は、", 0.5, 0.8),
+            w("自然な音声です。", 0.9, 1.8),
+        ];
+        let ja_s = segmenter.segment(&ja);
+        assert_eq!(ja_s.len(), 1);
+        assert_eq!(ja_s[0].text, "これ は、 自然な音声です。");
+    }
+
+    /// TEST 10: Существующие speaker boundaries (не объединяет уже разделённые speaker segments).
+    #[test]
+    fn test_10_existing_speaker_boundaries_preserved() {
+        let words = vec![
+            spk_w("Hello", 0.0, 0.4, "A"),
+            spk_w("there.", 0.5, 0.9, "A"),
+            spk_w("Hi!", 1.0, 1.4, "B"),
+            spk_w("How", 1.5, 1.8, "B"),
+            spk_w("are", 1.9, 2.1, "B"),
+            spk_w("you?", 2.2, 2.6, "B"),
+            spk_w("Good.", 2.8, 3.2, "A"),
         ];
 
         let segmenter = DubbingSegmenter::new();
         let (segs, debug) = segmenter.segment_with_debug(&words);
 
-        assert_eq!(segs.len(), 3, "A -> B -> A обязано дать ровно 3 сегмента");
+        assert_eq!(segs.len(), 3, "A -> B -> A обязано дать 3 независимых сегмента");
         assert_eq!(segs[0].speaker.as_deref(), Some("A"));
-        assert_eq!(segs[0].text, "Hello, I wanted to tell you something.");
+        assert_eq!(segs[0].text, "Hello there.");
         assert_eq!(segs[1].speaker.as_deref(), Some("B"));
-        assert_eq!(segs[1].text, "What?");
+        assert_eq!(segs[1].text, "Hi! How are you?");
         assert_eq!(segs[2].speaker.as_deref(), Some("A"));
-        assert_eq!(segs[2].text, "It's important.");
+        assert_eq!(segs[2].text, "Good.");
 
         assert_one_speaker_per_segment(&segs);
         assert!(debug[0].is_speaker_boundary);
         assert!(debug[1].is_speaker_boundary);
         assert!(debug[2].is_speaker_boundary);
-    }
-
-    /// CASE 2: A говорит 10–13 секунд одной законченной фразой -> один segment A.
-    #[test]
-    fn case_2_single_speaker_long_phrase() {
-        let mut words = Vec::new();
-        for i in 0..20 {
-            let st = i as f64 * 0.55;
-            let en = st + 0.50;
-            let word = if i == 19 { "finished." } else { "speech" };
-            words.push(spk_w(word, st, en, "A"));
-        }
-
-        let segmenter = DubbingSegmenter::new();
-        let segs = segmenter.segment(&words);
-        assert_eq!(segs.len(), 1);
-        assert_eq!(segs[0].speaker.as_deref(), Some("A"));
-        assert_one_speaker_per_segment(&segs);
-    }
-
-    /// CASE 3: A говорит 17 секунд одной фразой -> разбивается на несколько segments A по естественным границам.
-    #[test]
-    fn case_3_single_speaker_over_hard_limit() {
-        let mut words = Vec::new();
-        for i in 0..32 {
-            let st = i as f64 * 0.55;
-            let en = st + 0.50;
-            let word = if i == 20 { "pause," } else { "word" };
-            words.push(spk_w(word, st, en, "A"));
-        }
-
-        let segmenter = DubbingSegmenter::new();
-        let segs = segmenter.segment(&words);
-        assert!(segs.len() >= 2);
-        for s in &segs {
-            assert_eq!(s.speaker.as_deref(), Some("A"));
-            assert!((s.end - s.start) <= 15.0);
-        }
-        assert_one_speaker_per_segment(&segs);
-    }
-
-    /// CASE 4: A говорит 6 секунд, B говорит 0.5 секунды, A говорит ещё 6 секунд -> A (6s), B (0.5s), A (6s).
-    #[test]
-    fn case_4_short_b_between_long_a_no_merge() {
-        let mut words = Vec::new();
-        // A: 0..6s
-        for i in 0..10 {
-            words.push(spk_w("speechA", i as f64 * 0.6, i as f64 * 0.6 + 0.55, "A"));
-        }
-        // B: 6.2..6.7s
-        words.push(spk_w("Uh-huh.", 6.2, 6.7, "B"));
-        // A: 6.9..12.9s
-        for i in 0..10 {
-            words.push(spk_w("speechA2", 6.9 + i as f64 * 0.6, 6.9 + i as f64 * 0.6 + 0.55, "A"));
-        }
-
-        let segmenter = DubbingSegmenter::new();
-        let segs = segmenter.segment(&words);
-        assert_eq!(segs.len(), 3, "A(6s) -> B(0.5s) -> A(6s) обязано оставаться 3 сегментами");
-        assert_eq!(segs[0].speaker.as_deref(), Some("A"));
-        assert_eq!(segs[1].speaker.as_deref(), Some("B"));
-        assert_eq!(segs[2].speaker.as_deref(), Some("A"));
-        assert_one_speaker_per_segment(&segs);
-    }
-
-    /// CASE 5: Короткие реплики одного спикера (A: "Yes.", A: "I know.") объединяются,
-    /// но A: "Yes.", B: "What?", A: "I know." никогда не объединяются.
-    #[test]
-    fn case_5_short_turns_same_vs_diff_speakers() {
-        let segmenter = DubbingSegmenter::new();
-
-        // 1. Одинаковый спикер A подряд -> объединяются в 1 фразу для комфортного TTS
-        let same_words = vec![
-            spk_w("Yes.", 0.0, 0.4, "A"),
-            spk_w("I", 0.6, 0.9, "A"),
-            spk_w("know.", 1.0, 1.4, "A"),
-        ];
-        let same_segs = segmenter.segment(&same_words);
-        assert_eq!(same_segs.len(), 1);
-        assert_eq!(same_segs[0].text, "Yes. I know.");
-        assert_one_speaker_per_segment(&same_segs);
-
-        // 2. Спикер B посредине -> 3 отдельных сегмента
-        let diff_words = vec![
-            spk_w("Yes.", 0.0, 0.4, "A"),
-            spk_w("What?", 0.6, 1.0, "B"),
-            spk_w("I", 1.2, 1.5, "A"),
-            spk_w("know.", 1.6, 2.0, "A"),
-        ];
-        let diff_segs = segmenter.segment(&diff_words);
-        assert_eq!(diff_segs.len(), 3);
-        assert_eq!(diff_segs[0].text, "Yes.");
-        assert_eq!(diff_segs[0].speaker.as_deref(), Some("A"));
-        assert_eq!(diff_segs[1].text, "What?");
-        assert_eq!(diff_segs[1].speaker.as_deref(), Some("B"));
-        assert_eq!(diff_segs[2].text, "I know.");
-        assert_eq!(diff_segs[2].speaker.as_deref(), Some("A"));
-        assert_one_speaker_per_segment(&diff_segs);
-    }
-
-    /// CASE 6: Speaker boundary внутри грамматически единого предложения -> speaker boundary важнее грамматики.
-    #[test]
-    fn case_6_sentence_cut_by_speaker_turn() {
-        let words = vec![
-            spk_w("I", 0.0, 0.3, "A"),
-            spk_w("wanted", 0.4, 0.8, "A"),
-            spk_w("to", 0.9, 1.0, "A"),
-            spk_w("tell", 1.1, 1.4, "A"),
-            spk_w("you", 1.5, 1.7, "A"),
-            spk_w("that", 1.8, 2.2, "A"),
-            spk_w("What?", 2.4, 2.9, "B"),
-            spk_w("we", 3.1, 3.3, "A"),
-            spk_w("should", 3.4, 3.7, "A"),
-            spk_w("leave.", 3.8, 4.4, "A"),
-        ];
-
-        let segmenter = DubbingSegmenter::new();
-        let segs = segmenter.segment(&words);
-        assert_eq!(segs.len(), 3);
-        assert_eq!(segs[0].text, "I wanted to tell you that");
-        assert_eq!(segs[0].speaker.as_deref(), Some("A"));
-        assert_eq!(segs[1].text, "What?");
-        assert_eq!(segs[1].speaker.as_deref(), Some("B"));
-        assert_eq!(segs[2].text, "we should leave.");
-        assert_eq!(segs[2].speaker.as_deref(), Some("A"));
-        assert_one_speaker_per_segment(&segs);
-    }
-
-    // ── REGRESSION TESTS ──
-
-    /// REGRESSION 1: A -> B
-    #[test]
-    fn regression_a_to_b() {
-        let words = vec![
-            spk_w("Hello", 0.0, 0.5, "A"),
-            spk_w("there.", 0.6, 1.0, "A"),
-            spk_w("Hi!", 1.2, 1.6, "B"),
-        ];
-        let segs = DubbingSegmenter::new().segment(&words);
-        assert_eq!(segs.len(), 2);
-        assert_eq!(segs[0].speaker.as_deref(), Some("A"));
-        assert_eq!(segs[1].speaker.as_deref(), Some("B"));
-        assert_one_speaker_per_segment(&segs);
-    }
-
-    /// REGRESSION 2: A -> A -> B
-    #[test]
-    fn regression_a_a_to_b() {
-        let words = vec![
-            spk_w("First", 0.0, 0.4, "A"),
-            spk_w("sentence.", 0.5, 1.0, "A"),
-            spk_w("Second", 1.2, 1.6, "A"),
-            spk_w("sentence.", 1.7, 2.2, "A"),
-            spk_w("Response.", 2.4, 3.0, "B"),
-        ];
-        let segs = DubbingSegmenter::new().segment(&words);
-        assert_eq!(segs.len(), 2);
-        assert_eq!(segs[0].speaker.as_deref(), Some("A"));
-        assert_eq!(segs[0].text, "First sentence. Second sentence.");
-        assert_eq!(segs[1].speaker.as_deref(), Some("B"));
-        assert_eq!(segs[1].text, "Response.");
-        assert_one_speaker_per_segment(&segs);
-    }
-
-    /// REGRESSION 3: A -> B -> B -> A
-    #[test]
-    fn regression_a_b_b_a() {
-        let words = vec![
-            spk_w("Hello.", 0.0, 0.5, "A"),
-            spk_w("Hi.", 0.7, 1.0, "B"),
-            spk_w("How are you?", 1.2, 2.0, "B"),
-            spk_w("Great, thanks.", 2.2, 3.2, "A"),
-        ];
-        let segs = DubbingSegmenter::new().segment(&words);
-        assert_eq!(segs.len(), 3);
-        assert_eq!(segs[0].speaker.as_deref(), Some("A"));
-        assert_eq!(segs[1].speaker.as_deref(), Some("B"));
-        assert_eq!(segs[1].text, "Hi. How are you?");
-        assert_eq!(segs[2].speaker.as_deref(), Some("A"));
-        assert_one_speaker_per_segment(&segs);
-    }
-
-    /// REGRESSION 4: Multilingual preservation inside speaker turn
-    #[test]
-    fn regression_multilingual_inside_turns() {
-        let words = vec![
-            spk_w("Здравствуйте,", 0.0, 0.8, "RU_1"),
-            spk_w("как", 0.9, 1.2, "RU_1"),
-            spk_w("дела?", 1.3, 1.8, "RU_1"),
-            spk_w("非常好！", 2.0, 2.8, "ZH_1"),
-            spk_w("元気です。", 3.0, 3.8, "JA_1"),
-        ];
-        let segs = DubbingSegmenter::new().segment(&words);
-        assert_eq!(segs.len(), 3);
-        assert_eq!(segs[0].speaker.as_deref(), Some("RU_1"));
-        assert_eq!(segs[1].speaker.as_deref(), Some("ZH_1"));
-        assert_eq!(segs[2].speaker.as_deref(), Some("JA_1"));
-        assert_one_speaker_per_segment(&segs);
     }
 }

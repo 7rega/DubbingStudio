@@ -760,15 +760,13 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
             .transcribe(&asr_wav, &args.src_lang)
             .map_err(|e| format!("transcribe: {e}"))?;
 
-        let use_dubbing_segmenter = crate::models::load_selection(&paths.models_root)
-            .get("dubbing_segmenter")
-            .and_then(|v| v.as_str())
-            .map(|v| v == "1")
-            .unwrap_or(false)
-            || std::env::var("DUB_SEGMENTER").map(|v| v == "1" || v == "new").unwrap_or(false);
+        let sel = crate::models::load_selection(&paths.models_root);
+        let is_natural_mode = sel.get("segmenter_mode").and_then(|v| v.as_str()) == Some("natural")
+            || sel.get("dubbing_segmenter").and_then(|v| v.as_str()) == Some("1")
+            || std::env::var("DUB_SEGMENTER").map(|v| v == "1" || v == "natural" || v == "new").unwrap_or(false);
 
-        if use_dubbing_segmenter {
-            emit(progress, "asr", "сегментация: DubbingSegmenter (строгие границы спикеров + хронометраж под TTS)");
+        if is_natural_mode {
+            emit(progress, "asr", "сегментация: Natural Mode (строгие границы спикеров + сохранение цельных фраз)");
             let mut all_words: Vec<dub_asr::WordWithTimestamp> = Vec::new();
             for s in &ts {
                 for w in &s.words {
@@ -872,14 +870,12 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     // Слияние коротких огрызков (#115): whisper режет «If they find you» на «If» + «they find you.» —
     // каждый огрызок TTS-ится отдельно и звучит рвано. Клеим near-continuous короткие реплики ОДНОГО
     // спикера в одну фразу (не для import_subs — там реплики уже цельные из сабов).
-    let use_dubbing_segmenter = crate::models::load_selection(&paths.models_root)
-        .get("dubbing_segmenter")
-        .and_then(|v| v.as_str())
-        .map(|v| v == "1")
-        .unwrap_or(false)
-        || std::env::var("DUB_SEGMENTER").map(|v| v == "1" || v == "new").unwrap_or(false);
+    let sel = crate::models::load_selection(&paths.models_root);
+    let is_natural_mode = sel.get("segmenter_mode").and_then(|v| v.as_str()) == Some("natural")
+        || sel.get("dubbing_segmenter").and_then(|v| v.as_str()) == Some("1")
+        || std::env::var("DUB_SEGMENTER").map(|v| v == "1" || v == "natural" || v == "new").unwrap_or(false);
 
-    if paths.import_subs.is_none() && !use_dubbing_segmenter {
+    if paths.import_subs.is_none() && !is_natural_mode {
         let before = segments.len();
         merge_short_turns(&mut segments);
         if segments.len() != before {
