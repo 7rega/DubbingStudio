@@ -31,8 +31,3 @@ cuda = ["parakeet-rs/cuda"]
 [[example]]
 name = "asr"
 path = "examples/asr.rs"
-
-[[example]]
-name = "compare_segmenters"
-path = "examples/compare_segmenters.rs"
-
