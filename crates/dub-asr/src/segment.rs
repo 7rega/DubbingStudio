@@ -3,10 +3,11 @@
 
 use serde::Serialize;
 
-/// Дефолтные параметры сегментации (порт из dubengine/asr.py): разрыв на паузе > SEG_MAX_GAP сек и
-/// жёсткий кап длины реплики SEG_MAX_DUR сек. Единый источник для всех ASR-движков (Parakeet/Whisper).
-pub const SEG_MAX_GAP: f64 = 0.6;
-pub const SEG_MAX_DUR: f64 = 8.0;
+/// Дефолтные параметры сегментации: разрыв на паузе > SEG_MAX_GAP сек (вдох до 0.8с) и
+/// безопасные диапазоны длины для TTS (зелёная зона до 12.0с, жёсткий потолок 15.0с).
+pub const SEG_MAX_GAP: f64 = 0.8;
+pub const SEG_IDEAL_DUR: f64 = 12.0;
+pub const SEG_MAX_DUR: f64 = 15.0;
 
 /// Слово со временем (секунды).
 #[derive(Debug, Clone, Serialize)]
@@ -26,7 +27,33 @@ pub struct Segment {
 }
 
 fn ends_sentence(word: &str) -> bool {
-    word.ends_with(['.', '!', '?', '…'])
+    let trimmed = word.trim_end_matches(|c: char| {
+        c.is_whitespace()
+            || c == '"'
+            || c == '\''
+            || c == '»'
+            || c == '”'
+            || c == '’'
+            || c == ')'
+            || c == ']'
+            || c == '}'
+    });
+    trimmed.ends_with(['.', '!', '?', '…', '。', '！', '？', '؟', '۔']) || trimmed.ends_with("...")
+}
+
+fn ends_clause(word: &str) -> bool {
+    let trimmed = word.trim_end_matches(|c: char| {
+        c.is_whitespace()
+            || c == '"'
+            || c == '\''
+            || c == '»'
+            || c == '”'
+            || c == '’'
+            || c == ')'
+            || c == ']'
+            || c == '}'
+    });
+    trimmed.ends_with([',', ';', ':', '-', '—', '–', '、', '，', '；', '：', '،'])
 }
 
 /// Склейка слов сегмента через пробел (эквивалент `join(" ").trim()`, без промежуточного Vec).
@@ -41,16 +68,29 @@ fn join_words(ws: &[Word]) -> String {
     s.trim().to_string()
 }
 
-/// Разбить поток слов на сегменты. max_gap=0.6с, max_dur=8.0с (как в _segment).
+/// Разбить поток слов на сегменты:
+/// - До 12.0с (зелёная зона): накапливаем слова, паузы вдоха до max_gap (0.8с) не ломают фразу;
+/// - 12.0–15.0с (жёлтая зона): ищем запятую или заметную паузу >=0.35с;
+/// - >15.0с (жёсткий предохранитель): разрез по max_dur.
 pub fn segment_words(words: &[Word], max_gap: f64, max_dur: f64) -> Vec<Segment> {
     let mut segs: Vec<Vec<Word>> = Vec::new();
     let mut cur: Vec<Word> = Vec::new();
 
     for w in words {
         if let (Some(last), Some(first)) = (cur.last(), cur.first()) {
-            let gap = w.start - last.end;
-            let dur = last.end - first.start;
-            if gap > max_gap || dur > max_dur {
+            let gap = (w.start - last.end).max(0.0);
+            let dur = (last.end - first.start).max(0.0);
+
+            // 1. Пауза больше допустимого (напр. >0.8с)
+            let is_long_pause = gap > max_gap;
+
+            // 2. Жёлтая зона (12–15с): мягкий разрыв на запятой или паузе >=0.35с
+            let is_soft_split = dur >= SEG_IDEAL_DUR && (ends_clause(&last.word) || gap >= 0.35);
+
+            // 3. Жёсткий лимит (>15с)
+            let is_hard_limit = dur >= max_dur;
+
+            if is_long_pause || is_soft_split || is_hard_limit {
                 segs.push(std::mem::take(&mut cur));
             }
         }
@@ -84,24 +124,54 @@ mod tests {
     #[test]
     fn splits_on_sentence_end() {
         let words = vec![w("Hello", 0.0, 0.4), w("world.", 0.4, 0.8), w("Next", 0.9, 1.2)];
-        let segs = segment_words(&words, 0.6, 8.0);
+        let segs = segment_words(&words, 0.8, 15.0);
         assert_eq!(segs.len(), 2);
         assert_eq!(segs[0].text, "Hello world.");
         assert_eq!(segs[1].text, "Next");
     }
 
     #[test]
-    fn splits_on_pause() {
-        let words = vec![w("a", 0.0, 0.2), w("b", 2.0, 2.2)]; // пауза 1.8с > 0.6
-        let segs = segment_words(&words, 0.6, 8.0);
+    fn breath_pause_under_0_8s_does_not_split() {
+        // Пауза 0.7с (вдох) посреди фразы < 12.0с -> не должна разрезаться
+        let words = vec![w("I", 0.0, 0.3), w("said", 0.4, 0.8), w("this.", 1.5, 2.0)];
+        let segs = segment_words(&words, 0.8, 15.0);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].text, "I said this.");
+    }
+
+    #[test]
+    fn long_pause_over_0_8s_splits() {
+        // Пауза 1.5с > 0.8с -> разрез
+        let words = vec![w("a", 0.0, 0.2), w("b", 1.8, 2.0)];
+        let segs = segment_words(&words, 0.8, 15.0);
         assert_eq!(segs.len(), 2);
     }
 
     #[test]
-    fn splits_on_max_dur() {
-        let words = vec![w("a", 0.0, 0.2), w("b", 5.0, 5.2), w("c", 9.0, 9.2)];
-        // при добавлении c dur (5.0-0.0)=5.0 <8, но добавление b: dur=0 ok; c: dur=5.2-0=... проверяем разрыв
-        let segs = segment_words(&words, 100.0, 4.0);
+    fn phrase_up_to_12s_without_punct_not_split() {
+        // Фраза 10.5с без знаков препинания -> держится единым сегментом
+        let mut words = Vec::new();
+        for i in 0..20 {
+            words.push(w("word", i as f64 * 0.5, i as f64 * 0.5 + 0.45));
+        }
+        let segs = segment_words(&words, 0.8, 15.0);
+        assert_eq!(segs.len(), 1);
+        assert!((segs[0].end - segs[0].start) > 9.5);
+    }
+
+    #[test]
+    fn yellow_zone_splits_on_clause() {
+        // Фраза >12.0с с запятой на 12.5с -> делится на запятой
+        let mut words = Vec::new();
+        for i in 0..20 {
+            let word = if i == 19 { "here," } else { "word" };
+            words.push(w(word, i as f64 * 0.65, i as f64 * 0.65 + 0.60));
+        }
+        for i in 0..5 {
+            words.push(w("continuation", 13.5 + i as f64 * 0.5, 13.5 + i as f64 * 0.5 + 0.45));
+        }
+        let segs = segment_words(&words, 0.8, 15.0);
         assert!(segs.len() >= 2);
+        assert!(segs[0].text.ends_with("here,"));
     }
 }
