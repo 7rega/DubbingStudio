@@ -96,6 +96,8 @@ pub fn is_selection_key(key: &str) -> bool {
             | "emo_ref_on"      // "1" -> эмоциональный референс сцены (перенос эмоций из оригинального вокала); "0" -> выкл
             | "vo_lead_in"      // "1" -> UN Voice-Over Lead-in (вступление диктора после оригинала); "0" -> без задержки
             | "dub_reverb_match" // "1" -> легкое акустическое согласование пространства (Early Reflections); "0" -> сухой звук
+            | "dubbing_segmenter" // "1" -> Natural Mode (фразы для TTS без обрывов); "0" -> Classic Mode (8с)
+            | "segmenter_mode"  // "natural" -> Natural Mode; "classic" -> Classic Mode (8с)
             // Облачные модели (OpenRouter) — опциональная замена тяжёлого локального LLM/TTS. Всё ВЫКЛ по умолчанию.
             | "or_key"          // API-ключ OpenRouter (хранится локально в active.json, не логируется)
             | "or_llm_on"       // "1" -> перевод через OpenRouter chat вместо локальной Gemma
