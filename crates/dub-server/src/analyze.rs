@@ -767,7 +767,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
             .unwrap_or(false)
             || std::env::var("DUB_SEGMENTER").map(|v| v == "1" || v == "new").unwrap_or(false);
 
-        let (segs, nsp): (Vec<Segment>, usize) = if use_dubbing_segmenter {
+        if use_dubbing_segmenter {
             emit(progress, "asr", "сегментация: DubbingSegmenter (строгие границы спикеров + хронометраж под TTS)");
             let mut all_words: Vec<dub_asr::WordWithTimestamp> = Vec::new();
             for s in &ts {
@@ -866,7 +866,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                 })
                 .collect();
             (s_list, nsp)
-        };
+        }
     };
 
     // Слияние коротких огрызков (#115): whisper режет «If they find you» на «If» + «they find you.» —
