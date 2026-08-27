@@ -638,6 +638,7 @@ pub fn mix_env(voice: &Path, music: &Path, blocks: &[SpeechBlock], out: &Path) -
 /// ПОЛНЫМ между репликами перевода (слышно исходного спикера/эмоцию) и приглушается на `duck_db` ПОД
 /// переводом, восстанавливаясь после. `bed` — весь оригинал, `blocks` — тайминги переведённой речи.
 /// Прежде оригинал давился ПЛОСКО на всю дорожку (−12 дБ навсегда, в т.ч. в паузах) — не по практике.
+#[allow(dead_code)]
 pub fn mix_env_db(voice: &Path, bed: &Path, blocks: &[SpeechBlock], duck_db: f64, out: &Path) -> Result<(), String> {
     let g = 10f64.powf(duck_db / 20.0).clamp(0.02, 1.0);
     mix_env_g(voice, bed, blocks, g, out)
