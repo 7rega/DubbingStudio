@@ -8,6 +8,7 @@
 //! dubengine/asr.py и dubengine/diarize.py: паузы >0.6с, конец предложения .!?…, макс 8.0с.
 
 mod align;
+mod dubbing_segmenter;
 mod reconcile;
 mod segment;
 mod speaker_global;
@@ -16,6 +17,11 @@ mod window;
 pub use align::{
     align_bounds, align_segments_to_vocals, extract_vocal_spans, AlignableSegment, SpeechSpan,
     SegmentBound, MIN_SUBTITLE_GAP, SPEECH_LEAD_IN, SPEECH_TAIL,
+};
+pub use dubbing_segmenter::{
+    is_clause_punct, is_terminal_punct, word_ends_clause, word_ends_sentence, BoundaryDebugInfo,
+    DubbingSegmenter, SegmenterConfig, WordWithTimestamp, DEFAULT_HARD_DURATION,
+    DEFAULT_IDEAL_DURATION, DEFAULT_TARGET_DURATION,
 };
 pub use reconcile::{speaker_for_overlap, DiarIndex};
 pub use speaker_global::{

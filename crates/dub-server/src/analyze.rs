@@ -759,43 +759,117 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
         let ts = asr
             .transcribe(&asr_wav, &args.src_lang)
             .map_err(|e| format!("transcribe: {e}"))?;
-        let segs: Vec<Segment> = ts
-            .into_iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let words: Vec<Value> = s
-                    .words
-                    .iter()
-                    .map(|w| json!({ "word": w.word, "start": w.start, "end": w.end }))
-                    .collect();
-                let mut extra = serde_json::Map::new();
-                extra.insert("words".into(), Value::Array(words));
-                let spk = if turns.is_empty() {
-                    "0".to_string()
-                } else {
-                    speaker_for(s.start, s.end, turns)
-                };
-                Segment {
-                    id: format!("s{i}"),
-                    start: s.start,
-                    end: s.end,
-                    speaker: Some(spk),
-                    src_text: s.text,
-                    tgt_text: String::new(),
-                    voice: None,
-                    dirty: false,
-                    ckpt: None,
-                    extra,
+
+        let use_dubbing_segmenter = crate::models::load_selection(&paths.models_root)
+            .get("dubbing_segmenter")
+            .and_then(|v| v.as_str())
+            .map(|v| v == "1")
+            .unwrap_or(false)
+            || std::env::var("DUB_SEGMENTER").map(|v| v == "1" || v == "new").unwrap_or(false);
+
+        let segs: Vec<Segment> = if use_dubbing_segmenter {
+            emit(progress, "asr", "сегментация: DubbingSegmenter (хронометраж под TTS, без обрывов фраз)");
+            let mut all_words: Vec<dub_asr::WordWithTimestamp> = Vec::new();
+            for s in &ts {
+                for w in &s.words {
+                    let spk = if turns.is_empty() {
+                        "0".to_string()
+                    } else {
+                        speaker_for(w.start, w.end, turns)
+                    };
+                    all_words.push(
+                        dub_asr::WordWithTimestamp::new(&w.word, w.start, w.end).with_speaker(spk),
+                    );
                 }
-            })
-            .collect();
+            }
+            let segmenter = dub_asr::DubbingSegmenter::new();
+            let (new_segs, debug_infos) = segmenter.segment_with_debug(&all_words);
+            let fallbacks = debug_infos.iter().filter(|d| d.is_fallback).count();
+            emit(
+                progress,
+                "asr",
+                &format!(
+                    "DubbingSegmenter: собрано {} реплик (fallback: {})",
+                    new_segs.len(),
+                    fallbacks
+                ),
+            );
+
+            new_segs
+                .into_iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let words: Vec<Value> = s
+                        .words
+                        .iter()
+                        .map(|w| json!({ "word": w.word, "start": w.start, "end": w.end }))
+                        .collect();
+                    let mut extra = serde_json::Map::new();
+                    extra.insert("words".into(), Value::Array(words));
+                    let spk = if turns.is_empty() {
+                        "0".to_string()
+                    } else {
+                        speaker_for(s.start, s.end, turns)
+                    };
+                    Segment {
+                        id: format!("s{i}"),
+                        start: s.start,
+                        end: s.end,
+                        speaker: Some(spk),
+                        src_text: s.text,
+                        tgt_text: String::new(),
+                        voice: None,
+                        dirty: false,
+                        ckpt: None,
+                        extra,
+                    }
+                })
+                .collect()
+        } else {
+            ts.into_iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let words: Vec<Value> = s
+                        .words
+                        .iter()
+                        .map(|w| json!({ "word": w.word, "start": w.start, "end": w.end }))
+                        .collect();
+                    let mut extra = serde_json::Map::new();
+                    extra.insert("words".into(), Value::Array(words));
+                    let spk = if turns.is_empty() {
+                        "0".to_string()
+                    } else {
+                        speaker_for(s.start, s.end, turns)
+                    };
+                    Segment {
+                        id: format!("s{i}"),
+                        start: s.start,
+                        end: s.end,
+                        speaker: Some(spk),
+                        src_text: s.text,
+                        tgt_text: String::new(),
+                        voice: None,
+                        dirty: false,
+                        ckpt: None,
+                        extra,
+                    }
+                })
+                .collect()
+        };
         (segs, nsp)
     };
 
     // Слияние коротких огрызков (#115): whisper режет «If they find you» на «If» + «they find you.» —
     // каждый огрызок TTS-ится отдельно и звучит рвано. Клеим near-continuous короткие реплики ОДНОГО
     // спикера в одну фразу (не для import_subs — там реплики уже цельные из сабов).
-    if paths.import_subs.is_none() {
+    let use_dubbing_segmenter = crate::models::load_selection(&paths.models_root)
+        .get("dubbing_segmenter")
+        .and_then(|v| v.as_str())
+        .map(|v| v == "1")
+        .unwrap_or(false)
+        || std::env::var("DUB_SEGMENTER").map(|v| v == "1" || v == "new").unwrap_or(false);
+
+    if paths.import_subs.is_none() && !use_dubbing_segmenter {
         let before = segments.len();
         merge_short_turns(&mut segments);
         if segments.len() != before {

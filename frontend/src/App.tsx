@@ -653,6 +653,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [emoRefOn, setEmoRefOn] = useState(true);
   const [voLeadIn, setVoLeadIn] = useState(true);
   const [dubReverbMatch, setDubReverbMatch] = useState(true);
+  const [dubbingSegmenter, setDubbingSegmenter] = useState(false);
   useEffect(() => {
     api.capabilities().then((c) => {
       setBench(c.selection?.bench === "1");
@@ -664,6 +665,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       setEmoRefOn(c.selection?.emo_ref_on !== "0");
       setVoLeadIn(c.selection?.vo_lead_in !== "0");
       setDubReverbMatch(c.selection?.dub_reverb_match !== "0");
+      setDubbingSegmenter(c.selection?.dubbing_segmenter === "1");
     }).catch(() => {});
   }, []);
   return (
@@ -718,6 +720,20 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               <button onClick={() => { const v = !qcAsr; setQcAsr(v); api.setSelection("qc_asr", v ? "1" : "0").catch(() => {}); }} title="Проверка текста через ASR"
                 className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${qcAsr ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${qcAsr ? "left-[18px]" : "left-0.5"}`} />
+              </button>
+            </label>
+            {/* Сегментация для дубляжа (DubbingSegmenter) */}
+            <label className="flex items-center justify-between gap-3 mb-2.5" title="Экспериментальный сегментатор: собирает цельные законченные фразы (до 12.5–14с) без обрывов на вдохах и 8-секундных отсечках">
+              <div className="min-w-0 flex-1">
+                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
+                  <Layers size={14} className="text-[var(--color-accent-2)]" />
+                  Сегментатор для дубляжа (DubbingSegmenter)
+                </span>
+                <span className="block text-[10px] text-[var(--color-muted)]">цельные фразы для озвучки Higgs v3 (без обрывов на вдохах)</span>
+              </div>
+              <button onClick={() => { const v = !dubbingSegmenter; setDubbingSegmenter(v); api.setSelection("dubbing_segmenter", v ? "1" : "0").catch(() => {}); }} title="Сегментатор для дубляжа"
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${dubbingSegmenter ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${dubbingSegmenter ? "left-[18px]" : "left-0.5"}`} />
               </button>
             </label>
             {/* Контроль длительности фраз */}
