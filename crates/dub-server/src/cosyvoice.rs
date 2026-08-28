@@ -149,6 +149,10 @@ impl CosyVoiceRuntime {
             cmd.arg("--voice-dir").arg(vd);
         }
 
+        // Отключение голосового предупреждения (spoken disclaimer) перед фразами дубляжа
+        cmd.arg("--no-spoken-disclaimer")
+            .arg("--accept-marking-responsibility");
+
         // Выбор устройства (device)
         if cfg.device == "cpu" {
             cmd.arg("--no-gpu");
@@ -273,6 +277,8 @@ impl CosyVoiceRuntime {
             "response_format": "wav",
             "speed": speed.unwrap_or(1.0),
             "consent_attestation": "I have the speaker's consent",
+            "spoken_disclaimer": false,
+            "marking_attestation": "I accept responsibility for marking AI generated content",
         });
 
         if let Some(rw) = ref_wav {
