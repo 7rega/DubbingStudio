@@ -530,6 +530,7 @@ pub fn resolve_cosyvoice_config(repo_root: &Path, mroot: &Path, sel: &Value) -> 
         s3tok_model,
         campplus_model,
         voices_model,
+        voice_dir: None,
         backend,
         device,
         temperature,

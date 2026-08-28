@@ -854,7 +854,8 @@ fn build_dub(
                 emit(progress, "tts", "TTS через облако (OpenRouter) — локальный движок не загружаем");
                 None
             }
-            crate::models::TtsEngineChoice::CosyVoice(mut cfg) => {
+            crate::models::TtsEngineChoice::CosyVoice(cfg) => {
+                let mut cfg = cfg.clone();
                 cfg.voice_dir = Some(paths.work_dir.clone());
                 emit(progress, "tts", &format!("CosyVoice 3: запускаем CrispASR рантайм ({})", cfg.backend));
                 crate::evict_tts_cache();
