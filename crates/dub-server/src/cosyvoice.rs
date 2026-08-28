@@ -124,47 +124,27 @@ impl CosyVoiceRuntime {
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
 
-        // Параметры сервера
+        // Параметры сервера CrispASR
         cmd.arg("--server")
             .arg("--host")
             .arg("127.0.0.1")
             .arg("--port")
             .arg(port.to_string())
-            .arg("--backend")
-            .arg(&cfg.backend)
             .arg("-m")
             .arg(&cfg.llm_model);
 
-        // Передача компаньонов, если они есть
-        if let Some(ref flow) = cfg.flow_model {
-            if flow.is_file() {
-                cmd.arg("--flow-model").arg(flow);
-            }
+        if !cfg.backend.is_empty() {
+            cmd.arg("--backend").arg(&cfg.backend);
         }
-        if let Some(ref hift) = cfg.hift_model {
-            if hift.is_file() {
-                cmd.arg("--hift-model").arg(hift);
-            }
-        }
-        if let Some(ref s3tok) = cfg.s3tok_model {
-            if s3tok.is_file() {
-                cmd.arg("--s3tok-model").arg(s3tok);
-            }
-        }
-        if let Some(ref camp) = cfg.campplus_model {
-            if camp.is_file() {
-                cmd.arg("--campplus-model").arg(camp);
-            }
-        }
-        if let Some(ref voices) = cfg.voices_model {
-            if voices.is_file() {
-                cmd.arg("--voices").arg(voices);
-            }
+
+        // Каталог с моделями-компаньонами (flow, hift, s3tok, campplus, voices)
+        if let Some(parent) = cfg.llm_model.parent() {
+            cmd.arg("--cache-dir").arg(parent);
         }
 
         // Выбор устройства (device)
         if cfg.device == "cpu" {
-            cmd.arg("--cpu");
+            cmd.arg("--no-gpu");
         }
 
         // Устанавливаем рабочий каталог рядом с бинарником или моделями для подгрузки зависимых DLL
@@ -275,6 +255,7 @@ impl CosyVoiceRuntime {
             "input": text,
             "response_format": "wav",
             "speed": speed.unwrap_or(1.0),
+            "consent_attestation": "I have the speaker's consent",
         });
 
         if let Some(rw) = ref_wav {
@@ -456,6 +437,9 @@ pub fn check_cosyvoice3(repo_root: &Path, models_root: &Path) -> CosyVoiceDiagno
     }
     if !campplus_found {
         missing.push("cosyvoice3-campplus (cosyvoice3-campplus-f16.gguf)".to_string());
+    }
+    if !voices_found {
+        missing.push("cosyvoice3-voices (cosyvoice3-voices.gguf)".to_string());
     }
 
     let ok = missing.is_empty();
