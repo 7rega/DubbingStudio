@@ -325,6 +325,58 @@ pub fn manifest() -> Vec<Component> {
             markers: &[Marker { rel: "models/higgs-q4_k_m/q4_k_m.gguf", expect: 4_086_922_976 }, Marker { rel: "models/higgs-q4_k_m/tokenizer.json", expect: 0 }],
             external_url: None,
         },
+        // ── CosyVoice 3 TTS движок и GGUF модели ─────────────────────────────
+        Component {
+            id: "cosyvoice3-rl",
+            name: "CosyVoice 3 (LLM RL + Flow + HiFT + Companions)",
+            purpose: "Синтез речи и zero-shot клонирование голоса CosyVoice 3 (RL-модель)",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: 1_420_000_000,
+            files: &[
+                FileSpec { url: "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/main/cosyvoice3-llm-rl-q4_k.gguf", dest_rel: "models/cosyvoice3/cosyvoice3-llm-rl-q4_k.gguf", size: 340_000_000, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/main/cosyvoice3-flow-q8_0.gguf", dest_rel: "models/cosyvoice3/cosyvoice3-flow-q8_0.gguf", size: 580_000_000, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/main/cosyvoice3-hift-f16.gguf", dest_rel: "models/cosyvoice3/cosyvoice3-hift-f16.gguf", size: 120_000_000, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/main/cosyvoice3-s3tok-f16.gguf", dest_rel: "models/cosyvoice3/cosyvoice3-s3tok-f16.gguf", size: 350_000_000, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/main/cosyvoice3-campplus-f16.gguf", dest_rel: "models/cosyvoice3/cosyvoice3-campplus-f16.gguf", size: 30_000_000, extract: Extract::None },
+            ],
+            markers: &[
+                Marker { rel: "models/cosyvoice3/cosyvoice3-llm-rl-q4_k.gguf", expect: 0 },
+                Marker { rel: "models/cosyvoice3/cosyvoice3-flow-q8_0.gguf", expect: 0 },
+                Marker { rel: "models/cosyvoice3/cosyvoice3-hift-f16.gguf", expect: 0 },
+                Marker { rel: "models/cosyvoice3/cosyvoice3-s3tok-f16.gguf", expect: 0 },
+                Marker { rel: "models/cosyvoice3/cosyvoice3-campplus-f16.gguf", expect: 0 },
+            ],
+            external_url: Some("https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF"),
+        },
+        Component {
+            id: "cosyvoice3-base",
+            name: "CosyVoice 3 (LLM Base non-RL)",
+            purpose: "Базовая non-RL модель CosyVoice 3 (альтернатива RL)",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: 340_000_000,
+            files: &[
+                FileSpec { url: "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/main/cosyvoice3-llm-q4_k.gguf", dest_rel: "models/cosyvoice3/cosyvoice3-llm-q4_k.gguf", size: 340_000_000, extract: Extract::None },
+            ],
+            markers: &[
+                Marker { rel: "models/cosyvoice3/cosyvoice3-llm-q4_k.gguf", expect: 0 },
+            ],
+            external_url: Some("https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF"),
+        },
+        Component {
+            id: "crispasr-engine",
+            name: "CrispASR движок (CosyVoice 3 runtime)",
+            purpose: "Нативный рантайм-сервер для CosyVoice 3",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: 85_000_000,
+            files: &[
+                FileSpec { url: "https://github.com/CrispStrobe/CrispASR/releases/download/v0.3.0/crispasr-win-x64.zip", dest_rel: "tools/crispasr/_crispasr.zip", size: 0, extract: Extract::ZipFlat },
+            ],
+            markers: &[Marker { rel: "tools/crispasr/crispasr.exe", expect: 0 }],
+            external_url: Some("https://github.com/CrispStrobe/CrispASR"),
+        },
         // Альтернативный квант ASR: fp32 (точнее, тяжелее int8). Отдельная папка (fp32 приоритетнее int8).
         Component {
             id: "parakeet-fp32",

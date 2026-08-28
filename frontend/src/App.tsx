@@ -57,6 +57,7 @@ function LanguageSwitcher() {
 // резолвится при генерации.
 const VARIANT_SLOT: Record<string, [string, string]> = {
   higgs: ["tts", "q8_0"], "higgs-q6_k": ["tts", "q6_k"], "higgs-q4_k_m": ["tts", "q4_k_m"],
+  "cosyvoice3-rl": ["cosyvoice_model", "rl"], "cosyvoice3-base": ["cosyvoice_model", "base"],
   parakeet: ["asr", "int8"], "parakeet-fp32": ["asr", "fp32"],
   gemma: ["mt", "q4_0"], "gemma-q5_0": ["mt", "q5_0"], "gemma-q6_k": ["mt", "q6_k"], "gemma-q8_0": ["mt", "q8_0"],
   roformer: ["sep", "Q8_0"], "roformer-q5": ["sep", "Q5_0"], "roformer-q4": ["sep", "Q4_0"],
@@ -274,7 +275,36 @@ function ModelsSection() {
         </div>
       )}
       <Group label={t("settings.roleTts")}>
-        <EngineTabs cloud={selv("or_tts_on") === "1"} localLabel="Higgs Audio v3" onLocal={() => setSel("or_tts_on", "0")} onCloud={() => setSel("or_tts_on", "1")} />
+        {/* Движок TTS: Higgs Audio v3 / CosyVoice 3 / OpenRouter (облако) */}
+        <div className="flex gap-1 mb-1.5">
+          {[
+            { id: "higgs", label: "Higgs Audio v3", cloud: false },
+            { id: "cosyvoice", label: "CosyVoice 3", cloud: false },
+            { id: "openrouter", label: "OpenRouter", cloud: true },
+          ].map((e) => {
+            const ttsCloud = selv("or_tts_on") === "1";
+            const currentTts = ttsCloud ? "openrouter" : (selv("tts_engine") === "cosyvoice" ? "cosyvoice" : "higgs");
+            const active = currentTts === e.id;
+            const dis = e.cloud && !hasOrKey;
+            return (
+              <button key={e.id} disabled={dis} title={dis ? "Введите ключ OpenRouter ниже (Облачные настройки)" : ""}
+                onClick={() => {
+                  if (e.cloud) {
+                    setSel("or_tts_on", "1");
+                    setSel("tts_engine", "openrouter");
+                    api.setSelection("tts_engine", "openrouter").catch(() => {});
+                  } else {
+                    setSel("or_tts_on", "0");
+                    setSel("tts_engine", e.id);
+                    api.setSelection("tts_engine", e.id).catch(() => {});
+                  }
+                }}
+                className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${active ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"} disabled:opacity-40`}>
+                {e.label}
+              </button>
+            );
+          })}
+        </div>
         {selv("or_tts_on") === "1" ? (
           <div className={`${orRowCls} space-y-2`}>
             <OrModelSelect kind="tts" k="or_tts_model" empty="— выбрать TTS-модель —" />
@@ -296,6 +326,15 @@ function ModelsSection() {
               </select>
             )}
           </div>
+        ) : selv("tts_engine") === "cosyvoice" ? (
+          <>
+            <VariantPicker base="CosyVoice 3" ids={["cosyvoice3-rl", "cosyvoice3-base"]} />
+            {rowOf("crispasr-engine")}
+            <div className="text-[11px] text-[var(--color-muted)] mt-1.5 p-2 rounded bg-[var(--color-surface)]/60 border border-[var(--color-border)]">
+              🎙️ <strong>CosyVoice 3</strong> выполняет Zero-Shot клонирование голоса на лету из reference WAV персонажа.
+              <div className="text-[10px] text-[var(--color-muted)]/80 mt-0.5">Используйте только те аудиозаписи, на воспроизведение голоса которых у вас есть права и согласие.</div>
+            </div>
+          </>
         ) : (
           <>
             <VariantPicker base="Higgs Audio v3" ids={["higgs", "higgs-q6_k", "higgs-q4_k_m"]} />
