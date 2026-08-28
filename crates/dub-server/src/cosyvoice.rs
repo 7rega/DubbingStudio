@@ -154,8 +154,18 @@ impl CosyVoiceRuntime {
             cmd.arg("--no-gpu");
         }
 
-        // Устанавливаем рабочий каталог рядом с бинарником или моделями для подгрузки зависимых DLL
+        // Добавляем директорию бинарника в PATH для гарантированной загрузки cublas/ggml DLL
         if let Some(parent) = cfg.bin.parent() {
+            let cur_path = std::env::var("PATH").unwrap_or_default();
+            let new_path = format!("{};{}", parent.display(), cur_path);
+            cmd.env("PATH", new_path);
+        }
+
+        // Рабочий каталог: если задан voice_dir (каталог проекта), используем его, чтобы
+        // CrispASR напрямую открывал референсные WAV по имени файла
+        if let Some(ref vd) = cfg.voice_dir {
+            cmd.current_dir(vd);
+        } else if let Some(parent) = cfg.bin.parent() {
             cmd.current_dir(parent);
         }
 

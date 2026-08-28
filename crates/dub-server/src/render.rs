@@ -1235,7 +1235,18 @@ fn build_dub(
                 } else {
                     None
                 };
-                match cosy.synthesize(tgt, ref_path_to_use, ref_text.as_deref(), None) {
+                let ref_text_to_use = ref_text
+                    .as_deref()
+                    .filter(|t| !t.trim().is_empty())
+                    .or_else(|| {
+                        let st = s.src_text.trim();
+                        if !st.is_empty() {
+                            Some(st)
+                        } else {
+                            None
+                        }
+                    });
+                match cosy.synthesize(tgt, ref_path_to_use, ref_text_to_use, None) {
                     Ok(wav) => {
                         std::fs::write(&raw, &wav).map_err(|e| format!("запись seg_{sid} от CosyVoice 3: {e}"))?;
                     }
