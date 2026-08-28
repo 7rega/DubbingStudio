@@ -337,7 +337,7 @@ const CONSECUTIVE_ABORT: usize = 8;
 /// Грейс после cancel(): ждём, пока отменённая генерация РЕАЛЬНО выйдет из DLL, прежде чем движок снова
 /// тронут ДРУГИМ вызовом. Контракт audiocpp::Engine — single-caller (Send+Sync годен ТОЛЬКО под сериализацией
 /// джоб-очереди, engine.rs). Параллельно тронуть движок, пока прошлый вызов в DLL, = гонка/порча.
-const GUARD_GRACE_SECS: u64 = 20;
+const GUARD_GRACE_SECS: u64 = 60;
 /// Префикс ошибки «движок застрял в DLL после cancel»: вызывающий НЕ ретраит (это был бы конкурентный FFI —
 /// гонка), а ОБРЫВАЕТ рендер. Единственный воркер разблокируется (ошибка), состояние движка не портим.
 const ENGINE_STUCK: &str = "ENGINE_STUCK";
@@ -1054,6 +1054,7 @@ fn build_dub(
     }
     let dirty_total = dirty_count;
     let mut synth_counter = 0usize;
+    let mut engine_dead = false; // движок завис в DLL (ENGINE_STUCK) — больше не трогаем, остаток на оригинале
     for &(fi, s) in segs.iter() {
         // Кэш-файл сегмента — ПО ЕГО ID, не по индексу fi. Кэш переиспользуется между рендерами (не-dirty
         // сегменты не ре-синтезируются). При индекс-имени удаление/перестановка сегмента сдвигает индексы —
@@ -1171,6 +1172,15 @@ fn build_dub(
         let mut kept_original = false;
         if need_synth {
             synth_counter += 1;
+            if engine_dead && !cloud_tts_on {
+                // Движок завис в DLL ранее — подставляем оригинал для всех оставшихся
+                emit(progress, "tts", &format!(
+                    "⚠ фраза #{}: движок недоступен (ENGINE_STUCK) — оставлена оригинальная реплика",
+                    fi + 1
+                ));
+                media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
+                kept_original = true;
+            } else {
             emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (фраза #{})", fi + 1));
             if cloud_tts_on {
             // Облачный TTS: wav-байты OpenRouter пишем ПРЯМО в seg-файл (без декода/перекодировки).
@@ -1268,8 +1278,15 @@ fn build_dub(
                 let (samples, sr) = match voice_clone_guarded(eng, tgt, &rw.to_string_lossy(), rt, &opts, vc_to) {
                     Ok(v) => v,
                     Err(e) if e.starts_with(ENGINE_STUCK) => {
-                        *paths.tts_cache.lock().unwrap() = None; // инвалидировать кэш при зависании
-                        return Err(e);
+                        emit(progress, "tts", &format!(
+                            "⚠ фраза #{}: {} — оставлена оригинальная реплика, синтез оставшихся фраз пропущен",
+                            fi + 1, e
+                        ));
+                        *paths.tts_cache.lock().unwrap() = None;
+                        engine_dead = true;
+                        media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
+                        kept_original = true;
+                        break (Vec::new(), 24_000);
                     }
                     Err(e) => {
                         retried = true;
@@ -1346,6 +1363,7 @@ fn build_dub(
                 consec = 0; // чистая фраза сбрасывает серию
             }
             } // конец локальной (Higgs) ветки — при облаке wav уже записан выше
+            } // конец else engine_dead
         }
         // слот: от текущего onset до старта СЛЕДУЮЩЕГО сегмента ПО ИНДЕКСУ (fi+1) полного списка /
         // конца видео (питон nxt = segs[i+1].start if i+1<len else total).
@@ -1426,8 +1444,13 @@ fn build_dub(
                             }
                         }
                         Err(e) if e.starts_with(ENGINE_STUCK) => {
-                            *paths.tts_cache.lock().unwrap() = None; // инвалидировать кэш при зависании
-                            return Err(e);
+                            emit(progress, "tts", &format!(
+                                "⚠ фраза #{}: multi-take — {e}, пропуск доп. дублей",
+                                fi + 1
+                            ));
+                            *paths.tts_cache.lock().unwrap() = None;
+                            engine_dead = true;
+                            break; // первый дубль (raw) уже на диске
                         }
                         Err(_) => {
                             std::thread::sleep(Duration::from_millis(1000));
@@ -1562,6 +1585,7 @@ fn build_dub(
         if !bad_idx.is_empty() {
             emit(progress, "tts", &format!("QC: {} фраз не совпали с переводом — пересинтез", bad_idx.len()));
             for &i in &bad_idx {
+                if engine_dead { break; } // движок мёртв — остальные QC не пересинтезируем
                 let (fi, pidx, raw, tgtq, spk, room, fitp, seg_rw, seg_rt) = &qc_list[i];
                 let s = &proj.segments[*fi];
                 let has_custom_voice = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()).is_some();
@@ -1591,8 +1615,13 @@ fn build_dub(
                     let (smp, r) = match voice_clone_guarded(engine.as_ref().expect("локальный Higgs (QC не для облака)"), tgtq, &rw.to_string_lossy(), rt, &opts, vc_to) {
                         Ok(v) => v,
                         Err(e) if e.starts_with(ENGINE_STUCK) => {
-                            *paths.tts_cache.lock().unwrap() = None; // инвалидировать кэш при зависании
-                            return Err(e);
+                            emit(progress, "tts", &format!(
+                                "⚠ QC фраза #{}: {} — пропуск пересинтеза (движок недоступен)",
+                                fi + 1, e
+                            ));
+                            *paths.tts_cache.lock().unwrap() = None;
+                            engine_dead = true;
+                            break;
                         }
                         Err(_) => {
                             std::thread::sleep(Duration::from_millis(1000));
@@ -1662,6 +1691,10 @@ fn build_dub(
                 ));
             }
         }
+    }
+
+    if engine_dead {
+        emit(progress, "tts", "⚠ Higgs движок завис в DLL — часть фраз оставлена на оригинальном языке. Перезапустите приложение и повторите экспорт для досинтеза.");
     }
 
     // 5) timeline -> dub_vocals.wav. Возвращает фактические спаны укладки.
