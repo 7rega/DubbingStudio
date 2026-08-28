@@ -854,10 +854,11 @@ fn build_dub(
                 emit(progress, "tts", "TTS через облако (OpenRouter) — локальный движок не загружаем");
                 None
             }
-            crate::models::TtsEngineChoice::CosyVoice(cfg) => {
+            crate::models::TtsEngineChoice::CosyVoice(mut cfg) => {
+                cfg.voice_dir = Some(paths.work_dir.clone());
                 emit(progress, "tts", &format!("CosyVoice 3: запускаем CrispASR рантайм ({})", cfg.backend));
                 crate::evict_tts_cache();
-                match crate::cosyvoice::CosyVoiceRuntime::start(cfg) {
+                match crate::cosyvoice::CosyVoiceRuntime::start(&cfg) {
                     Ok(rt) => {
                         emit(progress, "tts", "CosyVoice 3: сервер готов к синтезу");
                         cosy_runtime = Some(rt);
@@ -1225,10 +1226,13 @@ fn build_dub(
                 // CosyVoice 3: zero-shot voice cloning через локальный CrispASR рантайм
                 let temp_ref = wd.join(format!("ref_cosy_{sid}.wav"));
                 let norm_res = crate::cosyvoice::normalize_reference_wav(&ref_wav, &temp_ref, paths.ref_secs);
-                let ref_path_to_use = if norm_res.is_ok() && temp_ref.is_file() {
+                if norm_res.is_err() || !temp_ref.is_file() {
+                    let _ = std::fs::copy(&ref_wav, &temp_ref);
+                }
+                let ref_path_to_use = if temp_ref.is_file() {
                     Some(temp_ref.as_path())
                 } else {
-                    Some(ref_wav.as_path())
+                    None
                 };
                 match cosy.synthesize(tgt, ref_path_to_use, ref_text.as_deref(), None) {
                     Ok(wav) => {

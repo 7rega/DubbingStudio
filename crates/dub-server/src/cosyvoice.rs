@@ -62,6 +62,7 @@ pub struct CosyVoiceConfig {
     pub s3tok_model: Option<PathBuf>,
     pub campplus_model: Option<PathBuf>,
     pub voices_model: Option<PathBuf>,
+    pub voice_dir: Option<PathBuf>,
     pub backend: String,
     pub device: String,
     pub temperature: f32,
@@ -79,6 +80,7 @@ impl Default for CosyVoiceConfig {
             s3tok_model: Some(PathBuf::from("models/cosyvoice3/cosyvoice3-s3tok-f16.gguf")),
             campplus_model: Some(PathBuf::from("models/cosyvoice3/cosyvoice3-campplus-f16.gguf")),
             voices_model: Some(PathBuf::from("models/cosyvoice3/cosyvoice3-voices.gguf")),
+            voice_dir: None,
             backend: "cosyvoice3-tts-rl".to_string(),
             device: "cuda".to_string(),
             temperature: 0.7,
@@ -140,6 +142,11 @@ impl CosyVoiceRuntime {
         // Каталог с моделями-компаньонами (flow, hift, s3tok, campplus, voices)
         if let Some(parent) = cfg.llm_model.parent() {
             cmd.arg("--cache-dir").arg(parent);
+        }
+
+        // Каталог с референсными голосами для Zero-Shot клонирования
+        if let Some(ref vd) = cfg.voice_dir {
+            cmd.arg("--voice-dir").arg(vd);
         }
 
         // Выбор устройства (device)
@@ -259,7 +266,11 @@ impl CosyVoiceRuntime {
         });
 
         if let Some(rw) = ref_wav {
-            payload["voice"] = json!(rw.to_string_lossy().into_owned());
+            let voice_name = rw
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_else(|| rw.to_str().unwrap_or(""));
+            payload["voice"] = json!(voice_name);
         }
         if let Some(rt) = ref_text {
             if !rt.trim().is_empty() {
