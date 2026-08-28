@@ -46,25 +46,8 @@ export type Capabilities = {
   // Выбор ASR-движка (active.json): движок parakeet|whisper + модель/квант Whisper.
   selection?: Record<string, string>;
   asr_engines?: string[]; whisper_models?: string[]; whisper_computes?: string[];
-  // Выбор TTS-движка: higgs | cosyvoice | openrouter
-  tts_engines?: string[]; cosyvoice_models?: string[];
   // Видимые лимиты RAM (настройки): prefill-батч Gemma + длина реф-клипа клона.
   llama_ubatches?: string[]; higgs_ref_secs_opts?: string[];
-};
-export type CosyVoiceDiagnostics = {
-  ok: boolean;
-  executable_found: boolean;
-  executable_path: string | null;
-  llm_rl_found: boolean;
-  llm_base_found: boolean;
-  active_llm_path: string | null;
-  flow_found: boolean;
-  hift_found: boolean;
-  s3tok_found: boolean;
-  campplus_found: boolean;
-  voices_found: boolean;
-  missing: string[];
-  details: string;
 };
 export type JobEvent = { type: "progress" | "done" | "error"; stage?: string; pct?: number; msg?: string; result?: unknown; error?: string; component?: string; downloaded?: number; total?: number; parts?: { component: string; pct: number }[] };
 
@@ -132,8 +115,6 @@ export const api = {
   selectModel: (id: string) => postJson<Record<string, string>>("/engine/select", { id }),
   // Прямая установка слота выбора (движок/модель/квант ASR) без скачивания: {key,value} -> active.json.
   setSelection: (key: string, value: string) => postJson<Record<string, string>>("/engine/select", { key, value }),
-  // Диагностика CosyVoice 3
-  cosyvoiceCheck: () => getJson<CosyVoiceDiagnostics>("/engine/cosyvoice/check"),
   // Облачные модели (OpenRouter): проверка ключа + фильтрованный каталог по модальности (llm/vision/tts).
   openrouterVerify: (key: string) => postJson<{ ok: boolean; data?: { label?: string; limit?: number; usage?: number }; error?: unknown }>("/engine/openrouter/verify", { key }),
   openrouterModels: (kind: "llm" | "vision" | "tts" | "asr") => getJson<{ models: { id: string; name: string; context?: number }[] }>(`/engine/openrouter/models?kind=${kind}`),

@@ -60,7 +60,6 @@ pub struct EngineKey {
 
 /// Пути к моделям/движкам для рендера (резолвятся из AppState).
 pub struct RenderPaths {
-    pub repo_root: PathBuf,    // корень репозитория
     pub input: PathBuf,        // исходное видео
     pub work_dir: PathBuf,     // workspace/<pid>
     pub output: PathBuf,       // output.mp4
@@ -841,84 +840,62 @@ fn build_dub(
         }
     };
 
-    // 4) TTS: выбор движка (Higgs Audio v3 / CosyVoice 3 / OpenRouter)
-    let sel = crate::models::load_selection(&paths.models_root);
-    let tts_choice = crate::models::resolve_tts_engine(&paths.repo_root, &paths.models_root, &sel);
-    let cloud_tts_on = matches!(tts_choice, crate::models::TtsEngineChoice::OpenRouter);
-    let mut cosy_runtime: Option<crate::cosyvoice::CosyVoiceRuntime> = None;
+    // 4) TTS каждый сегмент через Higgs (audiocpp).
+    // Облачный TTS (OpenRouter) вместо локального Higgs: тяжёлую DLL + модель НЕ грузим вовсе — в этом и
+    // смысл (снять самую тяжёлую часть). engine=None; синтез идёт по облачной ветке ниже.
+    let cloud_tts_on = crate::models::openrouter_stage_on(&paths.models_root, "tts");
     let engine: Option<Arc<AudiocppEngine>> = if dirty_count == 0 {
         None
+    } else if cloud_tts_on {
+        emit(progress, "tts", "TTS через облако (OpenRouter) — локальный Higgs не загружаем");
+        None
     } else {
-        match &tts_choice {
-            crate::models::TtsEngineChoice::OpenRouter => {
-                emit(progress, "tts", "TTS через облако (OpenRouter) — локальный движок не загружаем");
-                None
+        let key = EngineKey {
+            dll: paths.higgs_dll.clone(),
+            model_root: paths.higgs_model_root.clone(),
+            backend: paths.higgs_backend.clone(),
+            device: paths.higgs_device,
+            threads: paths.higgs_threads,
+            quant: paths.higgs_quant.clone(),
+        };
+        let mut cache = paths.tts_cache.lock().unwrap();
+        if let Some((ref cached_key, ref eng)) = *cache {
+            if cached_key == &key {
+                emit(progress, "tts", "Higgs TTS: используем уже загруженную модель из кэша");
+                Some(eng.clone())
+            } else {
+                emit(progress, "tts", "Higgs TTS: параметры изменились, выгружаем старую модель...");
+                *cache = None; // выгружаем старую
+                let e = Arc::new(
+                    AudiocppEngine::load(&paths.higgs_dll).map_err(|e| format!("загрузка Higgs DLL: {e}"))?,
+                );
+                emit(progress, "tts", "Higgs TTS: загружаем новую модель...");
+                e.load_model(
+                    &paths.higgs_model_root,
+                    &paths.higgs_backend,
+                    paths.higgs_device,
+                    paths.higgs_threads,
+                    Some(paths.higgs_quant.as_str()),
+                )
+                .map_err(|e| format!("Higgs load_model: {e}"))?;
+                *cache = Some((key, e.clone()));
+                Some(e)
             }
-            crate::models::TtsEngineChoice::CosyVoice(cfg) => {
-                let mut cfg = cfg.clone();
-                cfg.voice_dir = Some(paths.work_dir.clone());
-                emit(progress, "tts", &format!("CosyVoice 3: запускаем CrispASR рантайм ({})", cfg.backend));
-                crate::evict_tts_cache();
-                match crate::cosyvoice::CosyVoiceRuntime::start(&cfg) {
-                    Ok(rt) => {
-                        emit(progress, "tts", "CosyVoice 3: сервер готов к синтезу");
-                        cosy_runtime = Some(rt);
-                        None
-                    }
-                    Err(e) => {
-                        return Err(format!("CosyVoice 3: ошибка запуска рантайма: {e}"));
-                    }
-                }
-            }
-            crate::models::TtsEngineChoice::Higgs { model_root, quant } => {
-                let key = EngineKey {
-                    dll: paths.higgs_dll.clone(),
-                    model_root: model_root.clone(),
-                    backend: paths.higgs_backend.clone(),
-                    device: paths.higgs_device,
-                    threads: paths.higgs_threads,
-                    quant: quant.clone(),
-                };
-                let mut cache = paths.tts_cache.lock().unwrap();
-                if let Some((ref cached_key, ref eng)) = *cache {
-                    if cached_key == &key {
-                        emit(progress, "tts", "Higgs TTS: используем уже загруженную модель из кэша");
-                        Some(eng.clone())
-                    } else {
-                        emit(progress, "tts", "Higgs TTS: параметры изменились, выгружаем старую модель...");
-                        *cache = None; // выгружаем старую
-                        let e = Arc::new(
-                            AudiocppEngine::load(&paths.higgs_dll).map_err(|e| format!("загрузка Higgs DLL: {e}"))?,
-                        );
-                        emit(progress, "tts", "Higgs TTS: загружаем новую модель...");
-                        e.load_model(
-                            model_root,
-                            &paths.higgs_backend,
-                            paths.higgs_device,
-                            paths.higgs_threads,
-                            Some(quant.as_str()),
-                        )
-                        .map_err(|e| format!("Higgs load_model: {e}"))?;
-                        *cache = Some((key, e.clone()));
-                        Some(e)
-                    }
-                } else {
-                    emit(progress, "tts", "Higgs TTS: загружаем модель в память/VRAM...");
-                    let e = Arc::new(
-                        AudiocppEngine::load(&paths.higgs_dll).map_err(|e| format!("загрузка Higgs DLL: {e}"))?,
-                    );
-                    e.load_model(
-                        model_root,
-                        &paths.higgs_backend,
-                        paths.higgs_device,
-                        paths.higgs_threads,
-                        Some(quant.as_str()),
-                    )
-                    .map_err(|e| format!("Higgs load_model: {e}"))?;
-                    *cache = Some((key, e.clone()));
-                    Some(e)
-                }
-            }
+        } else {
+            emit(progress, "tts", "Higgs TTS: загружаем модель в память/VRAM...");
+            let e = Arc::new(
+                AudiocppEngine::load(&paths.higgs_dll).map_err(|e| format!("загрузка Higgs DLL: {e}"))?,
+            );
+            e.load_model(
+                &paths.higgs_model_root,
+                &paths.higgs_backend,
+                paths.higgs_device,
+                paths.higgs_threads,
+                Some(paths.higgs_quant.as_str()),
+            )
+            .map_err(|e| format!("Higgs load_model: {e}"))?;
+            *cache = Some((key, e.clone()));
+            Some(e)
         }
     };
 
@@ -1206,57 +1183,23 @@ fn build_dub(
             } else {
             emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (фраза #{})", fi + 1));
             if cloud_tts_on {
-                // Облачный TTS: wav-байты OpenRouter пишем ПРЯМО в seg-файл (без декода/перекодировки).
-                // Голос — из автокастинга по полу спикера (пусто -> дефолт настроек). Провал -> оригинал
-                // сегмента (ноль немых мест), как локальный фолбэк.
-                let cv = cloud_voice_map
-                    .get(s.speaker.as_deref().unwrap_or("0"))
-                    .map(String::as_str)
-                    .unwrap_or("");
-                match crate::cloud_tts::synth_audio(&paths.models_root, tgt, cv) {
-                    Ok(wav) => {
-                        std::fs::write(&raw, &wav).map_err(|e| format!("запись облачного seg_{sid}: {e}"))?;
-                    }
-                    Err(e) => {
-                        emit(progress, "tts", &format!("⚠ фраза #{} ({sid}): облачный TTS не удался ({e}) — оригинал", fi + 1));
-                        media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
-                        kept_original = true;
-                    }
+            // Облачный TTS: wav-байты OpenRouter пишем ПРЯМО в seg-файл (без декода/перекодировки).
+            // Голос — из автокастинга по полу спикера (пусто -> дефолт настроек). Провал -> оригинал
+            // сегмента (ноль немых мест), как локальный фолбэк.
+            let cv = cloud_voice_map
+                .get(s.speaker.as_deref().unwrap_or("0"))
+                .map(String::as_str)
+                .unwrap_or("");
+            match crate::cloud_tts::synth_audio(&paths.models_root, tgt, cv) {
+                Ok(wav) => {
+                    std::fs::write(&raw, &wav).map_err(|e| format!("запись облачного seg_{sid}: {e}"))?;
                 }
-            } else if let Some(ref cosy) = cosy_runtime {
-                // CosyVoice 3: zero-shot voice cloning через локальный CrispASR рантайм
-                let temp_ref = wd.join(format!("ref_cosy_{sid}.wav"));
-                let norm_res = crate::cosyvoice::normalize_reference_wav(&ref_wav, &temp_ref, paths.ref_secs);
-                if norm_res.is_err() || !temp_ref.is_file() {
-                    let _ = std::fs::copy(&ref_wav, &temp_ref);
+                Err(e) => {
+                    emit(progress, "tts", &format!("⚠ фраза #{} ({sid}): облачный TTS не удался ({e}) — оригинал", fi + 1));
+                    media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
+                    kept_original = true;
                 }
-                let ref_path_to_use = if temp_ref.is_file() {
-                    Some(temp_ref.as_path())
-                } else {
-                    None
-                };
-                let ref_text_to_use = ref_text
-                    .as_deref()
-                    .filter(|t| !t.trim().is_empty())
-                    .or_else(|| {
-                        let st = s.src_text.trim();
-                        if !st.is_empty() {
-                            Some(st)
-                        } else {
-                            None
-                        }
-                    });
-                match cosy.synthesize(tgt, ref_path_to_use, ref_text_to_use, None) {
-                    Ok(wav) => {
-                        std::fs::write(&raw, &wav).map_err(|e| format!("запись seg_{sid} от CosyVoice 3: {e}"))?;
-                    }
-                    Err(e) => {
-                        emit(progress, "tts", &format!("⚠ фраза #{} ({sid}): CosyVoice 3 не удался ({e}) — оставлен оригинал", fi + 1));
-                        media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
-                        kept_original = true;
-                    }
-                }
-                let _ = std::fs::remove_file(&temp_ref);
+            }
             } else {
             // Анти-артефактный ретрай: иногда Higgs выдаёт «гудение» (непрерывный гул без речи). Детект
             // in-memory (synth_defect) по сэмплам; перегенерируем — синтез стохастичен, повтор обычно
@@ -1444,7 +1387,7 @@ fn build_dub(
         let fitp = wd.join(format!("seg_{sid}_fit.wav"));
 
         // ── MULTI-TAKE: адаптивный отбор дублей ──
-        if multitake_on && need_synth && !kept_original && !cloud_tts_on && cosy_runtime.is_none() && engine.is_some() {
+        if multitake_on && need_synth && !kept_original && !cloud_tts_on && engine.is_some() {
             let raw_dur = media::duration(&raw).unwrap_or(0.0);
             let target = if speech_rate_on { ((s.end - s.start) - lead_in).max(0.3) } else { room };
             let tgt = s.tgt_text.trim();
@@ -1579,9 +1522,9 @@ fn build_dub(
         // В QC — только реально синтезированное в этом прогоне (кэш уже проверялся в своём прогоне).
         // kept_original (оригинальная реплика вместо неспасаемого выкрика) НЕ сверяем: там исходный
         // язык, ASR-QC счёл бы его браком и пересинтезировал обратно в артефакт.
-        // Higgs-QC (ASR-сверка + пересинтез) — только для локального движка; облачный TTS и CosyVoice
-        // артефактов-гула не дают, а их валидация покрытия идёт штатно.
-        if !cloud_tts_on && cosy_runtime.is_none() && need_synth && !kept_original && !s.tgt_text.trim().is_empty() {
+        // Higgs-QC (ASR-сверка + пересинтез) — только для локального движка; облачный TTS артефактов-гула
+        // не даёт, а его валидация покрытия идёт отдельным гейтом.
+        if !cloud_tts_on && need_synth && !kept_original && !s.tgt_text.trim().is_empty() {
             qc_list.push((
                 fi,
                 placed.len() - 1,

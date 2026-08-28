@@ -14,7 +14,6 @@ mod cloud_asr;
 mod cloud_tts;
 mod cloud_voices;
 mod compose;
-pub mod cosyvoice;
 pub mod duck;
 mod endpoints;
 mod llm_provider;
@@ -357,7 +356,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/engine/proxy/test", post(endpoints::proxy_test))
         .route("/engine/presets", get(endpoints::presets_list))
         .route("/engine/preset", post(endpoints::preset_apply))
-        .route("/engine/cosyvoice/check", get(endpoints::cosyvoice_check))
         // «Первый запуск»: статус компонентов + автозакачка недостающего (SSE через ту же job-машину).
         .route("/setup/status", get(setup_status))
         .route("/setup/download", post(setup_download))
@@ -451,9 +449,6 @@ async fn capabilities(State(st): State<AppState>) -> Json<Value> {
         "ffmpeg": ffmpeg,
         "languages": langs,
         "voice_modes": ["clone","autocast","auto","voice"],
-        // Выбор TTS: движки (higgs|cosyvoice|openrouter) + варианты CosyVoice (rl|base)
-        "tts_engines": ["higgs", "cosyvoice", "openrouter"],
-        "cosyvoice_models": ["rl", "base"],
         // Выбор ASR: движок (parakeet|whisper), модель Whisper, квант Whisper (compute_type).
         "selection": sel,
         "asr_engines": ["parakeet","whisper"],
@@ -575,22 +570,6 @@ fn ensure_job_components(
         && missing("whisper-cuda")
     {
         need.push("whisper-cuda".to_string());
-    }
-    // CosyVoice 3: если выбран движок CosyVoice, проверяем наличие рантайма и моделей
-    let tts_cosy = sel.get("tts_engine").and_then(|v| v.as_str()) == Some("cosyvoice");
-    if tts_cosy {
-        if missing("crispasr-engine") {
-            need.push("crispasr-engine".to_string());
-        }
-        let is_base = sel.get("cosyvoice_model").and_then(|v| v.as_str()) == Some("base");
-        let model_id = if is_base { "cosyvoice3-base" } else { "cosyvoice3-rl" };
-        if missing(model_id) {
-            need.push(model_id.to_string());
-        }
-        // Для base также нужны companions из rl
-        if is_base && missing("cosyvoice3-rl") {
-            need.push("cosyvoice3-rl".to_string());
-        }
     }
     if need.is_empty() {
         return Ok(());
@@ -1759,7 +1738,6 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
     let sep_model = models::resolve_sep(&st.models_root, &sel);
     eprintln!("[models] render: TTS={} (q={}) · SEP={}", higgs_model_root.display(), higgs_quant, sep_model.display());
     let paths = render::RenderPaths {
-        repo_root: st.repo_root.clone(),
         input,
         bench: models::bench_enabled(&st.models_root),
         work_dir: dir.clone(),
@@ -1906,7 +1884,6 @@ async fn export_lang(
     let sep_model = models::resolve_sep(&st.models_root, &sel);
     let output = dst_dir.join("output.mp4");
     let paths = render::RenderPaths {
-        repo_root: st.repo_root.clone(),
         input,
         bench: models::bench_enabled(&st.models_root),
         work_dir: dst_dir.clone(),
@@ -2121,7 +2098,6 @@ async fn dub_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
     let sel = models::load_selection(&st.models_root);
     let (higgs_model_root, higgs_quant) = models::resolve_tts(&st.models_root, &sel);
     let paths = render::RenderPaths {
-        repo_root: st.repo_root.clone(),
         input,
         bench: models::bench_enabled(&st.models_root),
         work_dir: dir.clone(),

@@ -65,16 +65,6 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "roformer" => vec![("sep", "Q8_0".into())],
         "roformer-q5" => vec![("sep", "Q5_0".into())],
         "roformer-q4" => vec![("sep", "Q4_0".into())],
-        "cosyvoice3-rl" => vec![
-            ("tts_engine", "cosyvoice".into()),
-            ("cosyvoice_model", "rl".into()),
-            ("cosyvoice_backend", "cosyvoice3-tts-rl".into()),
-        ],
-        "cosyvoice3-base" => vec![
-            ("tts_engine", "cosyvoice".into()),
-            ("cosyvoice_model", "base".into()),
-            ("cosyvoice_backend", "cosyvoice3-tts".into()),
-        ],
         _ => vec![],
     }
 }
@@ -84,8 +74,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
 pub fn is_selection_key(key: &str) -> bool {
     matches!(
         key,
-        "tts" | "tts_engine" | "cosyvoice_model" | "cosyvoice_backend" | "cosyvoice_device" | "cosyvoice_speed" | "cosyvoice_temp"
-            | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device" | "whisper_executable" | "whisper_xxl_args"
+        "tts" | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device" | "whisper_executable" | "whisper_xxl_args"
             // Backend КАЖДОЙ локальной стадии независимо (auto|gpu|cpu): любой движок на любой инстанс.
             // gpu = CUDA, cpu = без NVIDIA. sep=сепарация(BSRoformer CUDA/CPU-сборка), diar=диаризация
             // (Sortformer onnx CUDA-EP/CPU), asr=локальный ASR (Parakeet onnx / Whisper CTranslate2).
@@ -469,87 +458,6 @@ pub fn build_engine(choice: &AsrChoice) -> Box<dyn dub_asr::AsrEngine> {
             Box::new(dub_asr::WhisperAsr::new(bin, model_dir, model, compute, device, xxl_args.clone()))
         }
     }
-}
-
-/// Выбор TTS-движка для рендера / синтеза.
-#[derive(Debug, Clone)]
-pub enum TtsEngineChoice {
-    Higgs {
-        model_root: PathBuf,
-        quant: String,
-    },
-    CosyVoice(crate::cosyvoice::CosyVoiceConfig),
-    OpenRouter,
-}
-
-impl TtsEngineChoice {
-    pub fn describe(&self) -> String {
-        match self {
-            TtsEngineChoice::Higgs { quant, .. } => format!("Higgs Audio v3 ({quant})"),
-            TtsEngineChoice::CosyVoice(cfg) => format!("CosyVoice 3 ({})", cfg.backend),
-            TtsEngineChoice::OpenRouter => "OpenRouter TTS (Cloud)".to_string(),
-        }
-    }
-}
-
-/// Путь к бинарнику CrispASR для CosyVoice 3
-pub fn crispasr_bin(repo_root: &Path) -> PathBuf {
-    if let Ok(v) = std::env::var("DUB_STUDIO_CRISPASR_BIN") {
-        return PathBuf::from(v);
-    }
-    repo_root.join("tools").join("crispasr").join("crispasr.exe")
-}
-
-/// Резолв конфигурации CosyVoice 3
-pub fn resolve_cosyvoice_config(repo_root: &Path, mroot: &Path, sel: &Value) -> crate::cosyvoice::CosyVoiceConfig {
-    let bin = crispasr_bin(repo_root);
-    let cosy_dir = mroot.join("cosyvoice3");
-    let model_variant = pick(sel, "cosyvoice_model").unwrap_or("rl");
-    let (llm_model, default_backend) = if model_variant == "base" {
-        (cosy_dir.join("cosyvoice3-llm-q4_k.gguf"), "cosyvoice3-tts")
-    } else {
-        (cosy_dir.join("cosyvoice3-llm-rl-q4_k.gguf"), "cosyvoice3-tts-rl")
-    };
-    let backend = pick(sel, "cosyvoice_backend").unwrap_or(default_backend).to_string();
-    let flow_model = Some(cosy_dir.join("cosyvoice3-flow-q8_0.gguf"));
-    let hift_model = Some(cosy_dir.join("cosyvoice3-hift-f16.gguf"));
-    let s3tok_model = Some(cosy_dir.join("cosyvoice3-s3tok-f16.gguf"));
-    let campplus_model = Some(cosy_dir.join("cosyvoice3-campplus-f16.gguf"));
-    let voices_model = Some(cosy_dir.join("cosyvoice3-voices.gguf"));
-    let device = pick(sel, "cosyvoice_device")
-        .unwrap_or(if crate::setup::detect_driver() { "cuda" } else { "cpu" })
-        .to_string();
-    let speed = sel_num(mroot, "cosyvoice_speed").map(|s| s as f32).unwrap_or(1.0);
-    let temperature = sel_num(mroot, "cosyvoice_temp").map(|t| t as f32).unwrap_or(0.7);
-
-    crate::cosyvoice::CosyVoiceConfig {
-        bin,
-        llm_model,
-        flow_model,
-        hift_model,
-        s3tok_model,
-        campplus_model,
-        voices_model,
-        voice_dir: None,
-        backend,
-        device,
-        temperature,
-        speed,
-        ready_timeout_secs: 180,
-    }
-}
-
-/// Резолв активного TTS движка: OpenRouter (если or_tts_on=="1"), CosyVoice (если tts_engine=="cosyvoice"), иначе Higgs
-pub fn resolve_tts_engine(repo_root: &Path, mroot: &Path, sel: &Value) -> TtsEngineChoice {
-    if openrouter_stage_on(mroot, "tts") || pick(sel, "tts_engine") == Some("openrouter") {
-        return TtsEngineChoice::OpenRouter;
-    }
-    if pick(sel, "tts_engine") == Some("cosyvoice") {
-        let cfg = resolve_cosyvoice_config(repo_root, mroot, sel);
-        return TtsEngineChoice::CosyVoice(cfg);
-    }
-    let (model_root, quant) = resolve_tts(mroot, sel);
-    TtsEngineChoice::Higgs { model_root, quant }
 }
 
 /// Higgs TTS: папки higgs-{q8_0,q6_k,q4_k_m}, внутри файл {q}.gguf. Возврат (каталог, квант-строка

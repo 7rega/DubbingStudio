@@ -150,19 +150,6 @@ pub async fn openrouter_voices(Query(q): Query<HashMap<String, String>>) -> Resp
     Json(json!({ "voices": voices, "supportsRussian": ru })).into_response()
 }
 
-// ─── GET /engine/cosyvoice/check ───────────────────────────────────────────
-// Диагностика готовности CosyVoice 3 (наличие crispasr.exe, LLM, Flow, HiFT, S3Tok, CAMPPlus).
-pub async fn cosyvoice_check(State(st): State<AppState>) -> Response {
-    let repo = st.repo_root.clone();
-    let mroot = st.models_root.clone();
-    let res = tokio::task::spawn_blocking(move || {
-        crate::cosyvoice::check_cosyvoice3(&repo, &mroot)
-    })
-    .await
-    .unwrap_or_else(|_| crate::cosyvoice::check_cosyvoice3(&st.repo_root, &st.models_root));
-    Json(res).into_response()
-}
-
 // ─── PATCH /engine/opts ─────────────────────────────────────────────────────
 // Свап слота модели (asr/tts/llm/vision) в рантайме. У порта OPTS иммутабелен внутри AppState
 // (Arc<EngineOpts>), а модели резолвятся путями из окружения/дефолтов — рантайм-свап без пересоздания
