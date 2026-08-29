@@ -415,7 +415,10 @@
     "open_out": "Ouvrir",
     "saveAll": "Tout enregistrer dans un dossier",
     "back": "Retour",
-    "add": "Ajouter des fichiers"
+    "add": "Ajouter des fichiers",
+    "addSubs": "Charger des sous-titres",
+    "readySubs": "Sous-titres prêts (sans traduction)",
+    "removeSubs": "Supprimer les sous-titres"
   },
   "transcribe": {
     "title": "Transcription et diarisation",

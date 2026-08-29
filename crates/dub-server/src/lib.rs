@@ -55,6 +55,31 @@ pub use jobs::JobQueue;
 pub type TtsCache = Arc<Mutex<Option<(render::EngineKey, Arc<audiocpp::AudiocppEngine>)>>>;
 static GLOBAL_TTS_CACHE: OnceLock<TtsCache> = OnceLock::new();
 
+static TITLE_HOOK: std::sync::RwLock<Option<Box<dyn Fn(&str) + Send + Sync>>> = std::sync::RwLock::new(None);
+
+/// Регистрация хука для обновления заголовка окна Tauri (вызывается из desktop/src-tauri).
+pub fn set_title_hook(hook: Box<dyn Fn(&str) + Send + Sync>) {
+    if let Ok(mut lock) = TITLE_HOOK.write() {
+        *lock = Some(hook);
+    }
+}
+
+/// Вызвать зарегистрированный хук обновления заголовка окна.
+pub fn update_window_title(title: &str) {
+    if let Ok(lock) = TITLE_HOOK.read() {
+        if let Some(h) = lock.as_ref() {
+            h(title);
+        }
+    }
+}
+
+async fn set_window_title(Json(body): Json<Value>) -> Json<Value> {
+    if let Some(title) = body.get("title").and_then(|v| v.as_str()) {
+        update_window_title(title);
+    }
+    Json(json!({ "ok": true }))
+}
+
 /// Принудительно выгрузить Higgs TTS из VRAM/RAM (для взаимного вытеснения перед стартом LLM/Vision).
 pub fn evict_tts_cache() {
     if let Some(cache) = GLOBAL_TTS_CACHE.get() {
@@ -417,6 +442,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/projects/{pid}/audio-vocals", get(audio_vocals))
         .route("/projects/{pid}/audio-bgm", get(audio_bgm))
         .route("/jobs/{job_id}/events", get(job_events))
+        .route("/window/title", post(set_window_title))
         // SPA fallback — монтируется последним, чтобы не затенять API.
         .fallback(spa_fallback)
         // Видео-аплоад — большие тела. axum по дефолту режет на 2МБ (multipart ломается на

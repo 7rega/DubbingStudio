@@ -415,7 +415,10 @@
     "open_out": "Abrir",
     "saveAll": "Salvar tudo em uma pasta",
     "back": "Voltar",
-    "add": "Adicionar arquivos"
+    "add": "Adicionar arquivos",
+    "addSubs": "Carregar legendas",
+    "readySubs": "Legendas prontas (sem tradução)",
+    "removeSubs": "Remover legendas"
   },
   "transcribe": {
     "title": "Transcrição e diarização",

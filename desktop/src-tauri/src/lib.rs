@@ -244,6 +244,11 @@ pub fn run() {
             if let Some(ic) = icon {
                 let _ = win.set_icon(ic);
             }
+            // Динамическое обновление заголовка окна (название проекта/видео) из dub-server / фронтенда
+            let win_for_title = win.clone();
+            dub_server::set_title_hook(Box::new(move |t| {
+                let _ = win_for_title.set_title(t);
+            }));
             // авто-обновление: проверка на GitHub-релизе в фоне, установка по согласию (см. spawn_update_check)
             spawn_update_check(app.handle().clone(), is_portable());
             Ok(())

@@ -413,9 +413,12 @@
     "done": "listo",
     "error": "error",
     "open_out": "Abrir",
-    "saveAll": "Guardar todo en una carpeta",
-    "back": "Volver",
-    "add": "Añadir archivos"
+    "saveAll": "Guardar todo en la carpeta",
+    "back": "Atrás",
+    "add": "Añadir archivos",
+    "addSubs": "Cargar subtítulos",
+    "readySubs": "Subtítulos listos (sin traducción)",
+    "removeSubs": "Eliminar subtítulos"
   },
   "transcribe": {
     "title": "Transcripción y diarización",

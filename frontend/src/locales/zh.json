@@ -415,7 +415,10 @@
     "open_out": "打开",
     "saveAll": "全部保存到文件夹",
     "back": "返回",
-    "add": "添加文件"
+    "add": "添加文件",
+    "addSubs": "加载字幕",
+    "readySubs": "已翻译字幕（跳过翻译）",
+    "removeSubs": "删除字幕"
   },
   "transcribe": {
     "title": "转录与说话人分离",

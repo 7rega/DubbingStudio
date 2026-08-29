@@ -29,6 +29,8 @@ type State = {
   setVisionOn: (b: boolean) => void;
   recent: ProjectSummary[];
   setRecent: (recent: ProjectSummary[] | ((prev: ProjectSummary[]) => ProjectSummary[])) => void;
+  activeName: string | null;         // исходное имя видеофайла открытого проекта для отображения в шапке/заголовке
+  setActiveName: (activeName: string | null) => void;
   setStage: (s: Stage) => void;
   setPid: (p: string | null) => void;
   setProject: (p: Project | null) => void;
@@ -51,6 +53,8 @@ export const useStore = create<State>((set, get) => ({
   setRecent: (recent) => set((s) => ({
     recent: typeof recent === "function" ? recent(s.recent) : recent
   })),
+  activeName: null,
+  setActiveName: (activeName) => set({ activeName }),
   stage: "boot",   // при загрузке SPA сперва проверяем /setup/status; если чего-то обязательного нет -> "setup"
   pid: null,
   project: null,

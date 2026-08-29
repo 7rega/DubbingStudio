@@ -197,6 +197,7 @@ export const api = {
   pickFolder: () => postJson<{ dir: string | null }>("/pick-folder", {}),   // нативный диалог выбора папки (batch-экспорт в одну папку)
   pickFileSave: (default_name: string, filter_name: string, filter_ext: string) => postJson<{ path: string | null }>("/pick-file-save", { default_name, filter_name, filter_ext }),   // нативный диалог сохранения файла
   saveOutput: (pid: string, dir: string, name: string) => postJson<{ ok: boolean; path?: string }>(`/projects/${pid}/save-output`, { dir, name }),   // копия готового output в dir под именем оригинала
+  setWindowTitle: (title: string) => postJson<{ ok: boolean }>("/window/title", { title }).catch(() => ({ ok: false })),   // динамический заголовок окна OS
   dubUrl: (pid: string, rev = 0) => `${BASE}/projects/${pid}/dub?rev=${rev}`,   // playable dubbed video (frames + dub audio)
   // SSE job progress -> onEvent per message; resolves on done, rejects on error
   watchJob: (jobId: string, onEvent: (e: JobEvent) => void) =>

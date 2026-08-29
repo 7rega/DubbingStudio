@@ -108,7 +108,10 @@
     "startingRender": "Voice synthesis & assembling…",
     "saveAll": "Save all to folder",
     "back": "Back",
-    "add": "Add files"
+    "add": "Add files",
+    "addSubs": "Add subtitles",
+    "readySubs": "Ready subtitles (no translation)",
+    "removeSubs": "Remove subtitles"
   },
   "transcribe": {
     "title": "Transcript and diarization",

@@ -999,8 +999,38 @@ function TopBar() {
   const setStage = useStore((s) => s.setStage);
   const setPid = useStore((s) => s.setPid);
   const setProject = useStore((s) => s.setProject);
+  const setActiveName = useStore((s) => s.setActiveName);
+  const activeName = useStore((s) => s.activeName);
+  const pid = useStore((s) => s.pid);
+  const project = useStore((s) => s.project);
+  const recent = useStore((s) => s.recent);
+
+  // Имя открытого видеофайла / проекта для отображения в заголовке окна OS
+  const displayTitle = useMemo(() => {
+    if (activeName) return activeName;
+    if (pid) {
+      const fromRecent = recent.find((x) => x.pid === pid)?.video;
+      if (fromRecent) return fromRecent;
+    }
+    if (project?.meta?.video) {
+      const b = baseName(project.meta.video);
+      if (!b.startsWith("source.")) return b;
+    }
+    return "";
+  }, [activeName, pid, project?.meta?.video, recent]);
+
+  // Обновление заголовка окна в OS Window Caption (Tauri set_title) и в document.title
+  useEffect(() => {
+    const title = displayTitle
+      ? `Dub Studio ${__APP_VERSION__} — ${displayTitle}`
+      : `Dub Studio ${__APP_VERSION__}`;
+    document.title = title;
+    api.setWindowTitle(title);
+  }, [displayTitle]);
+
   // start over with a new video — the current project stays on disk (reachable via Recent), so no confirm needed
   const newProject = () => {
+    setActiveName(null);
     setProject(null); setPid(null); setStage("empty");
     try { history.replaceState(null, "", location.pathname); } catch { /* no-op */ }
   };
@@ -1326,6 +1356,8 @@ function DropZone() {
   async function openProject(pid: string) {
     try {
       const p = await api.getProject(pid);
+      const fromRecent = useStore.getState().recent.find((x) => x.pid === pid)?.video;
+      s.setActiveName(fromRecent || baseName(p.meta.video || pid));
       s.setPid(pid); s.setProject(p); s.setRendered(false);                     // покадровое превью, не старое output-видео
       s.setStage("editor");                                                     // TranscriptView vs Editor выбирается по projMode при рендере
       window.history.pushState(null, "", `?pid=${pid}`);                        // перезагрузка/боот вернёт этот проект
@@ -1337,6 +1369,7 @@ function DropZone() {
     if (!file) return;
     try {
       useStore.getState().pushActivity("Создание проекта в ручном режиме...", "work");
+      s.setActiveName(file.name);
       const { project_id } = await api.createProject(file, isAudioFile(file) ? null : subsFile);
       s.setPid(project_id);
       const proj = await api.getProject(project_id);
@@ -1354,6 +1387,7 @@ function DropZone() {
 
   async function run() {
     if (!file) return;
+    s.setActiveName(file.name);
     s.setStage("analyzing");
     s.setAudioOnly(audioOnly);               // «Анализируем аудио» вместо «видео» для аудио-входа
     // Шаги степпера — только те, что реально будут в ЭТОЙ джобе (жалоба: «Находим текст на экране»
@@ -7255,7 +7289,16 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
 const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; funnyOn: boolean; funny: string; voGain: number; voDuckMode: string; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
   { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") !== "0" : true, funnyOn: false, funny: "", voGain: -12, voDuckMode: "dynamic", trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
 
-type BatchItem = { name: string; status: "queued" | "analyzing" | "rendering" | "done" | "error"; pid: string | null; pct: number | null; stage?: string; detail?: string; msg?: string };
+type BatchItem = {
+  name: string;
+  status: "queued" | "analyzing" | "rendering" | "done" | "error";
+  pid: string | null;
+  pct: number | null;
+  stage?: string;
+  detail?: string;
+  msg?: string;
+  subsFile?: File | null;
+};
 
 // Пакетный режим: пачка файлов -> для каждого createProject -> analyze -> (dub/funny) render, последовательно
 // (движок одно-воркерный, GPU сериализует). Переиспользует существующие эндпоинты, отдельного backend не нужно.
@@ -7267,7 +7310,7 @@ function BatchView() {
   const visionOn = useStore((s) => s.visionOn);
   const setVisionOn = useStore((s) => s.setVisionOn);
   const [batchSubBlur, setBatchSubBlur] = useState(subBlur);
-  const [items, setItems] = useState<BatchItem[]>(() => filesRef.current.map((f) => ({ name: f.name, status: "queued", pid: null, pct: 0 })));
+  const [items, setItems] = useState<BatchItem[]>(() => filesRef.current.map((f) => ({ name: f.name, status: "queued", pid: null, pct: 0, subsFile: null })));
   const [running, setRunning] = useState(false);
   const [doneN, setDoneN] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -7279,24 +7322,35 @@ function BatchView() {
   const eRewrite = funnyOn && (audio === "dub" || audio === "voiceover") ? funny.trim() : "";
   const doRender = audio === "dub" || audio === "voiceover";
 
+  const attachSubs = (i: number, f: File) => {
+    setItems((xs) => xs.map((x, j) => (j === i ? { ...x, subsFile: f } : x)));
+  };
+
+  const removeSubs = (i: number) => {
+    setItems((xs) => xs.map((x, j) => (j === i ? { ...x, subsFile: null } : x)));
+  };
+
   async function start() {
     setRunning(true);
     for (let i = 0; i < filesRef.current.length; i++) {
       if (!mountedRef.current) break;   // компонент размонтирован — прекращаем
       const upd = (patch: Partial<BatchItem>) => setItems((xs) => xs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
       const bf = filesRef.current[i];
+      const curItem = items[i];
       try {
         upd({ status: "analyzing", pct: null, detail: t("batch.creatingProject") });
         const ao = isAudioFile(bf);                                // этот файл — аудио (без видео)?
-        const { project_id } = await api.createProject(bf);
+        const { project_id } = await api.createProject(bf, ao ? null : curItem?.subsFile);
         upd({ pid: project_id, detail: t("batch.startingAnalyze") });
         // Транскрипт всегда вжигает субтитры (иначе транскрипт-режим дал бы видео без текста); аудио-файл ->
         // субтитры/бёрн/OCR off (нет видео) -> на выходе озвученный WAV.
         const fSubs = ao ? "none" : eSubs;
         const fBurn = ao ? false : audio === "transcribe" ? true : burn;
         const effNumSpeakers = audio === "transcribe" ? transcribeSpeakers : 0;
+        // Загруженные субтитры считаются уже переведёнными -> пропускаем MT-перевод
+        const importTranslated = !ao && !!curItem?.subsFile;
         // Стиль перевода (#112) — параметром analyze (patch до analyze невозможен: project.json ещё нет).
-        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, false, trStyle, false, "", "auto", effNumSpeakers, ao ? false : visionOn);
+        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, importTranslated, trStyle, false, "", "auto", effNumSpeakers, ao ? false : visionOn);
         await api.watchJob(job_id, (e) => {
           if (e.type === "progress") {
             const stepText = stageLabel(e.stage, t) || e.msg || e.stage || "";
@@ -7405,6 +7459,48 @@ function BatchView() {
                     )}
                   </div>
                 </div>
+
+                {/* Прикрепление субтитров для каждого видео */}
+                {!isAudioFile(filesRef.current[i]) && (
+                  <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                    {it.subsFile ? (
+                      <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium bg-[color-mix(in_oklab,var(--color-accent)_12%,transparent)] text-[var(--color-accent)] border border-[color-mix(in_oklab,var(--color-accent)_30%,transparent)]">
+                        <Captions size={12} className="shrink-0" />
+                        <span className="truncate max-w-[240px]" title={it.subsFile.name}>{it.subsFile.name}</span>
+                        <span className="text-[9px] opacity-85 font-normal px-1 py-0.2 rounded bg-[color-mix(in_oklab,var(--color-accent)_20%,transparent)]">
+                          {t("batch.readySubs")}
+                        </span>
+                        {!running && (
+                          <button
+                            onClick={() => removeSubs(i)}
+                            title={t("batch.removeSubs")}
+                            className="hover:text-[var(--color-text)] ml-0.5 p-0.5 rounded transition"
+                          >
+                            <X size={11} />
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      it.status === "queued" && (
+                        <label className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition cursor-pointer select-none ${running ? "pointer-events-none opacity-50" : ""}`}>
+                          <Captions size={12} />
+                          <span>{t("batch.addSubs")}</span>
+                          <input
+                            type="file"
+                            accept=".srt,.ass,.ssa,.vtt,.sub,.txt"
+                            disabled={running}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) attachSubs(i, f);
+                              e.target.value = "";
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                      )
+                    )}
+                  </div>
+                )}
 
                 {/* Ход прогресса: подробная стадия и анимированный прогресс-бар */}
                 {(it.status === "analyzing" || it.status === "rendering") && (
