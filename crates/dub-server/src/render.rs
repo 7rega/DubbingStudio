@@ -1828,18 +1828,26 @@ fn build_dub(
         // юзера: «дубляж громче фона, но фон НЕ гробить» (−12 дБ срезали весь фон). Каскад фолбэков:
         // огибающая -> sidechain -> прямой mix.
         let new_audio = wd.join("new_audio.m4a");
+
+        // Высококачественный SoXR ресемплинг 24k -> 44.1k с крутым фильтром Найквиста перед сведением с музыкой
+        let dub_44k = wd.join("dub_vocals_44k.wav");
+        let dub_mix_source = match media::resample_soxr(&dub, &dub_44k, 44100) {
+            Ok(()) => dub_44k,
+            Err(_) => dub.clone(),
+        };
+
         // Дакинг фона под дубляжом — ОПЦИЯ (duck_on), ВЫКЛ по умолчанию: не всем нужен, многим фон нужен
         // на полной громкости. Выкл -> прямой mix (фон 1:1). Вкл -> огибающая −3дБ (каскад фолбэков).
         if !crate::models::duck_enabled(&paths.models_root) {
             emit(progress, "mix", "сведение: инструментал + дубль-вокал (дакинг ВЫКЛ — фон полный)");
-            media::mix(&dub, &inst, &new_audio)?;
+            media::mix(&dub_mix_source, &inst, &new_audio)?;
         } else {
             emit(progress, "mix", &format!("сведение: инструментал + дубль-вокал (дакинг ВКЛ, огибающая, {} блоков)", speech_blocks.len()));
-            if media::mix_env(&dub, &inst, &speech_blocks, &new_audio).is_err() {
+            if media::mix_env(&dub_mix_source, &inst, &speech_blocks, &new_audio).is_err() {
                 emit(progress, "mix", "огибающая недоступна -> сайдчейн-дакинг");
-                if media::mix_ducked(&dub, &inst, &new_audio).is_err() {
+                if media::mix_ducked(&dub_mix_source, &inst, &new_audio).is_err() {
                     emit(progress, "mix", "sidechain недоступен -> прямой mix");
-                    media::mix(&dub, &inst, &new_audio)?;
+                    media::mix(&dub_mix_source, &inst, &new_audio)?;
                 }
             }
         }
@@ -2313,24 +2321,19 @@ fn timeline(placed: &[(f64, PathBuf, f64, usize)], total_dur: f64, out_wav: &Pat
             track[i + k] += *v;
         }
     }
-    // НЕ делить всю дорожку на глобальный пик: один громкий сэмпл (крик) ронял громкость ВСЕГО
-    // фильма на ~12дБ (жалоба «голос тихий», замер -30.6 LUFS при фразах -18.7). Фразы уже
-    // пик-клипнуты в normalize_voice; здесь лишь страховка от сумм при наложении — локальный клип.
-    for x in &mut track {
-        *x = x.clamp(-0.985, 0.985);
-    }
+    // Soft-Knee Peak Limiter вместо жесткого clamp: мягко сатурирует редкие межфразовые суммы
+    // при наложении дорожек без внесения прямоугольных ступенек, треска и кликов.
+    crate::duck::apply_peak_control_slice(&mut track, -0.2);
     wavio::write_mono_f32(out_wav, &track, sr)?;
     Ok(spans)
 }
 
 /// Выровнять ОДНУ фразу к общей громкости, чтобы все спикеры звучали одинаково громко (dialog-gated
-/// нормализация): интегральная громкость BS.1770 к -14 LUFS; короткие/тихие фразы — RMS к -16 dBFS.
-/// Цель поднята с -16 (замер 2026-07-17: фон мультика -17.1 LUFS, голос -16 давал зазор всего 1.1 LU —
-/// «дубляж не слышно»; вместе с поджимом фона -3 дБ в миксе зазор ~6 LU = нижняя проф-норма).
+/// нормализация): High-Pass (75 Гц) -> De-Esser (6.5 кГц) -> интегральная громкость BS.1770 к -14 LUFS -> Soft-Knee Limiter.
 /// РЕШЕНИЕ ЮЗЕРА (EBU R128 best-practice, НЕ копия питона — «гугли best practices, не повторяй за мной»,
 /// приказ 2026-07-12): гейн НЕ клэмпится вниз (тихая фраза дожимается, сани-кап +40 dB от раздувания
-/// почти-тишины), а редкие пики результата клипятся на 0.985 — иначе timeline давил всю дорожку
-/// глобальным делением на пик одного крика (-12 дБ всему фильму, замер R5).
+/// почти-тишины), а редкие пики результата мягко сглаживаются параболическим лимитером (Soft-Knee -0.2 dBFS)
+/// вместо жесткого clamp, исключая цифровой хруст и щелчки.
 fn normalize_voice(x: &mut [f32], sr: u32) {
     if x.is_empty() {
         return;
@@ -2339,6 +2342,14 @@ fn normalize_voice(x: &mut [f32], sr: u32) {
     if peak < 1e-4 {
         return; // почти тишина -> не трогаем
     }
+
+    // 1. High-Pass фильтр 75 Гц (устранение DC-offset, инфразвука и ударов по микрофону)
+    apply_high_pass_filter(x, sr, 75.0);
+
+    // 2. DSP De-Esser (смягчение свистящих сибилянтов «с/ц/щ» и звона TTS на 5.5–8.5 кГц)
+    apply_deesser(x, sr);
+
+    // 3. Расчёт целевого гейна через ITU-R BS.1770 LUFS / RMS
     let mut gain: Option<f64> = None;
     if x.len() >= (0.4 * sr as f64) as usize {
         if let Some(li) = integrated_lufs(x, sr) {
@@ -2365,11 +2376,89 @@ fn normalize_voice(x: &mut [f32], sr: u32) {
         10f64.powf(-16.0 / 20.0) / rms
     });
     let gain = gain.min(10f64.powf(40.0 / 20.0)); // сани-кап +40 dB (не раздувать почти-тишину)
-    // Пик-клип 0.985 ПОФРАЗНО: у нормализованной к -16 LUFS фразы редкие пики могут выйти за 1.0 —
-    // клипим доли процента сэмплов ЗДЕСЬ, чтобы timeline не давил ВСЮ дорожку глобальным делением
-    // на пик одной фразы (замер R5: сегменты -18.7 LUFS, дорожка после деления -30.6 = «голос тихий»).
+
     for v in x.iter_mut() {
-        *v = ((*v as f64 * gain) as f32).clamp(-0.985, 0.985);
+        *v = (*v as f64 * gain) as f32;
+    }
+
+    // 4. Soft-Knee Peak Limiter вместо жесткого clamp (исключает щелчки и гармонический треск)
+    crate::duck::apply_peak_control_slice(x, -0.2);
+}
+
+/// Применить High-Pass фильтр 2-го порядка (Butterworth) для устранения DC-смещения и инфразвука (<75 Гц).
+pub fn apply_high_pass_filter(samples: &mut [f32], sr: u32, cutoff_hz: f64) {
+    if samples.is_empty() || sr == 0 {
+        return;
+    }
+    let fc = cutoff_hz.clamp(20.0, sr as f64 * 0.45);
+    // Q = 1/sqrt(2) ≈ 0.70710678 для максимально гладкой характеристики Butterworth
+    let hp = biquad_high_pass(fc, 0.7071067811865475, sr as f64);
+    apply_biquad_in_place(samples, &hp);
+}
+
+/// Полосовой биквад-фильтр (Audio EQ Cookbook Bandpass, peak gain = Q).
+fn biquad_band_pass(fc: f64, q: f64, sr: f64) -> [f64; 5] {
+    let w0 = 2.0 * std::f64::consts::PI * fc / sr;
+    let (cw, sw) = (w0.cos(), w0.sin());
+    let alpha = sw / (2.0 * q);
+    let b0 = alpha;
+    let b1 = 0.0;
+    let b2 = -alpha;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cw;
+    let a2 = 1.0 - alpha;
+    [b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0]
+}
+
+/// Встроенный DSP Split-Band De-Esser: динамически смягчает резкие свистящие согласные («с», «ц», «ш», «щ»)
+/// на частотах 5.5–8.5 кГц без глушения гласных и потери яркости голоса.
+pub fn apply_deesser(samples: &mut [f32], sr: u32) {
+    if samples.is_empty() || sr < 12000 {
+        return;
+    }
+    let fc = (6500.0f64).min(sr as f64 * 0.42);
+    let bp_coeffs = biquad_band_pass(fc, 1.4, sr as f64);
+    let sibilance = apply_biquad(samples, &bp_coeffs);
+
+    // Коэффициенты огибающей: быстрая атака (1.5 мс) и плавный релиз (20 мс)
+    let sr_f = sr as f32;
+    let att = (-1.0 / (0.0015 * sr_f)).exp();
+    let rel = (-1.0 / (0.020 * sr_f)).exp();
+    let att_bb = (-1.0 / (0.005 * sr_f)).exp();
+    let rel_bb = (-1.0 / (0.050 * sr_f)).exp();
+
+    let mut env_sib = 0.0f32;
+    let mut env_bb = 0.0f32;
+
+    // Порог срабатывания: энергия сибилянтов превышает 28% от широкополосного сигнала (-11 dB)
+    // и абсолютный уровень выше -42 dBFS (0.008)
+    let threshold_ratio = 0.28f32;
+    let abs_threshold = 0.008f32;
+
+    for i in 0..samples.len() {
+        let abs_s = sibilance[i].abs();
+        let abs_x = samples[i].abs();
+
+        if abs_s > env_sib {
+            env_sib = att * env_sib + (1.0 - att) * abs_s;
+        } else {
+            env_sib = rel * env_sib + (1.0 - rel) * abs_s;
+        }
+
+        if abs_x > env_bb {
+            env_bb = att_bb * env_bb + (1.0 - att_bb) * abs_x;
+        } else {
+            env_bb = rel_bb * env_bb + (1.0 - rel_bb) * abs_x;
+        }
+
+        let target_ratio = env_bb * threshold_ratio;
+        if env_sib > target_ratio && env_sib > abs_threshold {
+            let excess = env_sib / target_ratio.max(1e-5);
+            // Мягкая компрессия сибилянтов: коэффициент подавления от 1.0 до 0.45 (-7 dB max cut)
+            let atten = (1.0 / (1.0 + (excess - 1.0) * 0.8)).clamp(0.40, 1.0);
+            // Вычитаем избыток сибилянтной полосы
+            samples[i] += (atten - 1.0) * sibilance[i];
+        }
     }
 }
 
@@ -2410,6 +2499,21 @@ fn integrated_lufs(x: &[f32], sr: u32) -> Option<f64> {
     }
     let mean_rel = rel_gated.iter().sum::<f64>() / rel_gated.len() as f64;
     Some(loud(mean_rel))
+}
+
+/// Биквад-фильтр прямой формы I на месте (in-place).
+fn apply_biquad_in_place(x: &mut [f32], c: &[f64; 5]) {
+    let [b0, b1, b2, a1, a2] = *c;
+    let (mut x1, mut x2, mut y1, mut y2) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for sample in x.iter_mut() {
+        let xn = *sample as f64;
+        let yn = b0 * xn + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        x2 = x1;
+        x1 = xn;
+        y2 = y1;
+        y1 = yn;
+        *sample = yn as f32;
+    }
 }
 
 /// Биквад-фильтр прямой формы I (b/a нормированы на a0). Возвращает отфильтрованный сигнал.
@@ -2864,4 +2968,70 @@ mod tests {
         assert!(!ass.contains("<|emotion:anger|>"));
         assert!(!ass.contains("<|sfx:laughter|>"));
     }
+
+    #[test]
+    fn test_high_pass_filter_attenuation() {
+        let sr = 24000u32;
+        let n = sr as usize;
+        let mut sub_bass = vec![0.0f32; n];
+        let mut mid_tone = vec![0.0f32; n];
+
+        // 30 Гц инфразвук (должен быть сильно ослаблен фильтром 75 Гц)
+        for (i, s) in sub_bass.iter_mut().enumerate() {
+            let t = i as f64 / sr as f64;
+            *s = (2.0 * std::f64::consts::PI * 30.0 * t).sin() as f32;
+        }
+
+        // 1000 Гц тон (должен пройти без изменений)
+        for (i, s) in mid_tone.iter_mut().enumerate() {
+            let t = i as f64 / sr as f64;
+            *s = (2.0 * std::f64::consts::PI * 1000.0 * t).sin() as f32;
+        }
+
+        let rms = |x: &[f32]| (x.iter().map(|&v| (v * v) as f64).sum::<f64>() / x.len() as f64).sqrt();
+        let orig_sub_rms = rms(&sub_bass);
+        let orig_mid_rms = rms(&mid_tone);
+
+        apply_high_pass_filter(&mut sub_bass, sr, 75.0);
+        apply_high_pass_filter(&mut mid_tone, sr, 75.0);
+
+        let filtered_sub_rms = rms(&sub_bass);
+        let filtered_mid_rms = rms(&mid_tone);
+
+        // Ослабление 30 Гц более чем на 12 дБ (в 4+ раза)
+        assert!(filtered_sub_rms < orig_sub_rms * 0.25, "HPF 75Hz must attenuate 30Hz: {filtered_sub_rms} vs {orig_sub_rms}");
+        // 1000 Гц проходит практически без изменений (< 2% дельта)
+        assert!((filtered_mid_rms - orig_mid_rms).abs() / orig_mid_rms < 0.02, "1000Hz should pass transparently");
+    }
+
+    #[test]
+    fn test_deesser_dynamic_attenuation() {
+        let sr = 24000u32;
+        let n = sr as usize;
+        let mut sibilant_burst = vec![0.0f32; n];
+
+        // Имитируем всплеск резкого сибилянта «с» (6.5 кГц) поверх речи 300 Гц
+        for (i, s) in sibilant_burst.iter_mut().enumerate() {
+            let t = i as f64 / sr as f64;
+            let vowel = (2.0 * std::f64::consts::PI * 300.0 * t).sin() as f32 * 0.4;
+            let sib = if (0.3..=0.6).contains(&t) {
+                (2.0 * std::f64::consts::PI * 6500.0 * t).sin() as f32 * 0.8 // резкий свист
+            } else {
+                0.0
+            };
+            *s = vowel + sib;
+        }
+
+        let peak_before = sibilant_burst[0.35 as usize * sr as usize..0.55 as usize * sr as usize]
+            .iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+
+        apply_deesser(&mut sibilant_burst, sr);
+
+        let peak_after = sibilant_burst[0.35 as usize * sr as usize..0.55 as usize * sr as usize]
+            .iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+
+        // Де-эссер должен динамически поджать резкий сибилянтный пик
+        assert!(peak_after < peak_before * 0.85, "De-Esser must tame harsh sibilance: {peak_after} vs {peak_before}");
+    }
 }
+

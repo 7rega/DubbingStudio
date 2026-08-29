@@ -229,27 +229,33 @@ pub fn mix_voiceover_sample_accurate(
     Ok((mixed_channels, metrics))
 }
 
-/// Отдельная стадия контроля запаса по уровню (Headroom) и True-Peak защиты.
-/// Мягко поджимает пики выше ceiling_linear без внесения ступенек.
-pub fn apply_peak_control(channels: &mut [Vec<f32>], ceiling_dbfs: f32) {
+/// Мягкое параболическое ограничение пиков (Soft-Knee Peak Limiting) для 1D-среза сэмплов.
+/// Предотвращает цифровой клиппинг и щелчки без внесения ступенек формы волны.
+pub fn apply_peak_control_slice(samples: &mut [f32], ceiling_dbfs: f32) {
     let ceiling = 10f32.powf(ceiling_dbfs / 20.0).clamp(0.5, 1.0);
     let knee_start = ceiling * 0.85;
 
-    for ch in channels.iter_mut() {
-        for sample in ch.iter_mut() {
-            let abs_s = sample.abs();
-            if abs_s > knee_start {
-                let sign = if *sample >= 0.0 { 1.0 } else { -1.0 };
-                let x = (abs_s - knee_start) / (ceiling - knee_start + 1e-6);
-                // Мягкая параболическая сатурация (soft knee)
-                let compressed = if x < 1.0 {
-                    knee_start + (ceiling - knee_start) * (x - 0.25 * x * x)
-                } else {
-                    ceiling + (ceiling - knee_start) * 0.75 * ((x - 1.0) / (x + 1.0))
-                };
-                *sample = (compressed * sign).clamp(-ceiling, ceiling);
-            }
+    for sample in samples.iter_mut() {
+        let abs_s = sample.abs();
+        if abs_s > knee_start {
+            let sign = if *sample >= 0.0 { 1.0 } else { -1.0 };
+            let x = (abs_s - knee_start) / (ceiling - knee_start + 1e-6);
+            // Мягкая параболическая сатурация (soft knee)
+            let compressed = if x < 1.0 {
+                knee_start + (ceiling - knee_start) * (x - 0.25 * x * x)
+            } else {
+                ceiling + (ceiling - knee_start) * 0.75 * ((x - 1.0) / (x + 1.0))
+            };
+            *sample = (compressed * sign).clamp(-ceiling, ceiling);
         }
+    }
+}
+
+/// Отдельная стадия контроля запаса по уровню (Headroom) и True-Peak защиты для многоканального аудио.
+/// Мягко поджимает пики выше ceiling_linear без внесения ступенек.
+pub fn apply_peak_control(channels: &mut [Vec<f32>], ceiling_dbfs: f32) {
+    for ch in channels.iter_mut() {
+        apply_peak_control_slice(ch, ceiling_dbfs);
     }
 }
 
@@ -392,4 +398,22 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_apply_peak_control_slice_smoothness() {
+        let mut slice = vec![0.0f32; 100];
+        for (i, s) in slice.iter_mut().enumerate() {
+            *s = (i as f32 / 50.0) * 1.5; // от 0 до 3.0 (сильный перегруз)
+        }
+        apply_peak_control_slice(&mut slice, -0.2);
+        let ceiling = 10f32.powf(-0.2 / 20.0);
+        for &s in &slice {
+            assert!(s.abs() <= ceiling + 1e-4, "Exceeded ceiling: {s}");
+        }
+        // Проверка монотонности и отсутствия ступенек
+        for i in 1..slice.len() {
+            assert!(slice[i] >= slice[i - 1], "Non-monotonic soft knee at {i}");
+        }
+    }
 }
+

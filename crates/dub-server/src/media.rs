@@ -270,10 +270,36 @@ pub fn time_stretch(src: &Path, dst: &Path, factor: f64) -> Result<(), String> {
     ])
 }
 
+/// Найти ближайший переход через ноль (Zero-Crossing) вокруг `center` в пределах `max_search` сэмплов.
+pub fn find_nearest_zero_crossing(samples: &[f32], center: usize, max_search: usize) -> usize {
+    if samples.is_empty() || center >= samples.len() {
+        return center;
+    }
+    let start = center.saturating_sub(max_search);
+    let end = (center + max_search).min(samples.len() - 1);
+    let mut best_idx = center;
+    let mut min_val = samples[center].abs();
+
+    for i in start..end {
+        let s0 = samples[i];
+        let s1 = samples[i + 1];
+        if s0 * s1 <= 0.0 {
+            let abs_i = s0.abs();
+            let abs_i1 = s1.abs();
+            let (idx, val) = if abs_i <= abs_i1 { (i, abs_i) } else { (i + 1, abs_i1) };
+            if val < min_val || best_idx == center {
+                min_val = val;
+                best_idx = idx;
+            }
+        }
+    }
+    best_idx
+}
+
 /// Умное сжатие межсловных пауз (squeeze_internal_pauses):
 /// Находит промежутки тишины (< -35 dB) между словами длительностью > min_pause_ms (70 мс)
-/// и сжимает их до target_max_pause_ms (40 мс) с применением 5 мс сглаживающего кроссфейда.
-/// Не затрагивает сами слова и гласные, сохраняя 100% тембр и натуральность речи.
+/// и сжимает их до target_max_pause_ms (40 мс) с применением Zero-Crossing привязки и 5 мс косинусного кроссфейда.
+/// Не затрагивает сами слова и гласные, сохраняя 100% тембр и естественность речи без щелчков.
 pub fn squeeze_internal_pauses(
     samples: &[f32],
     sr: u32,
@@ -315,6 +341,7 @@ pub fn squeeze_internal_pauses(
     let min_pause_wins = ((0.070f64 / 0.010f64).round() as usize).max(1); // 70 мс = 7 окон
     let target_pause_samples = ((sr as f64 * target_max_pause_ms / 1000.0).round() as usize).max(1);
     let xfade_samples = ((sr as f64 * 0.005).round() as usize).min(target_pause_samples / 2).max(1); // 5 мс
+    let zc_radius = ((sr as f64 * 0.004).round() as usize).max(1); // 4 мс радиус поиска нуля
 
     let mut out: Vec<f32> = Vec::with_capacity(samples.len());
 
@@ -349,31 +376,36 @@ pub fn squeeze_internal_pauses(
             let pause_raw_len = pause_raw_end - pause_raw_start;
 
             if pause_len_wins >= min_pause_wins && pause_raw_len > target_pause_samples + xfade_samples {
-                // Сжимаем паузу до target_pause_samples с 5мс кроссфейдом между началом и концом тишины
+                // Сжимаем паузу до target_pause_samples с привязкой к Zero-Crossing и 5мс косинусным кроссфейдом
                 let half_target = target_pause_samples / 2;
-                let part1_end = pause_raw_start + half_target;
-                let part2_start = pause_raw_end.saturating_sub(half_target + xfade_samples);
+                let raw_p1_end = pause_raw_start + half_target;
+                let raw_p2_start = pause_raw_end.saturating_sub(half_target + xfade_samples);
+
+                // Ищем ближайшие нули формы волны для бесшовного стыка
+                let p1_end = find_nearest_zero_crossing(samples, raw_p1_end, zc_radius);
+                let p2_start = find_nearest_zero_crossing(samples, raw_p2_start, zc_radius);
 
                 // Добавляем первую часть сжатой паузы (за вычетом зоны кроссфейда)
-                let p1_clean_end = part1_end.saturating_sub(xfade_samples);
-                out.extend_from_slice(&samples[pause_raw_start..p1_clean_end]);
+                let p1_clean_end = p1_end.saturating_sub(xfade_samples);
+                out.extend_from_slice(&samples[pause_raw_start..p1_clean_end.min(samples.len())]);
 
-                // Кроссфейд стыка (xfade_samples)
+                // Equal-Power косинусный кроссфейд стыка (xfade_samples)
                 for i in 0..xfade_samples {
                     let alpha = i as f32 / xfade_samples as f32;
+                    let ease = 0.5 - 0.5 * (std::f32::consts::PI * alpha).cos();
                     let s1 = samples.get(p1_clean_end + i).copied().unwrap_or(0.0);
-                    let s2 = samples.get(part2_start + i).copied().unwrap_or(0.0);
-                    out.push((1.0 - alpha) * s1 + alpha * s2);
+                    let s2 = samples.get(p2_start + i).copied().unwrap_or(0.0);
+                    out.push((1.0 - ease) * s1 + ease * s2);
                 }
 
                 // Добавляем вторую часть сжатой паузы
-                let p2_clean_start = part2_start + xfade_samples;
-                if p2_clean_start < pause_raw_end {
-                    out.extend_from_slice(&samples[p2_clean_start..pause_raw_end]);
+                let p2_clean_start = p2_start + xfade_samples;
+                if p2_clean_start < pause_raw_end && p2_clean_start < samples.len() {
+                    out.extend_from_slice(&samples[p2_clean_start..pause_raw_end.min(samples.len())]);
                 }
             } else {
                 // Короткая пауза (<70 мс) — оставляем без изменений
-                out.extend_from_slice(&samples[pause_raw_start..pause_raw_end]);
+                out.extend_from_slice(&samples[pause_raw_start..pause_raw_end.min(samples.len())]);
             }
         }
     }
@@ -478,10 +510,10 @@ pub fn duck_envelope_file(src_audio: &Path, blocks: &[SpeechBlock], duck_db: f64
 }
 
 /// Акустическое согласование пространства (Scene Spatial Reverb):
-/// Насыщает сухой студийный голос тонкими ранними отражениями (Early Reflections, decay ~0.18с, wet -22 dB).
-/// Устраняет эффект «голоса из радиобудки» и естественно сажает диктора в видеоряд.
+/// Насыщает сухой студийный голос тонкими ранними отражениями (Early Reflections, decay ~0.08с, wet -24 dB).
+/// Устраняет эффект «голоса из радиобудки» и естественно сажает диктора в видеоряд без металлического звона и свиста.
 pub fn apply_spatial_reverb(src_wav: &Path, dst_wav: &Path) -> Result<(), String> {
-    let af = "aformat=channel_layouts=stereo,aecho=0.92:0.88:20|42:0.18|0.12";
+    let af = "aformat=channel_layouts=stereo,aecho=0.85:0.65:14|28:0.06|0.03,volume=0.98";
     run_ff(&[
         OsStr::new("-y"),
         OsStr::new("-i"), src_wav.as_os_str(),
