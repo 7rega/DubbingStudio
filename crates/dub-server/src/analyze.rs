@@ -465,6 +465,23 @@ impl WindowPlan {
 
 /// Слить короткие огрызки ОДНОГО спикера в одну фразу (#115). Whisper дробит предложение на «If» +
 /// «they find you.» — каждый огрызок озвучивается отдельно и звучит рвано. Клеим сосед в предыдущий,
+fn ends_sentence_text(text: &str) -> bool {
+    let trimmed = text.trim_end_matches(|c: char| {
+        c.is_whitespace()
+            || c == '"'
+            || c == '\''
+            || c == '»'
+            || c == '”'
+            || c == '’'
+            || c == ')'
+            || c == ']'
+            || c == '}'
+    });
+    trimmed.ends_with(['.', '!', '?', '…', '。', '！', '？', '؟', '۔']) || trimmed.ends_with("...")
+}
+
+/// Слить короткие огрызки ОДНОГО спикера в одну фразу (#115). Whisper дробит предложение на «If» +
+/// «they find you.» — каждый огрызок озвучивается отдельно и звучит рвано. Клеим сосед в предыдущий,
 /// если: тот же спикер, зазор < 0.35с, хотя бы один из двух короткий (<1.6с), суммарно ≤12с и <200 симв.
 /// Так «одна фраза, разбитая таймингом» снова становится одной; две полные разные фразы НЕ склеиваются.
 fn merge_short_turns(segs: &mut Vec<Segment>) {
@@ -488,7 +505,14 @@ fn merge_short_turns(segs: &mut Vec<Segment>) {
             let short = (last.end - last.start) < SHORT || (s.end - s.start) < SHORT;
             let dur_ok = (s.end - last.start) <= MAX_DUR;
             let ch_ok = last.src_text.chars().count() + s.src_text.chars().count() < MAX_CH;
-            if same_spk && gap > -OVERLAP && gap < GAP && short && dur_ok && ch_ok {
+            let last_finished = ends_sentence_text(&last.src_text);
+            // Если предыдущее предложение уже грамматически завершено точкой, склеиваем лишь при плотном примыкании микро-осколка
+            let can_merge = if last_finished {
+                gap > -OVERLAP && gap < 0.12 && ((last.end - last.start) < 0.8 || (s.end - s.start) < 0.8)
+            } else {
+                gap > -OVERLAP && gap < GAP && short
+            };
+            if same_spk && can_merge && dur_ok && ch_ok {
                 let lt = last.src_text.trim_end();
                 let rt = s.src_text.trim_start();
                 let sep = if lt.is_empty() || rt.is_empty() { "" } else { " " };
@@ -757,7 +781,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
             &format!("транскрипция единым прогоном на GPU ({} спикер(ов))", nsp),
         );
         let ts = asr
-            .transcribe(&asr_wav, &args.src_lang)
+            .transcribe_with_diar(&asr_wav, turns, &args.src_lang)
             .map_err(|e| format!("transcribe: {e}"))?;
         let segs: Vec<Segment> = ts
             .into_iter()
@@ -770,11 +794,13 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                     .collect();
                 let mut extra = serde_json::Map::new();
                 extra.insert("words".into(), Value::Array(words));
-                let spk = if turns.is_empty() {
-                    "0".to_string()
-                } else {
-                    speaker_for(s.start, s.end, turns)
-                };
+                let spk = s.speaker.unwrap_or_else(|| {
+                    if turns.is_empty() {
+                        "0".to_string()
+                    } else {
+                        speaker_for(s.start, s.end, turns)
+                    }
+                });
                 Segment {
                     id: format!("s{i}"),
                     start: s.start,

@@ -357,6 +357,10 @@ impl AsrEngine for WhisperAsr {
         Ok(segment_words(&words, SEG_MAX_GAP, SEG_MAX_DUR))
     }
 
+    fn transcribe_words(&mut self, wav: &Path, lang: &str) -> Result<Vec<Word>, AsrError> {
+        self.run_words_auto(wav, lang)
+    }
+
     /// Пакет: ОДИН сабпроцесс на весь список (filelist .txt — Purfview поддерживает; старт процесса
     /// дорогой, поэтому не по-файлово). JSONы читаем по stem'ам входных файлов. Сбой пакета -> все None
     /// (вызывающий QC это переживает: непроверенные сегменты просто не ретраятся по ASR-критерию).

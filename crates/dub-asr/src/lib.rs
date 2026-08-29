@@ -68,7 +68,10 @@ fn exec_config() -> ExecutionConfig {
     })
 }
 
-pub use segment::{segment_words, Segment, Word, SEG_MAX_GAP, SEG_MAX_DUR};
+pub use segment::{
+    segment_words, segment_words_with_diarization, Segment, Word, SEG_IDEAL_DUR, SEG_MAX_DUR,
+    SEG_MAX_GAP,
+};
 
 /// Целевая частота parakeet-rs.
 pub const TARGET_SR: u32 = 16_000;
@@ -170,6 +173,14 @@ pub struct SpeakerSegment {
 pub trait AsrEngine {
     fn transcribe(&mut self, wav: &Path, lang: &str) -> Result<Vec<Segment>, AsrError>;
     fn transcribe_turns(&mut self, wav: &Path, turns: &[Turn], lang: &str) -> Result<Vec<SpeakerSegment>, AsrError>;
+    /// Словный поток аудиофайла с таймкодами каждого слова.
+    fn transcribe_words(&mut self, wav: &Path, lang: &str) -> Result<Vec<Word>, AsrError>;
+    /// Транскрипция с пословной диаризацией (Word-Level Diarization): слова сначала маппятся
+    /// на спикеров из turns, и сегментация гарантирует жесткий разрыв реплики при любой смене спикера.
+    fn transcribe_with_diar(&mut self, wav: &Path, turns: &[Turn], lang: &str) -> Result<Vec<Segment>, AsrError> {
+        let words = self.transcribe_words(wav, lang)?;
+        Ok(segment_words_with_diarization(&words, turns, SEG_MAX_GAP, SEG_MAX_DUR))
+    }
     /// Пакетная транскрипция МНОГИХ коротких файлов → полный текст каждого (None = не распознан/сбой).
     /// Дефолт — цикл transcribe (Parakeet in-process и так быстр); Whisper переопределяет ОДНИМ
     /// сабпроцессом на весь список (старт процесса дорогой, 333 файла по-одному — минуты впустую).
@@ -449,6 +460,10 @@ impl AsrEngine for Asr {
     // Parakeet-TDT сам определяет язык (мультиязычная модель) — lang игнорируем, как и в whole-clip.
     fn transcribe_turns(&mut self, wav: &Path, turns: &[Turn], _lang: &str) -> Result<Vec<SpeakerSegment>, AsrError> {
         Asr::transcribe_turns(self, wav, turns)
+    }
+    fn transcribe_words(&mut self, wav: &Path, _lang: &str) -> Result<Vec<Word>, AsrError> {
+        let (audio, sr) = load_wav_16k_mono(wav)?;
+        self.transcribe_words_windowed(&audio, sr, None)
     }
 }
 
