@@ -2673,8 +2673,11 @@ function MultiTrackTimeline({
     let lastEndLane1 = 0;
     const sorted = [...segments].sort((a, b) => a.start - b.start);
     for (const s of sorted) {
-      if (s.extra && typeof s.extra.lane === "number") {
-        const l = s.extra.lane % 2;
+      const explicitLane = typeof s.lane === "number"
+        ? s.lane
+        : (s.extra && typeof s.extra.lane === "number" ? s.extra.lane : undefined);
+      if (typeof explicitLane === "number") {
+        const l = Math.abs(explicitLane) % 2;
         map[s.id] = l;
         if (l === 0) lastEndLane0 = Math.max(lastEndLane0, s.end);
         else lastEndLane1 = Math.max(lastEndLane1, s.end);
@@ -2833,14 +2836,23 @@ function MultiTrackTimeline({
     let newStart = draggingSeg.origStart;
     let newEnd = draggingSeg.origEnd;
 
-    // Vertical drag: threshold 16px to flip between Subtitles 1 (Lane 0) and Subtitles 2 (Lane 1)
+    // Vertical drag: determine lane from cursor vertical position in track or relative dy
     let newLane = draggingSeg.origLane;
     if (draggingSeg.type === "move") {
-      const dy = e.clientY - draggingSeg.startY;
-      if (draggingSeg.origLane === 0 && dy > 16) {
-        newLane = 1;
-      } else if (draggingSeg.origLane === 1 && dy < -16) {
-        newLane = 0;
+      if (trackRef.current) {
+        const trackRect = trackRef.current.getBoundingClientRect();
+        const yInsideTrack = e.clientY - trackRect.top;
+        // Top ruler (22px) + Dub (48px) + BGM (48px) + Vocals (48px) = 166px
+        // Subtitles track midline is at 166px + 44px = 210px
+        if (yInsideTrack >= 210) {
+          newLane = 1;
+        } else {
+          newLane = 0;
+        }
+      } else {
+        const dy = e.clientY - draggingSeg.startY;
+        if (dy > 12) newLane = 1;
+        else if (dy < -12) newLane = 0;
       }
     }
 
@@ -2903,6 +2915,7 @@ function MultiTrackTimeline({
             ...s,
             start: newStart,
             end: newEnd,
+            lane: newLane,
             extra: { ...s.extra, lane: newLane },
             dirty: true,
           }
@@ -2918,14 +2931,17 @@ function MultiTrackTimeline({
     const targetSeg = cur?.segments.find((s) => s.id === draggingSeg.id);
     setDraggingSeg(null);
     if (targetSeg) {
+      const chosenLane = typeof targetSeg.lane === "number"
+        ? targetSeg.lane
+        : (targetSeg.extra && typeof targetSeg.extra.lane === "number" ? targetSeg.extra.lane : 0);
       try {
         const fresh = await api.patch(pid, {
           op: "segment",
           id: targetSeg.id,
           start: targetSeg.start,
           end: targetSeg.end,
-          lane: targetSeg.extra?.lane,
-          extra: targetSeg.extra,
+          lane: chosenLane,
+          extra: { ...targetSeg.extra, lane: chosenLane },
         });
         setProject(fresh);
       } catch { /* ignore */ }
@@ -3195,20 +3211,20 @@ function MultiTrackTimeline({
             </button>
           </div>
 
-          {/* Track 4 Header: 💬 Субтитры 1 & 💬 Субтитры 2 (2 x 38px = 76px) */}
-          <div className="h-[38px] border-b border-[var(--color-border)]/40 px-2.5 flex items-center justify-between text-[10.5px]">
+          {/* Track 4 Header: 💬 Субтитры 1 & 💬 Субтитры 2 (2 x 44px = 88px) */}
+          <div className="h-[44px] border-b border-[var(--color-border)]/40 px-2.5 flex items-center justify-between text-[10.5px]">
             <span className="font-medium text-[var(--color-accent)] truncate flex items-center gap-1.5" title="Дорожка субтитров 1 (Lane A)">
               <Captions size={11} className="shrink-0" /> Субтитры 1
             </span>
-            <span className="mono text-[8.5px] px-1 py-0.2 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-bold">
+            <span className="mono text-[8.5px] px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-bold">
               {lane0Count}
             </span>
           </div>
-          <div className="h-[38px] px-2.5 flex items-center justify-between text-[10.5px]">
+          <div className="h-[44px] px-2.5 flex items-center justify-between text-[10.5px]">
             <span className="font-medium text-[var(--color-accent)] truncate flex items-center gap-1.5" title="Дорожка субтитров 2 (Lane B)">
               <Captions size={11} className="shrink-0 opacity-75" /> Субтитры 2
             </span>
-            <span className="mono text-[8.5px] px-1 py-0.2 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-bold">
+            <span className="mono text-[8.5px] px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-bold">
               {lane1Count}
             </span>
           </div>
@@ -3243,7 +3259,7 @@ function MultiTrackTimeline({
             const tAt = Math.max(0, Math.min(total, (clickX / totalPx) * total));
             setContextMenu({ x: e.clientX, y: e.clientY, tAt });
           }}
-          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[242px] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-black/20"
+          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[260px] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:bg-white/25 hover:[&::-webkit-scrollbar-thumb]:bg-white/40 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-black/30"
           onScroll={handleTimelineScroll}
         >
           <div ref={trackRef} className="relative h-full" style={{ width: `${totalPx}px` }}>
@@ -3279,10 +3295,10 @@ function MultiTrackTimeline({
               {renderWaveform(peaksVocals, "#06b6d4", 48, true)}
             </div>
 
-            {/* Track 4: 💬 Двухдорожечные субтитры (76px, Lane 0: top 2px, Lane 1: top 40px) */}
-            <div className="h-[76px] relative pb-2 border-t border-[var(--color-border)]/20">
+            {/* Track 4: 💬 Двухдорожечные субтитры (88px, Lane 0: top 4px, Lane 1: top 48px) */}
+            <div className="h-[88px] relative pb-2 border-t border-[var(--color-border)]/30 bg-black/15">
               {/* Divider line between Subtitles 1 and Subtitles 2 */}
-              <div className="absolute top-[38px] left-0 right-0 h-px border-b border-dashed border-white/10 pointer-events-none" />
+              <div className="absolute top-[44px] left-0 right-0 h-px border-b border-dashed border-white/10 pointer-events-none" />
 
               {visibleSegments.map((seg) => {
                 const leftPx = seg.start * zoom;
@@ -3295,7 +3311,7 @@ function MultiTrackTimeline({
                 const isCompact = widthPx < 55;
                 const isTiny = widthPx < 30;
                 const lane = segmentLanes[seg.id] ?? 0;
-                const topPx = lane === 0 ? 2 : 40;
+                const topPx = lane === 0 ? 4 : 48;
 
                 const isRegen = Boolean(seg.extra?.regenerated);
                 return (
@@ -3312,7 +3328,7 @@ function MultiTrackTimeline({
                       setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
                     }}
                     title={isRegen ? "Фраза перегенерирована вручную" : undefined}
-                    className={`group/seg absolute h-[34px] rounded-md border flex items-center justify-between text-[11px] cursor-grab active:cursor-grabbing transition-all overflow-hidden ${spkClass} ${
+                    className={`group/seg absolute h-[36px] rounded-md border flex items-center justify-between text-[11px] cursor-grab active:cursor-grabbing transition-all overflow-hidden ${spkClass} ${
                       isRegen ? "border-t-[3px] border-t-emerald-400 shadow-[inset_0_3px_8px_rgba(52,211,153,0.35)]" : ""
                     } ${
                       isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""

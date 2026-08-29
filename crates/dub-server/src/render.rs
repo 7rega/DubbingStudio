@@ -2239,7 +2239,7 @@ fn fit_to_slot(seg_wav: &Path, target_dur: f64, work_path: &Path, cap: f64, paus
 /// 2. Иначе — гибридный алгоритм: спикер 0 -> дорожка 0, спикер 1 -> дорожка 1,
 ///    при занятости предпочтительной дорожки — вытеснение на свободную (collision-free overflow).
 fn get_segment_lane(s: &dub_core::Segment, cursors: &[f64; 2]) -> usize {
-    if let Some(lane) = s.extra.get("lane").and_then(|v| v.as_u64()) {
+    if let Some(lane) = s.extra.get("lane").and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|x| x.max(0) as u64))) {
         (lane as usize) % 2
     } else {
         let spk_num = s.speaker.as_deref().and_then(|spk| spk.parse::<usize>().ok()).unwrap_or(0);
