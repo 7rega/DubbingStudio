@@ -948,11 +948,9 @@ fn build_dub(
         std::collections::HashMap::new()
     };
 
-    // placed = [(at, wav_path, dur)]. cursor-aware fit (как в питоне). dur мерится ЗДЕСЬ (в цикле
-    // укладки) и хранится рядом — дакинг-блоки строятся из него БЕЗ повторного ffprobe (перф [22]).
-    // Имя seg-файла и слот next.start — по индексу fi в ПОЛНОМ списке proj.segments.
-    let mut placed: Vec<(f64, PathBuf, f64)> = Vec::with_capacity(segs.len());
-    let mut cursor = 0.0f64;
+    // placed = [(at, wav_path, dur, lane)]. 2-lane multitrack timeline (Субтитры 1 & Субтитры 2).
+    let mut placed: Vec<(f64, PathBuf, f64, usize)> = Vec::with_capacity(segs.len());
+    let mut cursors = [0.0f64; 2];
     let n_all = proj.segments.len();
     // Анти-артефактные счётчики на весь ролик: consec — проблемные фразы ПОДРЯД (сброс на чистой);
     // retry_budget — суммарный лимит ретраев по длине ролика (лестница из 5 попыток длиннее старой).
@@ -1065,12 +1063,13 @@ fn build_dub(
         // 'оставить оригинал': вырезаем ИСХОДНУЮ речь сюда, без TTS и без atempo-подгонки (порт _build_dub keep-ветки).
         // Режем СРАЗУ в 24к моно (питон media.trim(..., sr=24000)) — timeline кладёт по sr ПЕРВОГО файла (TTS=24к),
         // без ресемпла; 44.1к-вырез играл бы не на той скорости. Без промежуточного 16к (не терять ВЧ).
+        let lane = get_segment_lane(s, &cursors);
         if seg_keep(s) {
             media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
-            let at = s.start.max(cursor);
+            let at = s.start.max(cursors[lane]);
             let d = media::duration(&raw)?;
-            cursor = at + d;
-            placed.push((at, raw, d));
+            cursors[lane] = at + d;
+            placed.push((at, raw, d, lane));
             continue;
         }
         let tgt = s.tgt_text.trim();
@@ -1378,9 +1377,20 @@ fn build_dub(
         } else {
             0.0
         };
+        let lane = get_segment_lane(s, &cursors);
         let onset = s.start + lead_in;
-        let at = onset.max(cursor);
-        let nxt = if fi + 1 < n_all { proj.segments[fi + 1].start } else { total };
+        let at = onset.max(cursors[lane]);
+        let nxt = {
+            let mut found = total;
+            for next_s in &proj.segments[(fi + 1)..] {
+                let next_lane = get_segment_lane(next_s, &cursors);
+                if next_lane == lane {
+                    found = next_s.start;
+                    break;
+                }
+            }
+            found
+        };
         let room = (nxt - at).max(0.3);
         let fitp = wd.join(format!("seg_{sid}_fit.wav"));
 
@@ -1486,9 +1496,9 @@ fn build_dub(
             paths.max_stretch
         };
         // Дрейф-кап (#116, находка [4]): рассинхрон дороже темпа. Кап 1.25 при cursor-ripple копит сдвиг
-        // на плотном диалоге — фразы всё позже. Если дубль уже отстал (cursor > s.start), эскалируем кап
+        // на плотном диалоге — фразы всё позже. Если дубль уже отстал (cursors[lane] > s.start), эскалируем кап
         // до нужного, чтобы догнать слот (потолок 2.0), ценой временной спешки.
-        let drift = (cursor - s.start).max(0.0);
+        let drift = (cursors[lane] - s.start).max(0.0);
         let raw_dur = media::duration(&raw).unwrap_or(0.0);
         let needed = if target_slot > 0.05 { raw_dur / target_slot } else { 1.0 };
         // При включенном тумблере — прямое ускорение атемпо под точный размер субтитра (до 4.0x).
@@ -1515,8 +1525,8 @@ fn build_dub(
             }
         }
         let (fit, d) = fit_to_slot(&raw, target_slot, &fitp, eff_cap, pause_squeeze_on)?;
-        cursor = at + d;
-        placed.push((at, fit, d));
+        cursors[lane] = at + d;
+        placed.push((at, fit, d, lane));
         // В QC — только реально синтезированное в этом прогоне (кэш уже проверялся в своём прогоне).
         // kept_original (оригинальная реплика вместо неспасаемого выкрика) НЕ сверяем: там исходный
         // язык, ASR-QC счёл бы его браком и пересинтезировал обратно в артефакт.
@@ -2210,24 +2220,48 @@ fn fit_to_slot(seg_wav: &Path, target_dur: f64, work_path: &Path, cap: f64, paus
     Ok((work_path.to_path_buf(), d))
 }
 
-/// Уложить сегменты на полную дорожку по таймкодам, без перекрытия/обрезки. Порт assemble.timeline.
-/// Применяет 10 мс crossfade к краям фраз для устранения кликов.
-fn timeline(placed: &[(f64, PathBuf, f64)], total_dur: f64, out_wav: &Path) -> Result<Vec<(f64, f64)>, String> {
+/// Вычислить дорожку субтитров (Lane 0 / Lane 1) для сегмента:
+/// 1. При наличии явного s.extra["lane"] (ручной Drag-and-Drop) — используем его.
+/// 2. Иначе — гибридный алгоритм: спикер 0 -> дорожка 0, спикер 1 -> дорожка 1,
+///    при занятости предпочтительной дорожки — вытеснение на свободную (collision-free overflow).
+fn get_segment_lane(s: &dub_core::Segment, cursors: &[f64; 2]) -> usize {
+    if let Some(lane) = s.extra.get("lane").and_then(|v| v.as_u64()) {
+        (lane as usize) % 2
+    } else {
+        let spk_num = s.speaker.as_deref().and_then(|spk| spk.parse::<usize>().ok()).unwrap_or(0);
+        let pref = spk_num % 2;
+        let other = 1 - pref;
+        if cursors[pref] <= s.start {
+            pref
+        } else if cursors[other] <= s.start {
+            other
+        } else if cursors[pref] <= cursors[other] {
+            pref
+        } else {
+            other
+        }
+    }
+}
+
+/// Уложить сегменты на 2-дорожечный таймлайн (Субтитры 1 и Субтитры 2) с независимыми курсорами
+/// и цифровым суммированием (Digital Summing) одновременной речи.
+/// Применяет 10 мс crossfade к краям фраз для устранения кликов и soft-limiter от перегруза.
+fn timeline(placed: &[(f64, PathBuf, f64, usize)], total_dur: f64, out_wav: &Path) -> Result<Vec<(f64, f64)>, String> {
     if placed.is_empty() {
         // тишина total_dur @ 24000.
         let n = (total_dur * 24000.0) as usize;
         wavio::write_mono_f32(out_wav, &vec![0.0f32; n], 24000)?;
         return Ok(Vec::new());
     }
-    let mut placed: Vec<(f64, PathBuf, f64)> = placed.to_vec();
+    let mut placed = placed.to_vec();
     placed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     // sr берём из первого файла.
     let first = wavio::read_mono_f32(&placed[0].1)?;
     let sr = first.1;
     let mut laid: Vec<(f64, Vec<f32>)> = Vec::with_capacity(placed.len());
     let mut spans: Vec<(f64, f64)> = Vec::with_capacity(placed.len());
-    let mut cursor = 0.0f64;
-    for (start, wav, _) in &placed {
+    let mut lane_cursors = [0.0f64; 2];
+    for (start, wav, _, lane) in &placed {
         let (mut s, ssr) = if *wav == placed[0].1 {
             (first.0.clone(), first.1)
         } else {
@@ -2246,14 +2280,16 @@ fn timeline(placed: &[(f64, PathBuf, f64)], total_dur: f64, out_wav: &Path) -> R
             }
         }
 
-        let at = start.max(cursor);
+        let l = *lane % 2;
+        let at = start.max(lane_cursors[l]);
         let end = at + s.len() as f64 / sr as f64;
 
-        cursor = end;
+        lane_cursors[l] = end;
         spans.push((at, end));
         laid.push((at, s));
     }
-    let len = ((total_dur.max(cursor) * sr as f64).ceil()) as usize;
+    let max_cursor = lane_cursors[0].max(lane_cursors[1]);
+    let len = ((total_dur.max(max_cursor) * sr as f64).ceil()) as usize;
     let mut track = vec![0.0f32; len];
     for (at, s) in &laid {
         let i = (at * sr as f64) as usize;

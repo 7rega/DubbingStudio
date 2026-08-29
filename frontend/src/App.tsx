@@ -2645,12 +2645,63 @@ function MultiTrackTimeline({
     id: string;
     type: "move" | "resize-left" | "resize-right";
     startX: number;
+    startY: number;
     origStart: number;
     origEnd: number;
+    origLane: number;
   } | null>(null);
 
   const total = Math.max(0.1, duration);
   const totalPx = Math.max(800, total * zoom);
+
+  // Hybrid Lane Allocation: precalculate Lane 0 / Lane 1 for every segment with collision-free overflow
+  const segmentLanes = useMemo(() => {
+    const map: Record<string, number> = {};
+    let lastEndLane0 = 0;
+    let lastEndLane1 = 0;
+    const sorted = [...segments].sort((a, b) => a.start - b.start);
+    for (const s of sorted) {
+      if (s.extra && typeof s.extra.lane === "number") {
+        const l = s.extra.lane % 2;
+        map[s.id] = l;
+        if (l === 0) lastEndLane0 = Math.max(lastEndLane0, s.end);
+        else lastEndLane1 = Math.max(lastEndLane1, s.end);
+      } else {
+        const spkNum = parseInt(s.speaker ?? "0", 10) || 0;
+        const pref = spkNum % 2;
+        const other = 1 - pref;
+        let chosen = pref;
+        if (pref === 0) {
+          if (lastEndLane0 <= s.start) {
+            chosen = 0;
+          } else if (lastEndLane1 <= s.start) {
+            chosen = 1;
+          } else if (lastEndLane0 <= lastEndLane1) {
+            chosen = 0;
+          } else {
+            chosen = 1;
+          }
+        } else {
+          if (lastEndLane1 <= s.start) {
+            chosen = 1;
+          } else if (lastEndLane0 <= s.start) {
+            chosen = 0;
+          } else if (lastEndLane1 <= lastEndLane0) {
+            chosen = 1;
+          } else {
+            chosen = 0;
+          }
+        }
+        map[s.id] = chosen;
+        if (chosen === 0) lastEndLane0 = Math.max(lastEndLane0, s.end);
+        else lastEndLane1 = Math.max(lastEndLane1, s.end);
+      }
+    }
+    return map;
+  }, [segments]);
+
+  const lane0Count = segments.filter((s) => (segmentLanes[s.id] ?? 0) === 0).length;
+  const lane1Count = segments.filter((s) => (segmentLanes[s.id] ?? 0) === 1).length;
 
   // Auto-scroll follow playhead during playback
   useEffect(() => {
@@ -2679,7 +2730,8 @@ function MultiTrackTimeline({
   const handlePointerDown = (
     e: React.PointerEvent,
     seg: Project["segments"][number],
-    type: "move" | "resize-left" | "resize-right"
+    type: "move" | "resize-left" | "resize-right",
+    lane: number
   ) => {
     e.stopPropagation();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -2687,8 +2739,10 @@ function MultiTrackTimeline({
       id: seg.id,
       type,
       startX: e.clientX,
+      startY: e.clientY,
       origStart: seg.start,
       origEnd: seg.end,
+      origLane: lane,
     });
   };
 
@@ -2768,6 +2822,17 @@ function MultiTrackTimeline({
     let newStart = draggingSeg.origStart;
     let newEnd = draggingSeg.origEnd;
 
+    // Vertical drag: threshold 16px to flip between Subtitles 1 (Lane 0) and Subtitles 2 (Lane 1)
+    let newLane = draggingSeg.origLane;
+    if (draggingSeg.type === "move") {
+      const dy = e.clientY - draggingSeg.startY;
+      if (draggingSeg.origLane === 0 && dy > 16) {
+        newLane = 1;
+      } else if (draggingSeg.origLane === 1 && dy < -16) {
+        newLane = 0;
+      }
+    }
+
     if (draggingSeg.type === "move") {
       const len = draggingSeg.origEnd - draggingSeg.origStart;
       newStart = Math.max(0, draggingSeg.origStart + dt);
@@ -2822,7 +2887,15 @@ function MultiTrackTimeline({
     }
 
     const updatedSegs = cur.segments.map((s) =>
-      s.id === draggingSeg.id ? { ...s, start: newStart, end: newEnd, dirty: true } : s
+      s.id === draggingSeg.id
+        ? {
+            ...s,
+            start: newStart,
+            end: newEnd,
+            extra: { ...s.extra, lane: newLane },
+            dirty: true,
+          }
+        : s
     );
     useStore.getState().setProject({ ...cur, segments: updatedSegs });
   };
@@ -2840,6 +2913,8 @@ function MultiTrackTimeline({
           id: targetSeg.id,
           start: targetSeg.start,
           end: targetSeg.end,
+          lane: targetSeg.extra?.lane,
+          extra: targetSeg.extra,
         });
         setProject(fresh);
       } catch { /* ignore */ }
@@ -3109,13 +3184,21 @@ function MultiTrackTimeline({
             </button>
           </div>
 
-          {/* Track 4 Header: 💬 Субтитры */}
-          <div className="h-[74px] px-2.5 flex items-center justify-between text-[11px]">
-            <span className="font-medium text-[var(--color-accent)] truncate flex items-center gap-1.5">
-              <Captions size={12} className="shrink-0" /> Субтитры
+          {/* Track 4 Header: 💬 Субтитры 1 & 💬 Субтитры 2 (2 x 38px = 76px) */}
+          <div className="h-[38px] border-b border-[var(--color-border)]/40 px-2.5 flex items-center justify-between text-[10.5px]">
+            <span className="font-medium text-[var(--color-accent)] truncate flex items-center gap-1.5" title="Дорожка субтитров 1 (Lane A)">
+              <Captions size={11} className="shrink-0" /> Субтитры 1
             </span>
-            <span className="mono text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-bold">
-              {segments.length}
+            <span className="mono text-[8.5px] px-1 py-0.2 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-bold">
+              {lane0Count}
+            </span>
+          </div>
+          <div className="h-[38px] px-2.5 flex items-center justify-between text-[10.5px]">
+            <span className="font-medium text-[var(--color-accent)] truncate flex items-center gap-1.5" title="Дорожка субтитров 2 (Lane B)">
+              <Captions size={11} className="shrink-0 opacity-75" /> Субтитры 2
+            </span>
+            <span className="mono text-[8.5px] px-1 py-0.2 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] font-bold">
+              {lane1Count}
             </span>
           </div>
         </div>
@@ -3149,7 +3232,7 @@ function MultiTrackTimeline({
             const tAt = Math.max(0, Math.min(total, (clickX / totalPx) * total));
             setContextMenu({ x: e.clientX, y: e.clientY, tAt });
           }}
-          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[240px] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-black/20"
+          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-pointer select-none touch-none h-[242px] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-black/20"
           onScroll={handleTimelineScroll}
         >
           <div ref={trackRef} className="relative h-full" style={{ width: `${totalPx}px` }}>
@@ -3185,8 +3268,11 @@ function MultiTrackTimeline({
               {renderWaveform(peaksVocals, "#06b6d4", 48, true)}
             </div>
 
-            {/* Track 4: 💬 Субтитры Blocks (74px) with generous pb-6 for scrollbar clearance */}
-            <div className="h-[74px] relative pb-6">
+            {/* Track 4: 💬 Двухдорожечные субтитры (76px, Lane 0: top 2px, Lane 1: top 40px) */}
+            <div className="h-[76px] relative pb-2 border-t border-[var(--color-border)]/20">
+              {/* Divider line between Subtitles 1 and Subtitles 2 */}
+              <div className="absolute top-[38px] left-0 right-0 h-px border-b border-dashed border-white/10 pointer-events-none" />
+
               {visibleSegments.map((seg) => {
                 const leftPx = seg.start * zoom;
                 const rawWidthPx = (seg.end - seg.start) * zoom;
@@ -3197,31 +3283,33 @@ function MultiTrackTimeline({
                 const isLoop = loopSegId === seg.id;
                 const isCompact = widthPx < 55;
                 const isTiny = widthPx < 30;
+                const lane = segmentLanes[seg.id] ?? 0;
+                const topPx = lane === 0 ? 2 : 40;
 
-                    const isRegen = Boolean(seg.extra?.regenerated);
-                    return (
-                      <div
-                        key={seg.id}
-                        data-seg-block="true"
-                        style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
-                        onPointerDown={(e) => handlePointerDown(e, seg, "move")}
-                        onPointerMove={handlePointerMove}
-                        onPointerUp={handlePointerUp}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
-                        }}
-                        title={isRegen ? "Фраза перегенерирована вручную" : undefined}
-                        className={`group/seg absolute top-[5px] h-[46px] rounded-md border flex items-center justify-between text-[11px] cursor-grab active:cursor-grabbing transition-all overflow-hidden ${spkClass} ${
-                          isRegen ? "border-t-[3px] border-t-emerald-400 shadow-[inset_0_3px_8px_rgba(52,211,153,0.35)]" : ""
-                        } ${
-                          isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""
-                        } ${isLoop ? "border-amber-400 ring-2 ring-amber-400" : ""}`}
-                      >
+                const isRegen = Boolean(seg.extra?.regenerated);
+                return (
+                  <div
+                    key={seg.id}
+                    data-seg-block="true"
+                    style={{ left: `${leftPx}px`, width: `${widthPx}px`, top: `${topPx}px` }}
+                    onPointerDown={(e) => handlePointerDown(e, seg, "move", lane)}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
+                    }}
+                    title={isRegen ? "Фраза перегенерирована вручную" : undefined}
+                    className={`group/seg absolute h-[34px] rounded-md border flex items-center justify-between text-[11px] cursor-grab active:cursor-grabbing transition-all overflow-hidden ${spkClass} ${
+                      isRegen ? "border-t-[3px] border-t-emerald-400 shadow-[inset_0_3px_8px_rgba(52,211,153,0.35)]" : ""
+                    } ${
+                      isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""
+                    } ${isLoop ? "border-amber-400 ring-2 ring-amber-400" : ""}`}
+                  >
                     {/* Left Trim Handle (sleek micro-handle on hover) */}
                     <div
-                      onPointerDown={(e) => handlePointerDown(e, seg, "resize-left")}
+                      onPointerDown={(e) => handlePointerDown(e, seg, "resize-left", lane)}
                       className="w-1.5 h-full hover:w-2.5 bg-white/10 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 transition-all z-10"
                       title="Изменить начало (Drag to Trim)"
                     />
@@ -3255,7 +3343,7 @@ function MultiTrackTimeline({
 
                     {/* Right Trim Handle */}
                     <div
-                      onPointerDown={(e) => handlePointerDown(e, seg, "resize-right")}
+                      onPointerDown={(e) => handlePointerDown(e, seg, "resize-right", lane)}
                       className="w-1.5 h-full hover:w-2.5 bg-white/10 hover:bg-[var(--color-accent)] cursor-col-resize shrink-0 transition-all z-10"
                       title="Изменить конец (Drag to Trim)"
                     />

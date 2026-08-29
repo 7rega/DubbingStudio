@@ -111,12 +111,20 @@ fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(v) = edit.get("voice") {
         seg.voice = v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
     }
-    // hidden / keep_original — хранятся в extra (dub-core Segment их не типизирует, но проносит).
+    // hidden / keep_original / lane — хранятся в extra (dub-core Segment их не типизирует, но проносит).
     if let Some(h) = edit.get("hidden").and_then(|x| x.as_bool()) {
         seg.extra.insert("hidden".into(), Value::Bool(h));
     }
     if let Some(k) = edit.get("keep_original").and_then(|x| x.as_bool()) {
         seg.extra.insert("keep_original".into(), Value::Bool(k));
+    }
+    if let Some(l) = edit.get("lane").and_then(|x| x.as_i64()) {
+        seg.extra.insert("lane".into(), Value::from(l.clamp(0, 1)));
+    }
+    if let Some(extra_map) = edit.get("extra").and_then(|x| x.as_object()) {
+        for (k, v) in extra_map {
+            seg.extra.insert(k.clone(), v.clone());
+        }
     }
     seg.dirty = true;
     // Правка тайминга могла нарушить монотонность списка по времени, а render считает слот озвучки по
