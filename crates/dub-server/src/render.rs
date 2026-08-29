@@ -1092,6 +1092,7 @@ fn build_dub(
             continue;
         }
         let tgt = s.tgt_text.trim();
+        let tgt_chars = tgt.chars().filter(|c| c.is_alphanumeric()).count();
 
         // Референс голоса для сегмента: custom_ref (голос из пака или донор) -> emo_ref -> identity-реф
         let custom_ref: Option<(PathBuf, Option<String>)> = if let Some(v) = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
