@@ -136,12 +136,12 @@ pub fn segment_words(words: &[Word], max_gap: f64, max_dur: f64) -> Vec<Segment>
 }
 
 /// Разбить поток слов на сегменты с учётом спикеров из диаризации (Word-Level Diarization):
-/// 1. Каждому слову назначается спикер по интервалам turns через DiarIndex.
-/// 2. Фильтрация микро-джиттера: единичное изолированное слово, окруженное речью другого спикера
-///    с зазором < 0.25с, сглаживается до спикера соседей (устранение граничного шума Sortformer).
-/// 3. Жесткий разрыв сегмента при смене спикера (cur_spk != word_spk).
-/// 4. Внутри одного спикера — стандартные правила: конец предложения (.!?), пауза > max_gap,
-///    жёлтая зона 12-15с по границам клауз/VAD, жесткий лимит max_dur.
+/// 1. Защита слитной речи: слова внутри непрерывного речевого потока (gap < 0.20с без знаков препинания)
+///    НЕ разрываются из-за единичного шума классификатора Sortformer на 1 слове.
+/// 2. Смена спикера разрешается на естественных границах: знаки препинания (.!?…), клаузы (,, ;, :)
+///    или при паузе между репликами gap >= 0.20с.
+/// 3. Итоговый спикер каждого сегмента определяется по доминантному перекрытию всего интервала [start, end]
+///    с интервалами диаризации через DiarIndex.
 pub fn segment_words_with_diarization(
     words: &[Word],
     turns: &[crate::Turn],
@@ -164,7 +164,7 @@ pub fn segment_words_with_diarization(
         })
         .collect();
 
-    // Сглаживание одиночных выбросов классификатора на границах реплик:
+    // Сглаживание одиночных выбросов классификатора на границах слов:
     if tagged.len() >= 3 {
         for i in 1..(tagged.len() - 1) {
             let prev_spk = tagged[i - 1].1;
@@ -180,7 +180,7 @@ pub fn segment_words_with_diarization(
         }
     }
 
-    let mut segs: Vec<Segment> = Vec::new();
+    let mut raw_segs: Vec<Vec<Word>> = Vec::new();
     let mut cur: Vec<Word> = Vec::new();
     let mut cur_spk = tagged[0].1;
 
@@ -189,49 +189,52 @@ pub fn segment_words_with_diarization(
             let gap = (w.start - last.end).max(0.0);
             let dur = (last.end - first.start).max(0.0);
 
-            let is_speaker_change = spk != cur_spk;
+            // 1. Пауза больше допустимого (напр. >0.8с)
             let is_long_pause = gap > max_gap;
+
+            // 2. Смена спикера: разрешается ТОЛЬКО если есть пауза между словами (gap >= 0.20с) ИЛИ
+            //    предыдущее слово завершило фразу/клаузу (.!? или ,;:). Слитная речь (gap < 0.20с)
+            //    защищена от разрыва фразы («Shut the fuck up» не делится на «Shut» и «the fuck up»).
+            let is_speaker_change = spk != cur_spk && (gap >= 0.20 || ends_clause(&last.word) || ends_sentence(&last.word));
+
+            // 3. Жёлтая зона (12–15с): мягкий разрыв по клаузе/VAD/паузе
             let is_soft_split = dur >= SEG_IDEAL_DUR
                 && (last.is_asr_boundary || ends_clause(&last.word) || gap >= 0.35);
+
+            // 4. Жёсткий лимит (>15с)
             let is_hard_limit = dur >= max_dur;
 
             if is_speaker_change || is_long_pause || is_soft_split || is_hard_limit {
-                segs.push(Segment {
-                    start: first.start,
-                    end: last.end,
-                    text: join_words(&cur),
-                    words: std::mem::take(&mut cur),
-                    speaker: Some(cur_spk.to_string()),
-                });
+                raw_segs.push(std::mem::take(&mut cur));
                 cur_spk = spk;
             }
         }
         cur.push(w.clone());
         if ends_sentence(&w.word) {
-            if let (Some(first), Some(last)) = (cur.first(), cur.last()) {
-                segs.push(Segment {
-                    start: first.start,
-                    end: last.end,
-                    text: join_words(&cur),
-                    words: std::mem::take(&mut cur),
-                    speaker: Some(cur_spk.to_string()),
-                });
-            }
+            raw_segs.push(std::mem::take(&mut cur));
         }
     }
     if !cur.is_empty() {
-        if let (Some(first), Some(last)) = (cur.first(), cur.last()) {
-            segs.push(Segment {
-                start: first.start,
-                end: last.end,
-                text: join_words(&cur),
-                words: cur,
-                speaker: Some(cur_spk.to_string()),
-            });
-        }
+        raw_segs.push(cur);
     }
 
-    segs
+    // Для каждого сегмента определяем доминантного спикера по всему интервалу [start, end]
+    raw_segs
+        .into_iter()
+        .filter(|ws| !ws.is_empty())
+        .map(|ws| {
+            let start = ws.first().unwrap().start;
+            let end = ws.last().unwrap().end;
+            let spk = diar_index.assign(start, end);
+            Segment {
+                start,
+                end,
+                text: join_words(&ws),
+                words: ws,
+                speaker: Some(spk.to_string()),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -341,22 +344,20 @@ mod tests {
     }
 
     #[test]
-    fn diarization_smooths_single_word_boundary_jitter() {
-        // Спикер 0 говорит фразу, но одно слово из-за шума границы на 10мс попало в Turn другого:
+    fn diarization_protects_continuous_speech_from_mid_phrase_split() {
+        // Слитная фраза "Shut the fuck up." без пауз и пунктуации внутри, но с шумом в turns
         let words = vec![
-            w("Я", 0.0, 0.3),
-            w("иду", 0.35, 0.6),
-            w("домой.", 0.65, 1.0),
+            w("Shut", 11.0, 11.2),
+            w("the", 11.21, 11.3),
+            w("fuck", 11.31, 11.5),
+            w("up.", 11.51, 11.8),
         ];
-        // turns с ложным микро-терном посредине
         let turns = vec![
-            Turn { start: 0.0, end: 0.32, speaker: 0 },
-            Turn { start: 0.33, end: 0.62, speaker: 1 }, // ложный джиттер на коротком слове
-            Turn { start: 0.63, end: 1.2, speaker: 0 },
+            Turn { start: 10.0, end: 11.22, speaker: 1 },
+            Turn { start: 11.22, end: 12.0, speaker: 4 }, // шум классификатора посреди слитной фразы
         ];
         let segs = segment_words_with_diarization(&words, &turns, 0.8, 15.0);
-        assert_eq!(segs.len(), 1, "Одиночный джиттер должен сгладиться");
-        assert_eq!(segs[0].text, "Я иду домой.");
-        assert_eq!(segs[0].speaker.as_deref(), Some("0"));
+        assert_eq!(segs.len(), 1, "Слитная фраза не должна рваться на полуслове");
+        assert_eq!(segs[0].text, "Shut the fuck up.");
     }
 }
