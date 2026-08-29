@@ -46,8 +46,8 @@ export type Capabilities = {
   // Выбор ASR-движка (active.json): движок parakeet|whisper + модель/квант Whisper.
   selection?: Record<string, string>;
   asr_engines?: string[]; whisper_models?: string[]; whisper_computes?: string[];
-  // Видимые лимиты RAM (настройки): prefill-батч Gemma + длина реф-клипа клона.
-  llama_ubatches?: string[]; higgs_ref_secs_opts?: string[];
+  // Видимые лимиты RAM (настройки): prefill-батч Gemma + длина реф-клипа клона + лимит токенов TTS.
+  llama_ubatches?: string[]; higgs_ref_secs_opts?: string[]; higgs_max_tokens_opts?: string[];
 };
 export type JobEvent = { type: "progress" | "done" | "error"; stage?: string; pct?: number; msg?: string; result?: unknown; error?: string; component?: string; downloaded?: number; total?: number; parts?: { component: string; pct: number }[] };
 

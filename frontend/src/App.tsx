@@ -454,6 +454,18 @@ function ModelsSection() {
         {[
           { key: "llama_ubatch", label: t("settings.llamaUbatch"), hint: t("settings.llamaUbatchHint"), opts: cap?.llama_ubatches ?? ["0", "512", "256", "128"], def: "0", fmt: (v: string) => (v === "0" ? t("settings.auto") : v) },
           { key: "higgs_ref_secs", label: t("settings.higgsRef"), hint: t("settings.higgsRefHint"), opts: cap?.higgs_ref_secs_opts ?? ["12", "8", "6", "4"], def: "12", fmt: (v: string) => `${v}${t("settings.sec")}` },
+          {
+            key: "higgs_max_tokens",
+            label: t("settings.higgsMaxTokens"),
+            hint: t("settings.higgsMaxTokensHint"),
+            opts: cap?.higgs_max_tokens_opts ?? ["default", "auto", "256", "512", "768", "1024"],
+            def: "default",
+            fmt: (v: string) => {
+              if (v === "default") return t("settings.tokenDefault");
+              if (v === "auto") return t("settings.tokenAuto");
+              return `${v} ${t("settings.tokens")}`;
+            },
+          },
         ].map((row) => {
           const cur = cap?.selection?.[row.key] ?? row.def;
           return (

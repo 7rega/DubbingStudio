@@ -85,6 +85,7 @@ pub fn is_selection_key(key: &str) -> bool {
             // Лимиты RAM (видимые контролы в настройках, НЕ авто-магия): против OOM на слабой памяти.
             | "llama_ubatch"    // размер prefill-батча Gemma (меньше = меньше пиковый буфер графа prefill)
             | "higgs_ref_secs"  // длина реф-клипа клона голоса (меньше = меньше prefill Higgs; <12с спасает 32ГБ)
+            | "higgs_max_tokens" // лимит токенов Higgs TTS: default (дефолт DLL), auto (по длине фразы), или 256/512/768/1024
             | "bench"           // пер-стадийный бенчмарк (bench.json + ⏱ в журнале); галка в настройках, ВЫКЛ по умолчанию
             | "duck_on"         // дакинг фона под дубляжом (приглушать фон под речью); ВЫКЛ по умолчанию — не всем нужен
             | "vision_on"       // "1" -> мультимодальный анализ видеокадров (Vision); "0" -> Fast Text Mode (только текст)
@@ -285,6 +286,20 @@ pub fn sel_num(mroot: &Path, key: &str) -> Option<f64> {
 /// Пользователь на 32ГБ RAM может уменьшить (баг-репорт: >12с не влезает в prefill Higgs, ручная резка <12с спасает).
 pub fn higgs_ref_secs(mroot: &Path) -> f64 {
     sel_num(mroot, "higgs_ref_secs").filter(|s| *s > 0.0 && *s <= 60.0).unwrap_or(12.0)
+}
+
+/// Лимит токенов Higgs Audio v3 TTS:
+/// "default" -> None (дефолт DLL, не передаём max_tokens в JSON)
+/// "auto" -> Some(0) (динамический расчет по длине фразы)
+/// "256", "512", "768", "1024" -> Some(N) (фиксированный лимит)
+pub fn higgs_max_tokens(mroot: &Path) -> Option<u32> {
+    let sel = load_selection(mroot);
+    let val = sel.get("higgs_max_tokens").and_then(Value::as_str).unwrap_or("default");
+    match val {
+        "default" | "none" | "" => None,
+        "auto" => Some(0),
+        s => s.trim().parse::<u32>().ok().filter(|&n| n > 0),
+    }
 }
 
 /// Выбор ASR-движка для одной джобы: Parakeet (каталог TDT) либо Whisper (бинарь + модель + квант + девайс).

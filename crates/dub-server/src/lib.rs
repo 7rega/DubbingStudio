@@ -458,6 +458,7 @@ async fn capabilities(State(st): State<AppState>) -> Json<Value> {
         // Видимые лимиты RAM (настройки, не авто-магия): против OOM на слабой памяти. "0" = авто (дефолт).
         "llama_ubatches": ["0","512","256","128"],      // prefill-батч Gemma (меньше = меньше RAM)
         "higgs_ref_secs_opts": ["12","8","6","4"],       // длина реф-клипа клона (сек; <12 спасает 32ГБ)
+        "higgs_max_tokens_opts": ["default","auto","256","512","768","1024"], // лимит токенов TTS
     }))
 }
 

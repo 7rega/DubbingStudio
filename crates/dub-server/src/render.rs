@@ -1017,6 +1017,26 @@ fn build_dub(
     } else {
         0.30
     };
+
+    // Лимит токенов TTS (higgs_max_tokens): "default" -> None (дефолт DLL), "auto" -> Some(0), либо число.
+    let max_tokens_mode = crate::models::higgs_max_tokens(&paths.models_root);
+    let tok_json = |dur: f64| -> String {
+        match max_tokens_mode {
+            None => String::new(), // дефолт DLL (не передаём max_tokens)
+            Some(0) => {
+                let cap = (((dur * 75.0 * 1.5).ceil() as u32) + 32).clamp(128, 768);
+                format!(",\"max_tokens\":{cap}")
+            }
+            Some(n) => format!(",\"max_tokens\":{n}"),
+        }
+    };
+    let min_timeout_secs = match max_tokens_mode {
+        Some(n) if n <= 384 => 35,
+        Some(n) if n <= 512 => 45,
+        Some(n) if n <= 768 => 75,
+        _ => 90, // default / auto / >= 1024
+    };
+
     // ПАРАЛЛЕЛЬНЫЙ ПРЕ-СИНТЕЗ облачного TTS: OpenRouter держит десятки конкурентных запросов, поэтому все
     // сегменты к синтезу гоним в N потоков (настройка or_concurrency) ДО последовательной укладки — она
     // потом просто подхватит уже готовые seg-файлы (network-latency больше не по одному). Провал сегмента ->
@@ -1207,13 +1227,8 @@ fn build_dub(
             // бонусом. Первая попытка — пустой opts = дефолт движка (питон-паритет).
             let spk_key = s.speaker.clone().unwrap_or_else(|| "0".into());
             let alt = alt_refs.get(&spk_key);
-            let tgt_chars = tgt.chars().filter(|c| c.is_alphanumeric()).count();
-            // КАП ТОКЕНОВ ПО ДЛИТЕЛЬНОСТИ (ENGINES_FINDINGS §1.1, issue #151): в движке НЕТ авто-капа —
-            // без него короткая фраза может уйти в 40с гула до max_tokens=768. Кодек 25-75 ток/с
-            // (версии разнятся) — берём консервативные 75: cap = ceil(dur×75×1.5)+32, floor 128.
-            // Таргет-длительность = длительность оригинальной реплики (у дубля тот же слот).
             let expected_dur = (s.end - s.start).max(0.6);
-            let tok_cap: u32 = (((expected_dur * 75.0 * 1.5).ceil() as u32) + 32).clamp(128, 768);
+            let tok_part = tok_json(expected_dur);
             
             // Динамическая адаптация темпа (Speech Rate): если текст плотный (>14 знаков/сек), понижаем
             // температуру и зажимаем повторы, выговаривая текст собранно; если редкий — повышаем.
@@ -1250,26 +1265,26 @@ fn build_dub(
                 let seed = spk_seed_base + attempt as u64;
                 let opts = match attempt {
                     0 | 3 => format!(
-                        "{{\"temperature\":{base_temp:.2},\"top_p\":0.95,\"top_k\":50,\"max_tokens\":{tok_cap},\"ras_win_len\":7{base_ras_rep},\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
+                        "{{\"temperature\":{base_temp:.2},\"top_p\":0.95,\"top_k\":50{tok_part},\"ras_win_len\":7{base_ras_rep},\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
                     ),
                     1 => format!(
-                        "{{\"temperature\":{:.2},\"top_p\":0.95,\"top_k\":50,\"max_tokens\":{tok_cap},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                        "{{\"temperature\":{:.2},\"top_p\":0.95,\"top_k\":50{tok_part},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
                         (base_temp * 0.85).clamp(0.08, 0.35)
                     ),
                     2 => format!(
-                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50,\"max_tokens\":{tok_cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50{tok_part},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
                         (base_temp * 0.65).clamp(0.08, 0.25)
                     ),
                     _ => format!(
-                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50,\"max_tokens\":{tok_cap},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50{tok_part},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
                         (base_temp * 0.75).clamp(0.08, 0.30)
                     ),
                 };
                 attempt += 1;
-                // Таймаут ~8× длины слота (флор 45с): нормальный синтез быстрее реалтайма, зависание —
+                // Таймаут ~8× длины слота (флор min_timeout_secs): нормальный синтез быстрее реалтайма, зависание —
                 // минуты, так что порог чисто разделяет. Ошибка/таймаут -> как дефект (ретрай стохастику
                 // обычно лечит); исчерпали попытки -> ОРИГИНАЛ (сегмент дороже потерять, чем зависший рендер).
-                let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(45));
+                let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(min_timeout_secs));
                 let eng = engine.as_ref().expect("локальный Higgs (не облако)");
                 let (samples, sr) = match voice_clone_guarded(eng, tgt, &rw.to_string_lossy(), rt, &opts, vc_to) {
                     Ok(v) => v,
@@ -1425,16 +1440,16 @@ fn build_dub(
                 // Multi-take обязан наследовать индивидуальный голос/донор сегмента (ref_wav / ref_text)
                 let ref_wav_mt = ref_wav.clone();
                 let ref_text_mt = ref_text.clone();
-                let tok_cap: u32 = ((((s.end - s.start).max(0.6) * 75.0 * 1.5).ceil() as u32) + 32).clamp(128, 768);
+                let tok_part_mt = tok_json((s.end - s.start).max(0.6));
                 for take_i in 1..=2u64 {
                     let take_path = wd.join(format!("seg_{sid}_take{take_i}.wav"));
                     let seed = spk_seed_base + take_i * 100 + 77;
                     let temp = if take_i == 1 { (user_voice_temp * 0.90).clamp(0.08, 0.40) } else { (user_voice_temp * 1.15).clamp(0.10, 0.45) };
                     let opts = format!(
-                        "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50,\"max_tokens\":{tok_cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
+                        "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50{tok_part_mt},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
                     );
                     let rt_mt = ref_text_mt.as_deref();
-                    let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(45));
+                    let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(min_timeout_secs));
                     let eng = engine.as_ref().unwrap();
                     match voice_clone_guarded(eng, tgt, &ref_wav_mt.to_string_lossy(), rt_mt, &opts, vc_to) {
                         Ok((samples, sr)) => {
@@ -1603,8 +1618,8 @@ fn build_dub(
                 // до 3 свежих попыток (низкая temperature по ENGINES_FINDINGS §1.3 + кап токенов §1.1):
                 // альт-реф 0.3 → альт-реф 0.15+RAS1 → основной 0.10 с новым seed
                 let e_dur = (s.end - s.start).max(0.6);
-                let cap: u32 = (((e_dur * 75.0 * 1.5).ceil() as u32) + 32).clamp(128, 768);
-                let base = format!("\"top_k\":50,\"max_tokens\":{cap},\"ras_win_len\":7,\"return_audio_in_tokens\":true");
+                let tok_part_qc = tok_json(e_dur);
+                let base = format!("\"top_k\":50{tok_part_qc},\"ras_win_len\":7,\"return_audio_in_tokens\":true");
                 let mut fixed = false;
                 for (k, (rw, rt, opts)) in {
                     let mut plan: Vec<(&PathBuf, Option<&str>, String)> = Vec::new();
@@ -1618,7 +1633,7 @@ fn build_dub(
                 .into_iter()
                 .enumerate()
                 {
-                    let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(45));
+                    let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(min_timeout_secs));
                     let (smp, r) = match voice_clone_guarded(engine.as_ref().expect("локальный Higgs (QC не для облака)"), tgtq, &rw.to_string_lossy(), rt, &opts, vc_to) {
                         Ok(v) => v,
                         Err(e) if e.starts_with(ENGINE_STUCK) => {
