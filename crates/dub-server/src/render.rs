@@ -951,7 +951,6 @@ fn build_dub(
     // placed = [(at, wav_path, dur, lane)]. 2-lane multitrack timeline (Субтитры 1 & Субтитры 2).
     let mut placed: Vec<(f64, PathBuf, f64, usize)> = Vec::with_capacity(segs.len());
     let mut cursors = [0.0f64; 2];
-    let n_all = proj.segments.len();
     // Анти-артефактные счётчики на весь ролик: consec — проблемные фразы ПОДРЯД (сброс на чистой);
     // retry_budget — суммарный лимит ретраев по длине ролика (лестница из 5 попыток длиннее старой).
     let mut consec = 0usize;
