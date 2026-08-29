@@ -2669,7 +2669,6 @@ function MultiTrackTimeline({
       } else {
         const spkNum = parseInt(s.speaker ?? "0", 10) || 0;
         const pref = spkNum % 2;
-        const other = 1 - pref;
         let chosen = pref;
         if (pref === 0) {
           if (lastEndLane0 <= s.start) {
