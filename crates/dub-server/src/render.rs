@@ -266,11 +266,8 @@ pub fn run(
     emit(progress, "done", &format!("готово -> {}", out_path.display()));
     bench.finish(|m| emit(progress, "bench", m));
 
-    // Авто-выгрузка Higgs TTS из VRAM на видеокартах < 20 ГБ, чтобы не держать память занятой
-    let snap = crate::hw::snapshot();
-    if snap.total_vram > 0 && snap.total_vram < 20 * 1024 * 1024 * 1024 {
-        crate::evict_tts_cache();
-    }
+    // Авто-выгрузка Higgs TTS из VRAM после рендера для освобождения памяти
+    crate::evict_tts_cache();
 
     Ok(RenderResult { output: out_path })
 }
@@ -318,6 +315,7 @@ pub fn dub_audio(
         let _ = media::extract_audio(&src, &out, 44_100, 2);
     }
     emit(progress, "done", "дуб-аудио готово");
+    crate::evict_tts_cache();
     Ok(out)
 }
 
