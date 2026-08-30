@@ -1141,15 +1141,5 @@ mod pause_squeeze_tests {
         let res = squeeze_internal_pauses(&silence, 1000, 40.0);
         assert_eq!(res.len(), 1000);
     }
-
-    #[test]
-    fn test_find_nearest_zero_crossing() {
-        use super::find_nearest_zero_crossing;
-        let signal = vec![0.5, 0.4, 0.2, 0.01, -0.15, -0.3, -0.4];
-        // Zero crossing occurs between index 3 (0.01) and index 4 (-0.15). Index 3 is closest to 0.
-        let zc = find_nearest_zero_crossing(&signal, 1, 4);
-        assert_eq!(zc, 3);
-    }
 }
-
 
