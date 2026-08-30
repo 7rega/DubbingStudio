@@ -4296,6 +4296,10 @@ function Editor() {
     const name = actorName.trim();
     if (!name) return;
     pushHistory(p); setRendered(false);
+    setProject({
+      ...p,
+      segments: p.segments.map((s) => targetIds.includes(s.id) ? { ...s, speaker: name, dirty: true } : s),
+    });
     try {
       let fresh = p;
       for (const id of targetIds) {
@@ -5173,13 +5177,14 @@ function Editor() {
                               placeholder="Текст перевода…"
                               className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-surface)] rounded px-1.5 py-0.5 text-[11.5px] text-[var(--color-text)] focus:outline-none transition-colors truncate"
                             />
-                            <div className="shrink-0">
+                            <div className="shrink-0" onMouseDown={(e) => e.stopPropagation()}>
                               <button
                                 type="button"
+                                onMouseDown={(e) => e.stopPropagation()}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   const rect = e.currentTarget.getBoundingClientRect();
-                                  const targetIds = selSegs.has(seg.id) && selSegs.size > 1 ? [...selSegs] : [seg.id];
+                                  const targetIds = (selSegs.has(seg.id) || selSegs.size > 1) && selSegs.size > 0 ? [...selSegs] : [seg.id];
                                   setActorPickerState({ targetIds, x: rect.left, y: rect.bottom + 4 });
                                 }}
                                 className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors max-w-[110px] truncate ${
