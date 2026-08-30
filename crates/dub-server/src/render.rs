@@ -1083,13 +1083,19 @@ fn build_dub(
         // Режем СРАЗУ в 24к моно (питон media.trim(..., sr=24000)) — timeline кладёт по sr ПЕРВОГО файла (TTS=24к),
         // без ресемпла; 44.1к-вырез играл бы не на той скорости. Без промежуточного 16к (не терять ВЧ).
         let lane = get_segment_lane(s, &cursors);
-        let seg_gain_db = s.extra.get("gain_db").or_else(|| s.extra.get("gain")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let seg_volume = s.extra.get("volume")
+            .or_else(|| s.extra.get("gain_percent"))
+            .or_else(|| s.extra.get("gain"))
+            .or_else(|| s.extra.get("gain_db"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(100.0)
+            .clamp(0.0, 200.0);
         if seg_keep(s) {
             media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
             let at = s.start.max(cursors[lane]);
             let d = media::duration(&raw)?;
             cursors[lane] = at + d;
-            placed.push((at, raw, d, lane, seg_gain_db));
+            placed.push((at, raw, d, lane, seg_volume));
             continue;
         }
         let tgt = s.tgt_text.trim();
@@ -2292,7 +2298,7 @@ fn timeline(placed: &[(f64, PathBuf, f64, usize, f64)], total_dur: f64, out_wav:
     let mut laid: Vec<(f64, Vec<f32>)> = Vec::with_capacity(placed.len());
     let mut spans: Vec<(f64, f64)> = Vec::with_capacity(placed.len());
     let mut lane_cursors = [0.0f64; 2];
-    for (start, wav, _, lane, seg_gain_db) in &placed {
+    for (start, wav, _, lane, seg_volume) in &placed {
         let (mut s, ssr) = if *wav == placed[0].1 {
             (first.0.clone(), first.1)
         } else {
@@ -2300,9 +2306,9 @@ fn timeline(placed: &[(f64, PathBuf, f64, usize, f64)], total_dur: f64, out_wav:
         };
         normalize_voice(&mut s, ssr); // все фразы/спикеры к одной громкости
 
-        // Применяем индивидуальный Clip Gain для фразы (если задан)
-        if seg_gain_db.abs() > 0.01 {
-            let gain_mul = 10.0f32.powf((*seg_gain_db as f32) / 20.0);
+        // Применяем индивидуальную громкость фразы в процентах (0..200%, по умолчанию 100%)
+        if (*seg_volume - 100.0).abs() > 0.5 {
+            let gain_mul = (*seg_volume as f32) / 100.0;
             for sample in &mut s {
                 *sample *= gain_mul;
             }

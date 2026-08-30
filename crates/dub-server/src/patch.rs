@@ -121,12 +121,16 @@ fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(l) = edit.get("lane").and_then(|x| x.as_i64()) {
         seg.extra.insert("lane".into(), Value::from(l.clamp(0, 1)));
     }
-    // Посегментный Clip Gain (dB): от -24.0 до +12.0 dB. Не требует ре-TTS (применяется на микшере).
-    if let Some(g) = edit.get("gain_db").or_else(|| edit.get("gain")) {
-        if g.is_null() {
-            seg.extra.remove("gain_db");
-        } else if let Some(gv) = g.as_f64() {
-            seg.extra.insert("gain_db".into(), serde_json::json!(gv.clamp(-24.0, 12.0)));
+    // Посегментная громкость фразы (0..200%, по умолчанию 100%). Не требует ре-TTS (применяется на микшере).
+    if let Some(v) = edit.get("volume").or_else(|| edit.get("gain_percent")).or_else(|| edit.get("gain")).or_else(|| edit.get("gain_db")) {
+        if v.is_null() {
+            seg.extra.remove("volume");
+        } else if let Some(vv) = v.as_f64() {
+            if (vv - 100.0).abs() < 0.1 {
+                seg.extra.remove("volume");
+            } else {
+                seg.extra.insert("volume".into(), serde_json::json!(vv.clamp(0.0, 200.0)));
+            }
         }
     }
     // Посегментная температура сэмплинга (0.05..0.60). Смена требует ре-синтеза (dirty = true).

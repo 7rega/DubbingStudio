@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -2666,7 +2666,7 @@ function MultiTrackTimeline({
   trackState,
   setTrackState,
   loopSegId,
-  setLoopSegId,
+  setLoopSegId: _setLoopSegId,
   dubRev,
 }: {
   pid: string;
@@ -2680,7 +2680,7 @@ function MultiTrackTimeline({
   trackState: { dub: boolean; bgm: boolean; vocals: boolean };
   setTrackState: React.Dispatch<React.SetStateAction<{ dub: boolean; bgm: boolean; vocals: boolean }>>;
   loopSegId: string | null;
-  setLoopSegId: (id: string | null) => void;
+  setLoopSegId?: (id: string | null) => void;
   dubRev?: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -3100,7 +3100,7 @@ function MultiTrackTimeline({
     } catch { /* ignore */ }
   };
 
-  const handleSetGain = async (seg: Project["segments"][number], gainDb: number | null) => {
+  const handleSetVolume = async (seg: Project["segments"][number], volPct: number | null) => {
     const cur = useStore.getState().project;
     if (!cur) return;
     useStore.getState().pushHistory(cur);
@@ -3108,12 +3108,24 @@ function MultiTrackTimeline({
       const fresh = await api.patch(pid, {
         op: "segment",
         id: seg.id,
-        gain_db: gainDb,
-        extra: { ...seg.extra, gain_db: gainDb },
+        volume: volPct,
+        extra: { ...seg.extra, volume: volPct },
       });
       setProject(fresh);
       useStore.getState().bump();
     } catch { /* ignore */ }
+  };
+
+  const handlePromptVolume = (seg: Project["segments"][number]) => {
+    const cur = typeof seg.volume === "number" ? seg.volume : (seg.extra && typeof seg.extra.volume === "number" ? seg.extra.volume : 100);
+    const input = window.prompt("Громкость фразы в % (от 0 до 200, 100 — норма):", String(cur));
+    if (input !== null) {
+      const cleaned = input.replace("%", "").replace(",", ".").trim();
+      const val = parseFloat(cleaned);
+      if (!isNaN(val)) {
+        handleSetVolume(seg, Math.max(0, Math.min(200, Math.round(val))));
+      }
+    }
   };
 
   const handleSetTemp = async (seg: Project["segments"][number], temp: number | null) => {
@@ -3131,17 +3143,6 @@ function MultiTrackTimeline({
       setProject(fresh);
       useStore.getState().bump();
     } catch { /* ignore */ }
-  };
-
-  const handlePromptGain = (seg: Project["segments"][number]) => {
-    const cur = typeof seg.gain_db === "number" ? seg.gain_db : (seg.extra && typeof seg.extra.gain_db === "number" ? seg.extra.gain_db : 0);
-    const input = window.prompt("Громкость фразы в dB (от -24 до +12):", String(cur));
-    if (input !== null) {
-      const val = parseFloat(input.replace(",", "."));
-      if (!isNaN(val)) {
-        handleSetGain(seg, Math.max(-24, Math.min(12, Math.round(val * 10) / 10)));
-      }
-    }
   };
 
   const handlePromptTemp = (seg: Project["segments"][number]) => {
@@ -3456,16 +3457,16 @@ function MultiTrackTimeline({
                         </span>
                       )}
                       {(() => {
-                        const segGain = typeof seg.gain_db === "number" ? seg.gain_db : (seg.extra && typeof seg.extra.gain_db === "number" ? seg.extra.gain_db : 0);
-                        if (segGain === 0) return null;
+                        const segVol = typeof seg.volume === "number" ? seg.volume : (seg.extra && typeof seg.extra.volume === "number" ? seg.extra.volume : 100);
+                        if (segVol === 100) return null;
                         return (
                           <span
-                            title={`Громкость фразы: ${segGain > 0 ? `+${segGain}` : segGain} dB`}
+                            title={`Громкость фразы: ${segVol}%`}
                             className={`mono text-[8px] px-1 py-0.2 rounded font-bold shrink-0 shadow-sm ${
-                              segGain < 0 ? "bg-amber-950/90 text-amber-300 border border-amber-500/50" : "bg-emerald-950/90 text-emerald-300 border border-emerald-500/50"
+                              segVol < 100 ? "bg-amber-950/90 text-amber-300 border border-amber-500/50" : "bg-emerald-950/90 text-emerald-300 border border-emerald-500/50"
                             }`}
                           >
-                            {segGain > 0 ? `+${segGain}` : segGain}dB
+                            {segVol}%
                           </span>
                         );
                       })()}
@@ -3513,14 +3514,14 @@ function MultiTrackTimeline({
       {/* Right Click Context Menu (with smart viewport flip) */}
       {contextMenu && (() => {
         const isSimpleAdd = !contextMenu.seg;
-        const menuHeight = isSimpleAdd ? 44 : 390;
+        const menuHeight = isSimpleAdd ? 44 : 350;
         const isBottom = contextMenu.y > window.innerHeight - (menuHeight + 20);
         const menuTop = isBottom
           ? Math.max(10, contextMenu.y - menuHeight - 6)
           : Math.min(window.innerHeight - menuHeight - 10, contextMenu.y + 4);
         const menuLeft = Math.min(window.innerWidth - 260, Math.max(10, contextMenu.x));
 
-        const curGain = contextMenu.seg ? (typeof contextMenu.seg.gain_db === "number" ? contextMenu.seg.gain_db : (contextMenu.seg.extra && typeof contextMenu.seg.extra.gain_db === "number" ? contextMenu.seg.extra.gain_db : 0)) : 0;
+        const curVol = contextMenu.seg ? (typeof contextMenu.seg.volume === "number" ? contextMenu.seg.volume : (contextMenu.seg.extra && typeof contextMenu.seg.extra.volume === "number" ? contextMenu.seg.extra.volume : 100)) : 100;
         const curTemp = contextMenu.seg ? (typeof contextMenu.seg.temp === "number" ? contextMenu.seg.temp : (contextMenu.seg.extra && typeof contextMenu.seg.extra.temp === "number" ? contextMenu.seg.extra.temp : null)) : null;
 
         return (
@@ -3542,53 +3543,41 @@ function MultiTrackTimeline({
                   <span>Воспроизвести фразу</span>
                 </button>
 
-                <button
-                  onClick={() => {
-                    setLoopSegId(loopSegId === contextMenu.seg!.id ? null : contextMenu.seg!.id);
-                    onPlaySeg(contextMenu.seg!);
-                    setContextMenu(null);
-                  }}
-                  className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface)] flex items-center gap-2 text-[12px] font-medium transition-colors"
-                >
-                  <Repeat size={13} className="text-amber-400 shrink-0" />
-                  <span>{loopSegId === contextMenu.seg!.id ? "Отключить повтор" : "Зациклить фразу (Loop)"}</span>
-                </button>
-
-                {/* ── Секция: Громкость фразы (Clip Gain) ── */}
+                {/* ── Секция: Громкость фразы (% от 0 до 200) ── */}
                 <div className="px-2.5 py-1 text-[10.5px] font-semibold text-[var(--color-muted)] flex items-center justify-between border-t border-[var(--color-border)]/50 mt-0.5 pt-1.5">
                   <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
                     <Volume2 size={12} className="shrink-0" /> Громкость фразы
                   </span>
                   <button
                     type="button"
-                    title="Задать точное значение dB вручную"
+                    title="Задать точный процент громкости вручную (0 - 200%)"
                     onClick={() => {
-                      handlePromptGain(contextMenu.seg!);
+                      handlePromptVolume(contextMenu.seg!);
                       setContextMenu(null);
                     }}
                     className="mono text-[10px] text-white font-bold hover:text-emerald-300 bg-black/40 px-1.5 py-0.5 rounded border border-emerald-500/40 hover:border-emerald-400 transition-colors flex items-center gap-1"
                   >
-                    <span>{curGain > 0 ? `+${curGain}` : curGain} dB</span>
+                    <span>{curVol}%</span>
                     <span className="text-[9px] opacity-70">✏️</span>
                   </button>
                 </div>
                 <div className="grid grid-cols-5 gap-1 px-1 pb-0.5">
                   {[
-                    { label: "0 dB", val: 0, title: "Основной план (Стандарт)" },
-                    { label: "-4 dB", val: -4, title: "Второй план (Перебивание)" },
-                    { label: "-8 dB", val: -8, title: "Фоновая речь / Шёпот" },
-                    { label: "+2 dB", val: 2, title: "Акцент / Громче" },
+                    { label: "100%", val: 100, title: "Основной план (100% / Норма)" },
+                    { label: "60%", val: 60, title: "Второй план (60% / Перебивание)" },
+                    { label: "35%", val: 35, title: "Фоновая речь / Шёпот (35%)" },
+                    { label: "125%", val: 125, title: "Акцент / Громче (125%)" },
                   ].map((item) => (
                     <button
                       key={item.label}
                       type="button"
                       title={item.title}
                       onClick={() => {
-                        handleSetGain(contextMenu.seg!, item.val);
+                        handleSetVolume(contextMenu.seg!, item.val);
                         setContextMenu(null);
                       }}
                       className={`px-1 py-1 rounded text-[10px] mono font-bold transition-colors ${
-                        curGain === item.val
+                        curVol === item.val
                           ? "bg-emerald-500 text-black shadow-sm"
                           : "bg-[var(--color-surface)] hover:bg-emerald-500/20 text-[var(--color-muted)] hover:text-white"
                       }`}
@@ -3598,9 +3587,9 @@ function MultiTrackTimeline({
                   ))}
                   <button
                     type="button"
-                    title="Ввести точное значение громкости (от -24 до +12 dB)"
+                    title="Ввести точный процент громкости (0 - 200%)"
                     onClick={() => {
-                      handlePromptGain(contextMenu.seg!);
+                      handlePromptVolume(contextMenu.seg!);
                       setContextMenu(null);
                     }}
                     className="px-1 py-1 rounded text-[10px] font-bold transition-colors bg-[var(--color-surface)] hover:bg-emerald-500/20 text-[var(--color-muted)] hover:text-white"

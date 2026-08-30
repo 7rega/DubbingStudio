@@ -13,6 +13,7 @@ export type Segment = {
   id: string; start: number; end: number; speaker?: string | null;
   src_text: string; tgt_text: string; voice?: string | null; dirty: boolean; hidden?: boolean; keep_original?: boolean;
   lane?: number;
+  volume?: number;
   gain_db?: number;
   temp?: number;
   extra?: Record<string, unknown>;
