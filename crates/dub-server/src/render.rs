@@ -1555,7 +1555,7 @@ fn build_dub(
         }
         let (fit, d) = fit_to_slot(&raw, target_slot, &fitp, eff_cap, pause_squeeze_on)?;
         cursors[lane] = at + d;
-        placed.push((at, fit, d, lane, seg_gain_db));
+        placed.push((at, fit, d, lane, seg_volume));
         // В QC — только реально синтезированное в этом прогоне (кэш уже проверялся в своём прогоне).
         // kept_original (оригинальная реплика вместо неспасаемого выкрика) НЕ сверяем: там исходный
         // язык, ASR-QC счёл бы его браком и пересинтезировал обратно в артефакт.
