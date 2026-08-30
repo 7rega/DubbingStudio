@@ -999,7 +999,7 @@ fn build_dub(
         .and_then(|v| v.as_str())
         .map(|v| v != "0")
         .unwrap_or(true);
-    // Ручной контроль сэмплинга (Temperature): дефолт false (выкл -> заводские 0.30)
+    // Ручной контроль сэмплинга (Temperature): дефолт false (выкл -> динамический 0.18..0.32)
     let voice_manual_ctrl = crate::models::load_selection(&paths.models_root)
         .get("voice_manual_ctrl")
         .and_then(|v| v.as_str())
@@ -1015,7 +1015,7 @@ fn build_dub(
             .unwrap_or(0.20)
             .clamp(0.08, 0.45)
     } else {
-        0.30
+        0.28
     };
 
     // Лимит токенов TTS (higgs_max_tokens): "default" -> None (дефолт DLL), "auto" -> Some(0), либо число.
@@ -1186,11 +1186,11 @@ fn build_dub(
         };
 
         // Индивидуальная температура фразы (экспрессия / стабильность)
-        let effective_temp: f64 = s.extra.get("temp")
+        let custom_temp: Option<f64> = s.extra.get("temp")
             .or_else(|| s.extra.get("temperature"))
             .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|str_v| str_v.parse::<f64>().ok())))
-            .unwrap_or(user_voice_temp)
-            .clamp(0.05, 0.60);
+            .map(|t| t.clamp(0.05, 0.60));
+        let effective_temp: f64 = custom_temp.unwrap_or(user_voice_temp);
 
         // Синтез ТОЛЬКО если сегмент dirty (правился текст/спикер/голос) ИЛИ нет кэша. Реф-клипы
         // пересобираются каждый рендер, поэтому mtime-сравнение с рефом («stale_ref») ошибочно
@@ -1253,12 +1253,33 @@ fn build_dub(
             } else {
                 1.0
             };
-            let base_temp = if rate_ratio > 1.12 {
-                (effective_temp * 0.85).clamp(0.05, 0.55)
-            } else if rate_ratio < 0.88 {
-                (effective_temp * 1.15).clamp(0.05, 0.55)
+            let base_temp = if let Some(ct) = custom_temp {
+                // Индивидуальная экспрессия фразы из контекстного меню (с мягкой адаптацией под темп)
+                if rate_ratio > 1.12 {
+                    (ct * 0.85).clamp(0.05, 0.55)
+                } else if rate_ratio < 0.88 {
+                    (ct * 1.15).clamp(0.05, 0.60)
+                } else {
+                    ct
+                }
+            } else if voice_manual_ctrl {
+                // Ручной контроль: масштабирование от выбранного на ползунке значения user_voice_temp
+                if rate_ratio > 1.12 {
+                    (user_voice_temp * 0.85).clamp(0.08, 0.45)
+                } else if rate_ratio < 0.88 {
+                    (user_voice_temp * 1.15).clamp(0.08, 0.45)
+                } else {
+                    user_voice_temp
+                }
             } else {
-                effective_temp
+                // Автоматический динамический расчет (0.18 .. 0.32)
+                if rate_ratio > 1.12 {
+                    0.18 // плотный текст -> собранная быстрая дикция
+                } else if rate_ratio < 0.88 {
+                    0.32 // просторный слот -> выразительная речь
+                } else {
+                    0.28 // стандартный сбалансированный темп
+                }
             };
             let base_ras_rep = if rate_ratio > 1.12 { ",\"ras_win_max_num_repeat\":1" } else { "" };
 
@@ -1459,7 +1480,11 @@ fn build_dub(
                 for take_i in 1..=2u64 {
                     let take_path = wd.join(format!("seg_{sid}_take{take_i}.wav"));
                     let seed = spk_seed_base + take_i * 100 + 77;
-                    let temp = if take_i == 1 { (effective_temp * 0.90).clamp(0.05, 0.55) } else { (effective_temp * 1.15).clamp(0.05, 0.60) };
+                    let temp = if custom_temp.is_some() || voice_manual_ctrl {
+                        if take_i == 1 { (effective_temp * 0.90).clamp(0.05, 0.55) } else { (effective_temp * 1.15).clamp(0.05, 0.60) }
+                    } else {
+                        if take_i == 1 { 0.25 } else { 0.35 }
+                    };
                     let opts = format!(
                         "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50{tok_part_mt},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
                     );
