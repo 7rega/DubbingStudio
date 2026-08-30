@@ -614,14 +614,22 @@ fn build_dub(
     // иначе нейросеть захватит шумы и музыку из фона.
     let vocals16 = wd.join("ref_vocals16.wav");
     let clean16 = wd.join("vocals16_clean.wav"); // from analyze.rs
+    let raw_vocals16 = wd.join("vocals16_raw.wav");
 
     if cached_voc.is_file() {
-        media::to_16k_mono(&cached_voc, &vocals16)?;
+        media::to_16k_mono(&cached_voc, &raw_vocals16)?;
     } else if clean16.is_file() {
-        std::fs::copy(&clean16, &vocals16).map_err(|e| e.to_string())?;
+        let _ = std::fs::copy(&clean16, &raw_vocals16);
     } else {
-        media::to_16k_mono(&vocals, &vocals16)?;
+        media::to_16k_mono(&vocals, &raw_vocals16)?;
     }
+
+    // Автоматический Denoise базового трека референсов (FFT Spectral Denoise + Bandpass 75..7500 Гц):
+    // Очищает все производные референсы (ref_spk*, emoref_*, ref_donor_*) от стационарного фонового шума!
+    if media::denoise_reference(&raw_vocals16, &vocals16).is_err() {
+        let _ = std::fs::copy(&raw_vocals16, &vocals16);
+    }
+    let _ = std::fs::remove_file(&raw_vocals16);
 
     // 3) Подсчёт сегментов к синтезу. Кэш: seg_XXX.wav; если все сегменты уже в кэше и не dirty
     // (например, при экспорте готового проекта или пересведении) — мы ПОЛНОСТЬЮ пропускаем
@@ -680,7 +688,11 @@ fn build_dub(
             let key = spk.trim().to_lowercase();
             if let Some(src) = cast_files.get(&key) {
                 let out = wd.join(format!("ref_cast_{i}.wav"));
-                if media::trim(src, &out, 0.0, paths.ref_secs, 16_000).is_ok() {
+                if media::trim_faded(src, &out, 0.0, paths.ref_secs, 16_000).is_ok() {
+                    let clean_out = wd.join(format!("ref_cast_clean_{i}.wav"));
+                    if media::denoise_reference(&out, &clean_out).is_ok() {
+                        let _ = std::fs::rename(&clean_out, &out);
+                    }
                     map.insert(spk.clone(), out);
                 } else {
                     clone_slot_spks.insert(spk.clone());
@@ -716,7 +728,11 @@ fn build_dub(
                     let out = wd.join(format!("ref_pack_{i}.wav"));
                     // реф КАПИТСЯ до paths.ref_secs (дефолт 12с; на слабой RAM юзер уменьшает в настройках —
                     // длинный реф раздувает prefill-граф Higgs -> OOM на 32ГБ).
-                    if media::trim(&src, &out, 0.0, paths.ref_secs, 16_000).is_ok() {
+                    if media::trim_faded(&src, &out, 0.0, paths.ref_secs, 16_000).is_ok() {
+                        let clean_out = wd.join(format!("ref_pack_clean_{i}.wav"));
+                        if media::denoise_reference(&out, &clean_out).is_ok() {
+                            let _ = std::fs::rename(&clean_out, &out);
+                        }
                         map.insert(spk.clone(), out);
                     }
                 }
@@ -832,7 +848,7 @@ fn build_dub(
         // кап длины сверху ref_secs (не раздувать prefill-граф Higgs), как для identity-рефа.
         let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
         let end = s.end.min(s.start + cap);
-        match media::trim(&vocals16, &out, s.start, end.max(s.start + 0.05), 16_000) {
+        match media::trim_faded(&vocals16, &out, s.start, end.max(s.start + 0.05), 16_000) {
             Ok(()) => Some(out),
             Err(_) => None, // сбой обрезки -> тихо на identity-реф
         }
@@ -1112,7 +1128,7 @@ fn build_dub(
                     let out = wd.join(format!("ref_donor_{sid}.wav"));
                     let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
                     let end = ds.end.min(ds.start + cap);
-                    if media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok() {
+                    if media::trim_faded(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok() {
                         let t = ds.src_text.trim();
                         Some((out, if t.is_empty() { None } else { Some(t.to_string()) }))
                     } else {
@@ -1140,9 +1156,13 @@ fn build_dub(
                     let temp_in = wd.join(format!("temp_v_{sid}.{ext}"));
                     let _ = std::fs::copy(&vf, &temp_in);
                     let in_p = if temp_in.is_file() { &temp_in } else { &vf };
-                    let trim_ok = media::trim(in_p, &out, 0.0, paths.ref_secs, 16_000).is_ok();
+                    let trim_ok = media::trim_faded(in_p, &out, 0.0, paths.ref_secs, 16_000).is_ok();
                     let _ = std::fs::remove_file(&temp_in);
                     if trim_ok && out.is_file() {
+                        let clean_out = wd.join(format!("ref_voice_clean_{sid}.wav"));
+                        if media::denoise_reference(&out, &clean_out).is_ok() {
+                            let _ = std::fs::rename(&clean_out, &out);
+                        }
                         // Подтягиваем текст расшифровки сэмпла .txt, если он есть в каталоге (Higgs клонирует чище)
                         let txt_file = if paths.voices_dir.join("cast").join(format!("{v}.txt")).is_file() {
                             paths.voices_dir.join("cast").join(format!("{v}.txt"))
@@ -2037,7 +2057,7 @@ fn build_speaker_refs(
         for spk in speakers {
             let Some(pick) = pick_ref_window(&spk, segs, ref_secs) else { continue };
             let ref_wav = wd.join(format!("ref_spk{spk}.wav"));
-            media::trim(vocals16, &ref_wav, pick.start, pick.end.max(pick.start + 0.05), 16_000)?;
+            media::trim_faded(vocals16, &ref_wav, pick.start, pick.end.max(pick.start + 0.05), 16_000)?;
             refs.insert(spk.clone(), ref_wav);
             if pick.exact_cover && !pick.src_text.is_empty() {
                 texts.insert(spk, pick.src_text);
@@ -2104,7 +2124,7 @@ fn build_speaker_refs(
         batch_pos.insert(spk.clone(), batch.len());
         for (i, c) in good.iter().enumerate() {
             let p = wd.join(format!("ref_cand_spk{spk}_{i}.wav"));
-            media::trim(vocals16, &p, c.start, c.end.min(c.start + ref_secs), 16_000)?;
+            media::trim_faded(vocals16, &p, c.start, c.end.min(c.start + ref_secs), 16_000)?;
             batch.push(p);
         }
         cand_map.insert(spk.clone(), good);
