@@ -1179,6 +1179,13 @@ fn build_dub(
             ((n % 10_000) + 1) * 10_000 + 42
         };
 
+        // Индивидуальная температура фразы (экспрессия / стабильность)
+        let effective_temp: f64 = s.extra.get("temp")
+            .or_else(|| s.extra.get("temperature"))
+            .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|str_v| str_v.parse::<f64>().ok())))
+            .unwrap_or(user_voice_temp)
+            .clamp(0.05, 0.60);
+
         // Синтез ТОЛЬКО если сегмент dirty (правился текст/спикер/голос) ИЛИ нет кэша. Реф-клипы
         // пересобираются каждый рендер, поэтому mtime-сравнение с рефом («stale_ref») ошибочно
         // помечало ВЕСЬ кэш устаревшим на каждом рендере → экспорт ре-роллил уже одобренную озвучку
@@ -1232,12 +1239,6 @@ fn build_dub(
             let expected_dur = (s.end - s.start).max(0.6);
             let tok_part = tok_json(expected_dur);
             
-            let effective_temp = s.extra.get("temp")
-                .or_else(|| s.extra.get("temperature"))
-                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|str_v| str_v.parse::<f64>().ok())))
-                .unwrap_or(user_voice_temp)
-                .clamp(0.05, 0.60);
-
             // Динамическая адаптация темпа (Speech Rate): если текст плотный (>14 знаков/сек), понижаем
             // температуру и зажимаем повторы, выговаривая текст собранно; если редкий — повышаем.
             let rate_ratio = if speech_rate_on && expected_dur > 0.1 && tgt_chars > 0 {
