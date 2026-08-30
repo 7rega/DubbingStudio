@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, Repeat, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -3100,6 +3100,66 @@ function MultiTrackTimeline({
     } catch { /* ignore */ }
   };
 
+  const handleSetGain = async (seg: Project["segments"][number], gainDb: number | null) => {
+    const cur = useStore.getState().project;
+    if (!cur) return;
+    useStore.getState().pushHistory(cur);
+    try {
+      const fresh = await api.patch(pid, {
+        op: "segment",
+        id: seg.id,
+        gain_db: gainDb,
+        extra: { ...seg.extra, gain_db: gainDb },
+      });
+      setProject(fresh);
+      useStore.getState().bump();
+    } catch { /* ignore */ }
+  };
+
+  const handleSetTemp = async (seg: Project["segments"][number], temp: number | null) => {
+    const cur = useStore.getState().project;
+    if (!cur) return;
+    useStore.getState().pushHistory(cur);
+    useStore.getState().setRendered(false);
+    try {
+      const fresh = await api.patch(pid, {
+        op: "segment",
+        id: seg.id,
+        temp: temp,
+        extra: { ...seg.extra, temp: temp },
+      });
+      setProject(fresh);
+      useStore.getState().bump();
+    } catch { /* ignore */ }
+  };
+
+  const handlePromptGain = (seg: Project["segments"][number]) => {
+    const cur = typeof seg.gain_db === "number" ? seg.gain_db : (seg.extra && typeof seg.extra.gain_db === "number" ? seg.extra.gain_db : 0);
+    const input = window.prompt("Громкость фразы в dB (от -24 до +12):", String(cur));
+    if (input !== null) {
+      const val = parseFloat(input.replace(",", "."));
+      if (!isNaN(val)) {
+        handleSetGain(seg, Math.max(-24, Math.min(12, Math.round(val * 10) / 10)));
+      }
+    }
+  };
+
+  const handlePromptTemp = (seg: Project["segments"][number]) => {
+    const cur = typeof seg.temp === "number" ? seg.temp : (seg.extra && typeof seg.extra.temp === "number" ? seg.extra.temp : null);
+    const input = window.prompt("Температура сэмплинга (от 0.05 до 0.60, или 'auto' для сброса):", cur !== null ? String(cur) : "0.20");
+    if (input !== null) {
+      const trimmed = input.trim().toLowerCase();
+      if (trimmed === "auto" || trimmed === "" || trimmed === "null") {
+        handleSetTemp(seg, null);
+      } else {
+        const val = parseFloat(trimmed.replace(",", "."));
+        if (!isNaN(val)) {
+          handleSetTemp(seg, Math.max(0.05, Math.min(0.60, Math.round(val * 100) / 100)));
+        }
+      }
+    }
+  };
+
   const fmtTime = (s: number) =>
     `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}.${String(Math.floor((s % 1) * 10))}`;
 
@@ -3395,6 +3455,32 @@ function MultiTrackTimeline({
                           SPK {seg.speaker}
                         </span>
                       )}
+                      {(() => {
+                        const segGain = typeof seg.gain_db === "number" ? seg.gain_db : (seg.extra && typeof seg.extra.gain_db === "number" ? seg.extra.gain_db : 0);
+                        if (segGain === 0) return null;
+                        return (
+                          <span
+                            title={`Громкость фразы: ${segGain > 0 ? `+${segGain}` : segGain} dB`}
+                            className={`mono text-[8px] px-1 py-0.2 rounded font-bold shrink-0 shadow-sm ${
+                              segGain < 0 ? "bg-amber-950/90 text-amber-300 border border-amber-500/50" : "bg-emerald-950/90 text-emerald-300 border border-emerald-500/50"
+                            }`}
+                          >
+                            {segGain > 0 ? `+${segGain}` : segGain}dB
+                          </span>
+                        );
+                      })()}
+                      {(() => {
+                        const segTemp = typeof seg.temp === "number" ? seg.temp : (seg.extra && typeof seg.extra.temp === "number" ? seg.extra.temp : undefined);
+                        if (segTemp === undefined) return null;
+                        return (
+                          <span
+                            title={`Температура / экспрессия: ${segTemp}`}
+                            className="mono text-[8px] px-1 py-0.2 rounded bg-purple-950/90 text-purple-200 border border-purple-500/50 font-bold shrink-0 shadow-sm"
+                          >
+                            T:{segTemp}
+                          </span>
+                        );
+                      })()}
                       {!isTiny && (
                         <span className="font-medium truncate text-[11px] flex-1 leading-snug text-white drop-shadow-sm">
                           {seg.tgt_text || seg.src_text}
@@ -3427,16 +3513,19 @@ function MultiTrackTimeline({
       {/* Right Click Context Menu (with smart viewport flip) */}
       {contextMenu && (() => {
         const isSimpleAdd = !contextMenu.seg;
-        const menuHeight = isSimpleAdd ? 44 : 240;
+        const menuHeight = isSimpleAdd ? 44 : 390;
         const isBottom = contextMenu.y > window.innerHeight - (menuHeight + 20);
         const menuTop = isBottom
           ? Math.max(10, contextMenu.y - menuHeight - 6)
           : Math.min(window.innerHeight - menuHeight - 10, contextMenu.y + 4);
-        const menuLeft = Math.min(window.innerWidth - 250, Math.max(10, contextMenu.x));
+        const menuLeft = Math.min(window.innerWidth - 260, Math.max(10, contextMenu.x));
+
+        const curGain = contextMenu.seg ? (typeof contextMenu.seg.gain_db === "number" ? contextMenu.seg.gain_db : (contextMenu.seg.extra && typeof contextMenu.seg.extra.gain_db === "number" ? contextMenu.seg.extra.gain_db : 0)) : 0;
+        const curTemp = contextMenu.seg ? (typeof contextMenu.seg.temp === "number" ? contextMenu.seg.temp : (contextMenu.seg.extra && typeof contextMenu.seg.extra.temp === "number" ? contextMenu.seg.extra.temp : null)) : null;
 
         return (
           <div
-            className="fixed z-50 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-accent)] shadow-2xl p-1.5 min-w-[240px] anim-pop flex flex-col gap-1 backdrop-blur-md"
+            className="fixed z-50 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-accent)] shadow-2xl p-1.5 min-w-[250px] anim-pop flex flex-col gap-1 backdrop-blur-md"
             style={{ left: menuLeft, top: menuTop }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -3464,6 +3553,118 @@ function MultiTrackTimeline({
                   <Repeat size={13} className="text-amber-400 shrink-0" />
                   <span>{loopSegId === contextMenu.seg!.id ? "Отключить повтор" : "Зациклить фразу (Loop)"}</span>
                 </button>
+
+                {/* ── Секция: Громкость фразы (Clip Gain) ── */}
+                <div className="px-2.5 py-1 text-[10.5px] font-semibold text-[var(--color-muted)] flex items-center justify-between border-t border-[var(--color-border)]/50 mt-0.5 pt-1.5">
+                  <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
+                    <Volume2 size={12} className="shrink-0" /> Громкость фразы
+                  </span>
+                  <button
+                    type="button"
+                    title="Задать точное значение dB вручную"
+                    onClick={() => {
+                      handlePromptGain(contextMenu.seg!);
+                      setContextMenu(null);
+                    }}
+                    className="mono text-[10px] text-white font-bold hover:text-emerald-300 bg-black/40 px-1.5 py-0.5 rounded border border-emerald-500/40 hover:border-emerald-400 transition-colors flex items-center gap-1"
+                  >
+                    <span>{curGain > 0 ? `+${curGain}` : curGain} dB</span>
+                    <span className="text-[9px] opacity-70">✏️</span>
+                  </button>
+                </div>
+                <div className="grid grid-cols-5 gap-1 px-1 pb-0.5">
+                  {[
+                    { label: "0 dB", val: 0, title: "Основной план (Стандарт)" },
+                    { label: "-4 dB", val: -4, title: "Второй план (Перебивание)" },
+                    { label: "-8 dB", val: -8, title: "Фоновая речь / Шёпот" },
+                    { label: "+2 dB", val: 2, title: "Акцент / Громче" },
+                  ].map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      title={item.title}
+                      onClick={() => {
+                        handleSetGain(contextMenu.seg!, item.val);
+                        setContextMenu(null);
+                      }}
+                      className={`px-1 py-1 rounded text-[10px] mono font-bold transition-colors ${
+                        curGain === item.val
+                          ? "bg-emerald-500 text-black shadow-sm"
+                          : "bg-[var(--color-surface)] hover:bg-emerald-500/20 text-[var(--color-muted)] hover:text-white"
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    title="Ввести точное значение громкости (от -24 до +12 dB)"
+                    onClick={() => {
+                      handlePromptGain(contextMenu.seg!);
+                      setContextMenu(null);
+                    }}
+                    className="px-1 py-1 rounded text-[10px] font-bold transition-colors bg-[var(--color-surface)] hover:bg-emerald-500/20 text-[var(--color-muted)] hover:text-white"
+                  >
+                    Своё...
+                  </button>
+                </div>
+
+                {/* ── Секция: Экспрессия / Температура (Sampling Temp) ── */}
+                <div className="px-2.5 py-1 text-[10.5px] font-semibold text-[var(--color-muted)] flex items-center justify-between border-t border-[var(--color-border)]/50 mt-0.5 pt-1.5">
+                  <span className="flex items-center gap-1.5 text-purple-400 font-medium">
+                    <Flame size={12} className="shrink-0" /> Экспрессия (Temp)
+                  </span>
+                  <button
+                    type="button"
+                    title="Задать точную температуру сэмплинга вручную (0.05 - 0.60)"
+                    onClick={() => {
+                      handlePromptTemp(contextMenu.seg!);
+                      setContextMenu(null);
+                    }}
+                    className="mono text-[10px] text-white font-bold hover:text-purple-300 bg-black/40 px-1.5 py-0.5 rounded border border-purple-500/40 hover:border-purple-400 transition-colors flex items-center gap-1"
+                  >
+                    <span>{curTemp !== null ? curTemp.toFixed(2) : "Авто"}</span>
+                    <span className="text-[9px] opacity-70">✏️</span>
+                  </button>
+                </div>
+                <div className="grid grid-cols-5 gap-1 px-1 pb-0.5">
+                  {[
+                    { label: "Авто", val: null, title: "По умолчанию" },
+                    { label: "0.10", val: 0.10, title: "Спокойно / Стабильно" },
+                    { label: "0.20", val: 0.20, title: "Нормальная речь" },
+                    { label: "0.35", val: 0.35, title: "Эмоционально" },
+                  ].map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      title={item.title}
+                      onClick={() => {
+                        handleSetTemp(contextMenu.seg!, item.val);
+                        setContextMenu(null);
+                      }}
+                      className={`px-1 py-1 rounded text-[10px] mono font-bold transition-colors ${
+                        (item.val === null && curTemp === null) || (item.val !== null && curTemp === item.val)
+                          ? "bg-purple-500 text-white shadow-sm"
+                          : "bg-[var(--color-surface)] hover:bg-purple-500/20 text-[var(--color-muted)] hover:text-white"
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    title="Ввести точную температуру вручную (0.05 - 0.60)"
+                    onClick={() => {
+                      handlePromptTemp(contextMenu.seg!);
+                      setContextMenu(null);
+                    }}
+                    className="px-1 py-1 rounded text-[10px] font-bold transition-colors bg-[var(--color-surface)] hover:bg-purple-500/20 text-[var(--color-muted)] hover:text-white"
+                  >
+                    Своё...
+                  </button>
+                </div>
+
+                <div className="h-px bg-[var(--color-border)]/50 my-0.5" />
 
                 <button
                   onClick={() => {

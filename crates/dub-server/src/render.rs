@@ -948,8 +948,8 @@ fn build_dub(
         std::collections::HashMap::new()
     };
 
-    // placed = [(at, wav_path, dur, lane)]. 2-lane multitrack timeline (Субтитры 1 & Субтитры 2).
-    let mut placed: Vec<(f64, PathBuf, f64, usize)> = Vec::with_capacity(segs.len());
+    // placed = [(at, wav_path, dur, lane, gain_db)]. 2-lane multitrack timeline (Субтитры 1 & Субтитры 2).
+    let mut placed: Vec<(f64, PathBuf, f64, usize, f64)> = Vec::with_capacity(segs.len());
     let mut cursors = [0.0f64; 2];
     // Анти-артефактные счётчики на весь ролик: consec — проблемные фразы ПОДРЯД (сброс на чистой);
     // retry_budget — суммарный лимит ретраев по длине ролика (лестница из 5 попыток длиннее старой).
@@ -1083,12 +1083,13 @@ fn build_dub(
         // Режем СРАЗУ в 24к моно (питон media.trim(..., sr=24000)) — timeline кладёт по sr ПЕРВОГО файла (TTS=24к),
         // без ресемпла; 44.1к-вырез играл бы не на той скорости. Без промежуточного 16к (не терять ВЧ).
         let lane = get_segment_lane(s, &cursors);
+        let seg_gain_db = s.extra.get("gain_db").or_else(|| s.extra.get("gain")).and_then(|v| v.as_f64()).unwrap_or(0.0);
         if seg_keep(s) {
             media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
             let at = s.start.max(cursors[lane]);
             let d = media::duration(&raw)?;
             cursors[lane] = at + d;
-            placed.push((at, raw, d, lane));
+            placed.push((at, raw, d, lane, seg_gain_db));
             continue;
         }
         let tgt = s.tgt_text.trim();
@@ -1231,6 +1232,12 @@ fn build_dub(
             let expected_dur = (s.end - s.start).max(0.6);
             let tok_part = tok_json(expected_dur);
             
+            let effective_temp = s.extra.get("temp")
+                .or_else(|| s.extra.get("temperature"))
+                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|str_v| str_v.parse::<f64>().ok())))
+                .unwrap_or(user_voice_temp)
+                .clamp(0.05, 0.60);
+
             // Динамическая адаптация темпа (Speech Rate): если текст плотный (>14 знаков/сек), понижаем
             // температуру и зажимаем повторы, выговаривая текст собранно; если редкий — повышаем.
             let rate_ratio = if speech_rate_on && expected_dur > 0.1 && tgt_chars > 0 {
@@ -1240,11 +1247,11 @@ fn build_dub(
                 1.0
             };
             let base_temp = if rate_ratio > 1.12 {
-                (user_voice_temp * 0.85).clamp(0.08, 0.40)
+                (effective_temp * 0.85).clamp(0.05, 0.55)
             } else if rate_ratio < 0.88 {
-                (user_voice_temp * 1.15).clamp(0.08, 0.40)
+                (effective_temp * 1.15).clamp(0.05, 0.55)
             } else {
-                user_voice_temp
+                effective_temp
             };
             let base_ras_rep = if rate_ratio > 1.12 { ",\"ras_win_max_num_repeat\":1" } else { "" };
 
@@ -1445,7 +1452,7 @@ fn build_dub(
                 for take_i in 1..=2u64 {
                     let take_path = wd.join(format!("seg_{sid}_take{take_i}.wav"));
                     let seed = spk_seed_base + take_i * 100 + 77;
-                    let temp = if take_i == 1 { (user_voice_temp * 0.90).clamp(0.08, 0.40) } else { (user_voice_temp * 1.15).clamp(0.10, 0.45) };
+                    let temp = if take_i == 1 { (effective_temp * 0.90).clamp(0.05, 0.55) } else { (effective_temp * 1.15).clamp(0.05, 0.60) };
                     let opts = format!(
                         "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50{tok_part_mt},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
                     );
@@ -1541,7 +1548,7 @@ fn build_dub(
         }
         let (fit, d) = fit_to_slot(&raw, target_slot, &fitp, eff_cap, pause_squeeze_on)?;
         cursors[lane] = at + d;
-        placed.push((at, fit, d, lane));
+        placed.push((at, fit, d, lane, seg_gain_db));
         // В QC — только реально синтезированное в этом прогоне (кэш уже проверялся в своём прогоне).
         // kept_original (оригинальная реплика вместо неспасаемого выкрика) НЕ сверяем: там исходный
         // язык, ASR-QC счёл бы его браком и пересинтезировал обратно в артефакт.
@@ -2268,8 +2275,8 @@ fn get_segment_lane(s: &dub_core::Segment, cursors: &[f64; 2]) -> usize {
 
 /// Уложить сегменты на 2-дорожечный таймлайн (Субтитры 1 и Субтитры 2) с независимыми курсорами
 /// и цифровым суммированием (Digital Summing) одновременной речи.
-/// Применяет 10 мс crossfade к краям фраз для устранения кликов и soft-limiter от перегруза.
-fn timeline(placed: &[(f64, PathBuf, f64, usize)], total_dur: f64, out_wav: &Path) -> Result<Vec<(f64, f64)>, String> {
+/// Применяет 10 мс crossfade к краям фраз для устранения кликов, индивидуальный Clip Gain и soft-limiter от перегруза.
+fn timeline(placed: &[(f64, PathBuf, f64, usize, f64)], total_dur: f64, out_wav: &Path) -> Result<Vec<(f64, f64)>, String> {
     if placed.is_empty() {
         // тишина total_dur @ 24000.
         let n = (total_dur * 24000.0) as usize;
@@ -2284,13 +2291,21 @@ fn timeline(placed: &[(f64, PathBuf, f64, usize)], total_dur: f64, out_wav: &Pat
     let mut laid: Vec<(f64, Vec<f32>)> = Vec::with_capacity(placed.len());
     let mut spans: Vec<(f64, f64)> = Vec::with_capacity(placed.len());
     let mut lane_cursors = [0.0f64; 2];
-    for (start, wav, _, lane) in &placed {
+    for (start, wav, _, lane, seg_gain_db) in &placed {
         let (mut s, ssr) = if *wav == placed[0].1 {
             (first.0.clone(), first.1)
         } else {
             wavio::read_mono_f32(wav)?
         };
         normalize_voice(&mut s, ssr); // все фразы/спикеры к одной громкости
+
+        // Применяем индивидуальный Clip Gain для фразы (если задан)
+        if seg_gain_db.abs() > 0.01 {
+            let gain_mul = 10.0f32.powf((*seg_gain_db as f32) / 20.0);
+            for sample in &mut s {
+                *sample *= gain_mul;
+            }
+        }
 
         // 10ms Crossfade (fade-in & fade-out) для бесшовного стыка без кликов
         let fade_len = ((sr as f64 * 0.010) as usize).min(s.len() / 2);

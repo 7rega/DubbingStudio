@@ -111,7 +111,7 @@ fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(v) = edit.get("voice") {
         seg.voice = v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
     }
-    // hidden / keep_original / lane — хранятся в extra (dub-core Segment их не типизирует, но проносит).
+    // hidden / keep_original / lane / gain_db / temp — хранятся в extra (dub-core Segment их не типизирует, но проносит).
     if let Some(h) = edit.get("hidden").and_then(|x| x.as_bool()) {
         seg.extra.insert("hidden".into(), Value::Bool(h));
     }
@@ -121,12 +121,43 @@ fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(l) = edit.get("lane").and_then(|x| x.as_i64()) {
         seg.extra.insert("lane".into(), Value::from(l.clamp(0, 1)));
     }
+    // Посегментный Clip Gain (dB): от -24.0 до +12.0 dB. Не требует ре-TTS (применяется на микшере).
+    if let Some(g) = edit.get("gain_db").or_else(|| edit.get("gain")) {
+        if g.is_null() {
+            seg.extra.remove("gain_db");
+        } else if let Some(gv) = g.as_f64() {
+            seg.extra.insert("gain_db".into(), serde_json::json!(gv.clamp(-24.0, 12.0)));
+        }
+    }
+    // Посегментная температура сэмплинга (0.05..0.60). Смена требует ре-синтеза (dirty = true).
+    let mut temp_changed = false;
+    if let Some(t) = edit.get("temp").or_else(|| edit.get("temperature")) {
+        if t.is_null() || t.as_str() == Some("auto") || t.as_str() == Some("") {
+            if seg.extra.remove("temp").is_some() || seg.extra.remove("temperature").is_some() {
+                temp_changed = true;
+            }
+        } else if let Some(tv) = t.as_f64().or_else(|| t.as_str().and_then(|s| s.parse::<f64>().ok())) {
+            let clamped = tv.clamp(0.05, 0.60);
+            seg.extra.insert("temp".into(), serde_json::json!(clamped));
+            temp_changed = true;
+        }
+    }
     if let Some(extra_map) = edit.get("extra").and_then(|x| x.as_object()) {
         for (k, v) in extra_map {
             seg.extra.insert(k.clone(), v.clone());
         }
     }
-    seg.dirty = true;
+    // Если изменился текст, тайминг, спикер, кастомный голос или температура — помечаем фразу dirty для ре-TTS.
+    // Если менялся только гейн или дорожка lane — оставляем текущий dirty (не сбрасывая уже синтезированный звук).
+    let text_or_synth_changed = timing_changed
+        || edit.get("tgt_text").is_some()
+        || edit.get("src_text").is_some()
+        || edit.get("speaker").is_some()
+        || edit.get("voice").is_some()
+        || temp_changed;
+    if text_or_synth_changed {
+        seg.dirty = true;
+    }
     // Правка тайминга могла нарушить монотонность списка по времени, а render считает слот озвучки по
     // ИНДЕКСУ списка (nxt = segments[i+1].start) — поэтому пересортируем по start (как op_add_segment).
     // Кэш seg-файлов привязан к id сегмента (render.rs), переупорядочивание безопасно.
