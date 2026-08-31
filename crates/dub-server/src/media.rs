@@ -719,6 +719,18 @@ pub fn gain(src: &Path, dst: &Path, gain_db: f64) -> Result<(), String> {
     ])
 }
 
+/// Усилить WAV-дорожку на `gain_db` dB с сохранением в 32-bit float WAV.
+pub fn gain_wav(src: &Path, dst: &Path, gain_db: f64) -> Result<(), String> {
+    let af = format!("volume={gain_db}dB");
+    run_ff(&[
+        OsStr::new("-y"),
+        OsStr::new("-i"), src.as_os_str(),
+        OsStr::new("-af"), OsStr::new(&af),
+        OsStr::new("-c:a"), OsStr::new("pcm_f32le"),
+        dst.as_os_str(),
+    ])
+}
+
 /// Смуксить видео (copy) + аудио. БЕЗ -shortest (выход по длиннейшему потоку). Порт media.mux.
 /// Если входное аудио уже в формате AAC (.m4a), поток копируется без перекодирования (-c:a copy).
 pub fn mux(video: &Path, audio: &Path, out: &Path) -> Result<(), String> {

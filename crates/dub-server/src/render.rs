@@ -1790,6 +1790,18 @@ fn build_dub(
         dub
     };
 
+    // Применение гейна дорожки речи (TTS / дубляж) перед сведением, если задан (voice_gain_db)
+    let dub = if proj.audio.voice_gain_db.abs() > 0.05 {
+        let gained_dub = wd.join("dub_voice_gained.wav");
+        emit(progress, "mix", &format!("гейн речи дубляжа {:+.1} dB", proj.audio.voice_gain_db));
+        match media::gain_wav(&dub, &gained_dub, proj.audio.voice_gain_db) {
+            Ok(()) => gained_dub,
+            Err(_) => dub,
+        }
+    } else {
+        dub
+    };
+
     // 6) свести дорожку.
     let mixed = if voiceover {
         // Закадровый (UN-style voice-over): оригинал ЗВУЧИТ ПОЛНЫМ между репликами перевода (слышно
@@ -1861,6 +1873,18 @@ fn build_dub(
             }
         }
     } else if let Some(inst) = instrumental {
+        // Применение гейна фоновой музыки (BGM) перед сведением, если задан (music_gain_db)
+        let inst = if proj.audio.music_gain_db.abs() > 0.05 {
+            let gained_inst = wd.join("inst_gained.wav");
+            emit(progress, "mix", &format!("гейн фоновой музыки {:+.1} dB", proj.audio.music_gain_db));
+            match media::gain_wav(&inst, &gained_inst, proj.audio.music_gain_db) {
+                Ok(()) => gained_inst,
+                Err(_) => inst,
+            }
+        } else {
+            inst
+        };
+
         // Детерминированный дакинг (#106): фон приглушается на дефолтные −3 дБ (env DUB_DUCK_DB) по
         // кусочно-линейной ОГИБАЮЩЕЙ из точных таймингов речевых блоков — компрессор (sidechaincompress)
         // реагировал на мгновенную амплитуду TTS и давал «качели» на микропаузах внутри фраз. Требование

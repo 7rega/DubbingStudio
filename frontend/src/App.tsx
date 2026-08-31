@@ -3912,6 +3912,8 @@ function Editor() {
     a.play().then(() => { if (voicePreviewAudio.current === a) setVoicePreview(name); }).catch(() => { if (voicePreviewAudio.current === a) setVoicePreview(null); });
   };
   const [gainDraft, setGainDraft] = useState<number | null>(null);
+  const [voiceGainDraft, setVoiceGainDraft] = useState<number | null>(null); // черновик громкости голоса (TTS)
+  const [musicGainDraft, setMusicGainDraft] = useState<number | null>(null); // черновик громкости фоновой музыки
   const [voGainDraft, setVoGainDraft] = useState<number | null>(null);   // черновик громкости оригинала (voiceover)
   const [blurSigmaDraft, setBlurSigmaDraft] = useState<number | null>(null); // черновик силы блюра
   const [blurAlphaDraft, setBlurAlphaDraft] = useState<number | null>(null); // черновик затемнения/прозрачности блюра
@@ -4577,6 +4579,8 @@ function Editor() {
     catch (e) { await surfaceErr(e); }
   }
   async function doGain(gainDb: number) { return applyGain("gain", gainDb, t("voice.gain")); }                 // монтажный гейн всей дорожки
+  async function doVoiceGain(gainDb: number) { return applyGain("voice_gain", gainDb, t("voice.voiceGain")); } // гейн дорожки речи (TTS/дубляж)
+  async function doMusicGain(gainDb: number) { return applyGain("music_gain", gainDb, t("voice.musicGain")); } // гейн фоновой музыки (BGM)
   async function doVoiceoverGain(gainDb: number) { return applyGain("voiceover_gain", gainDb, t("voice.origGain")); }  // громкость оригинала под переводом
   async function doVoiceoverDuck(mode: string) {                                                                         // режим дакинга (динамический vs статичный)
     if (regenId) return;
@@ -6078,6 +6082,32 @@ function Editor() {
                     </div>
                   );
                 })()}
+
+                <div className="pt-2">
+                  <div className="flex items-center justify-between text-[11px] mb-1">
+                    <span className="text-[var(--color-muted)]">{t("voice.voiceGain")}</span>
+                    <span className="mono text-[11px] text-[var(--color-text)]">{(voiceGainDraft ?? p.audio.voice_gain_db ?? 0) > 0 ? "+" : ""}{(voiceGainDraft ?? p.audio.voice_gain_db ?? 0).toFixed(1)} dB</span>
+                  </div>
+                  <input type="range" min={-12} max={12} step={0.5} value={voiceGainDraft ?? p.audio.voice_gain_db ?? 0}
+                    onChange={(e) => setVoiceGainDraft(parseFloat(e.target.value))}
+                    onPointerUp={async () => { if (voiceGainDraft != null) { await doVoiceGain(voiceGainDraft); setVoiceGainDraft(null); } }}
+                    className="w-full accent-[var(--color-accent)]" />
+                  <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.voiceGainHint")}</div>
+                </div>
+
+                {p.audio.keep_music && p.mode !== "voiceover" && (
+                  <div className="pt-2">
+                    <div className="flex items-center justify-between text-[11px] mb-1">
+                      <span className="text-[var(--color-muted)]">{t("voice.musicGain")}</span>
+                      <span className="mono text-[11px] text-[var(--color-text)]">{(musicGainDraft ?? p.audio.music_gain_db ?? 0) > 0 ? "+" : ""}{(musicGainDraft ?? p.audio.music_gain_db ?? 0).toFixed(1)} dB</span>
+                    </div>
+                    <input type="range" min={-24} max={0} step={0.5} value={musicGainDraft ?? p.audio.music_gain_db ?? 0}
+                      onChange={(e) => setMusicGainDraft(parseFloat(e.target.value))}
+                      onPointerUp={async () => { if (musicGainDraft != null) { await doMusicGain(musicGainDraft); setMusicGainDraft(null); } }}
+                      className="w-full accent-[var(--color-accent)]" />
+                    <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.musicGainHint")}</div>
+                  </div>
+                )}
 
                 <div className="pt-2">
                   <div className="flex items-center justify-between text-[11px] mb-1">

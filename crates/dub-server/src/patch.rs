@@ -411,6 +411,22 @@ fn op_gain(p: &mut Project, edit: &Value) -> PatchResult {
     Ok(())
 }
 
+/// voice_gain — гейн дорожки сгенерированного голоса (TTS / дубляж) перед сведением (dB).
+fn op_voice_gain(p: &mut Project, edit: &Value) -> PatchResult {
+    if let Some(g) = f(edit, "gain_db") {
+        p.audio.voice_gain_db = g.clamp(-24.0, 24.0);
+    }
+    Ok(())
+}
+
+/// music_gain — гейн фоновой музыки / инструментала перед сведением (dB).
+fn op_music_gain(p: &mut Project, edit: &Value) -> PatchResult {
+    if let Some(g) = f(edit, "gain_db") {
+        p.audio.music_gain_db = g.clamp(-40.0, 6.0);
+    }
+    Ok(())
+}
+
 /// Громкость ОРИГИНАЛЬНОЙ дорожки в режиме voiceover (закадровый). 0 = в полную силу, отрицательное =
 /// тише перевода. Ре-TTS не нужен — только пересведение (лёгкий ре-рендер), сегменты из кэша.
 fn op_voiceover_gain(p: &mut Project, edit: &Value) -> PatchResult {
@@ -810,6 +826,8 @@ pub fn apply(p: &mut Project, edit: &Value) -> PatchResult {
         "regen_all" => op_regen_all(p, edit),
         "clear_regen" => op_clear_regen(p, edit),
         "gain" => op_gain(p, edit),
+        "voice_gain" => op_voice_gain(p, edit),
+        "music_gain" => op_music_gain(p, edit),
         "voiceover_gain" => op_voiceover_gain(p, edit),
         "voiceover_duck" => op_voiceover_duck(p, edit),
         "sub_blur" => op_sub_blur(p, edit),
