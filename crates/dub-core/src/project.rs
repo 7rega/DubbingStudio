@@ -123,6 +123,8 @@ impl Default for Audio {
             rewrite: None,
             translate_style: String::new(),
             gain_db: 0.0,
+            voice_gain_db: 0.0,
+            music_gain_db: 0.0,
             voiceover_gain_db: default_voiceover_gain(),
             voiceover_duck: default_voiceover_duck(),
             keep_original_track: false,
