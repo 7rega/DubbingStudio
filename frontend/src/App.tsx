@@ -4998,9 +4998,9 @@ function Editor() {
             />
 
             {/* Нижняя строка: Транспорт, Селектор звука, Тайминг, Скорость и Громкость */}
-            <div className="flex flex-wrap items-center justify-between gap-2.5">
+            <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
               {/* Слева: Кнопки навигации и воспроизведения */}
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
                   onClick={playFull}
@@ -5048,14 +5048,14 @@ function Editor() {
                   onClick={doRegenAll}
                   disabled={regenId !== null}
                   title="Перегенерировать всю озвучку проекта (TTS)"
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--color-surface-2)] border border-amber-500/40 hover:border-amber-400 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--color-surface-2)] border border-amber-500/40 hover:border-amber-400 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
                 >
                   {regenId === "__all__" ? (
                     <Loader2 size={12} className="animate-spin text-amber-400" />
                   ) : (
                     <RotateCw size={12} className="text-amber-400" />
                   )}
-                  <span>Пересинтез</span>
+                  <span className="hidden xl:inline">Пересинтез</span>
                 </button>
 
                 {/* Кнопка «Автовыравнивание субтитров по вокалу» */}
@@ -5064,14 +5064,14 @@ function Editor() {
                   onClick={doAlignProject}
                   disabled={isAligning}
                   title={t("align.hint")}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--color-surface-2)] border border-cyan-500/40 hover:border-cyan-400 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--color-surface-2)] border border-cyan-500/40 hover:border-cyan-400 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
                 >
                   {isAligning ? (
                     <Loader2 size={12} className="animate-spin text-cyan-400" />
                   ) : (
                     <Magnet size={12} className="text-cyan-400" />
                   )}
-                  <span>{isAligning ? t("align.working") : t("align.btn")}</span>
+                  <span className="hidden xl:inline">{isAligning ? t("align.working") : t("align.btn")}</span>
                 </button>
 
                 {/* Кнопка «Принять правки» со счётчиком перегенерированных фраз */}
@@ -5091,7 +5091,7 @@ function Editor() {
                       }
                     }}
                     title="Принять перегенерированные фразы и снять отметки"
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/50 hover:border-emerald-400 text-emerald-300 hover:text-emerald-200 hover:bg-emerald-500/25 font-semibold text-[11px] transition-all shadow-sm shrink-0"
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/50 hover:border-emerald-400 text-emerald-300 hover:text-emerald-200 hover:bg-emerald-500/25 font-semibold text-[11px] transition-all shadow-sm shrink-0"
                   >
                     <Check size={12} className="text-emerald-400" />
                     <span>Принять ({p.segments.filter((s) => Boolean(s.extra?.regenerated)).length})</span>
@@ -5099,8 +5099,8 @@ function Editor() {
                 )}
               </div>
 
-              {/* По центру: Готовые пресеты дорожек (1 клик) */}
-              <div className="inline-flex rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[11.5px] shrink-0 shadow-inner">
+              {/* По центру: Готовые пресеты дорожек и кнопка сведения в едином блоке */}
+              <div className="inline-flex items-center rounded-lg bg-[var(--color-surface-2)] p-0.5 border border-[var(--color-border)] text-[11px] shrink-0 shadow-inner">
                 <button
                   type="button"
                   onClick={() => setTrackState({ dub: true, bgm: true, vocals: false })}
@@ -5118,7 +5118,7 @@ function Editor() {
                 <button
                   type="button"
                   onClick={() => setTrackState({ dub: true, bgm: false, vocals: false })}
-                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md transition-all font-medium ${
                     trackState.dub && !trackState.bgm && !trackState.vocals
                       ? "bg-emerald-500 text-black font-semibold shadow-sm"
                       : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
@@ -5132,7 +5132,7 @@ function Editor() {
                 <button
                   type="button"
                   onClick={() => setTrackState({ dub: false, bgm: false, vocals: true })}
-                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md transition-all font-medium ${
                     trackState.vocals && !trackState.dub && !trackState.bgm
                       ? "bg-cyan-500 text-black font-semibold shadow-sm"
                       : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
@@ -5146,7 +5146,7 @@ function Editor() {
                 <button
                   type="button"
                   onClick={() => setTrackState({ dub: false, bgm: true, vocals: false })}
-                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md transition-all font-medium ${
                     !trackState.dub && !trackState.vocals && trackState.bgm
                       ? "bg-purple-500 text-white font-semibold shadow-sm"
                       : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
@@ -5156,34 +5156,29 @@ function Editor() {
                   <Music size={12} />
                   <span>Фон</span>
                 </button>
-              </div>
 
-              {/* Кнопка сведения аудио и индикатор актуальности микса */}
-              <div className="flex items-center gap-1.5 shrink-0">
-                {p.audio.mix_dirty ? (
-                  <button
-                    type="button"
-                    onClick={doMixAudio}
-                    disabled={regenId !== null}
-                    title={t("voice.mixBtnHint")}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/50 hover:bg-amber-500/30 text-[11px] font-medium transition-all shadow-sm animate-pulse"
-                  >
-                    <Sliders size={12} className="text-amber-400" />
-                    <span>{t("voice.mixBtn")}</span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={doMixAudio}
-                    disabled={regenId !== null}
-                    title={t("voice.mixBtnHint")}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] border border-[var(--color-border)] text-[11px] font-medium transition-all"
-                  >
-                    <Sliders size={12} />
-                    <span>{t("voice.mixBtn")}</span>
-                  </button>
-                )}
+                {/* Разделитель и кнопка сведения */}
+                <div className="h-3.5 w-px bg-[var(--color-border)] my-auto mx-0.5 shrink-0" />
+
+                <button
+                  type="button"
+                  onClick={doMixAudio}
+                  disabled={regenId !== null}
+                  title={p.audio.mix_dirty ? t("voice.mixBtnHint") : t("voice.mixUpToDate")}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md transition-all font-medium shrink-0 ${
+                    p.audio.mix_dirty
+                      ? "bg-amber-500/20 text-amber-300 font-semibold shadow-sm border border-amber-500/40 hover:bg-amber-500/30"
+                      : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                >
+                  {regenId === "__all__" ? (
+                    <Loader2 size={11} className="animate-spin text-amber-400" />
+                  ) : (
+                    <Sliders size={11} className={p.audio.mix_dirty ? "text-amber-400" : ""} />
+                  )}
+                  <span>Свести</span>
+                  {p.audio.mix_dirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>}
+                </button>
               </div>
 
               {/* Справа: Точный таймкод, Скорость (0.5x, 1.0x, 1.5x, 2.0x) и Громкость */}

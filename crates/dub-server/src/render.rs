@@ -310,7 +310,6 @@ pub fn dub_audio(
     };
     if synth_only {
         emit(progress, "done", "синтез фраз завершён");
-        crate::evict_tts_cache();
         return Ok(src);
     }
     let out = wd.join("dub_audio.m4a");
@@ -321,7 +320,6 @@ pub fn dub_audio(
         let _ = media::extract_audio(&src, &out, 44_100, 2);
     }
     emit(progress, "done", "дуб-аудио готово");
-    crate::evict_tts_cache();
     Ok(out)
 }
 

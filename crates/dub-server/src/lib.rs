@@ -1820,6 +1820,12 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
         if regen {
             reset_baked_dirty(&proj, &proj_path, &dir_for_job);
         }
+        if let Ok(fresh_text) = std::fs::read_to_string(&proj_path) {
+            if let Ok(mut fresh_proj) = Project::from_json(&fresh_text) {
+                fresh_proj.audio.mix_dirty = false;
+                let _ = save_project_atomic(&dir_for_job, &fresh_proj);
+            }
+        }
         Ok(json!({ "output": out_for_result.to_string_lossy() }))
     });
     let job_id = st.jobs.enqueue(job).await;
@@ -2162,7 +2168,7 @@ async fn dub_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         if let Ok(fresh_text) = std::fs::read_to_string(&proj_path) {
             if let Ok(mut fresh_proj) = Project::from_json(&fresh_text) {
                 fresh_proj.audio.mix_dirty = false;
-                let _ = std::fs::write(&proj_path, fresh_proj.to_json().unwrap_or_default());
+                let _ = save_project_atomic(&dir_for_job, &fresh_proj);
             }
         }
         Ok(json!({ "audio": out.to_string_lossy() }))
@@ -2221,7 +2227,7 @@ async fn synth_segments_project(State(st): State<AppState>, AxPath(pid): AxPath<
             if let Ok(fresh_text) = std::fs::read_to_string(&proj_path) {
                 if let Ok(mut fresh_proj) = Project::from_json(&fresh_text) {
                     fresh_proj.audio.mix_dirty = true;
-                    let _ = std::fs::write(&proj_path, fresh_proj.to_json().unwrap_or_default());
+                    let _ = save_project_atomic(&dir_for_job, &fresh_proj);
                 }
             }
         }
