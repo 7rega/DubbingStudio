@@ -233,6 +233,91 @@ pub fn mix_voiceover_sample_accurate(
     Ok((mixed_channels, metrics))
 }
 
+/// Выполнить sample-accurate 3-трековое сведение для дубляжа «С эффектами»:
+/// 1) Instrumental (фоновая музыка/интершумы) — играет на 100% непрерывно (фон НЕ глушится!);
+/// 2) Original Vocals (оригинальный вокал) — глушится в 0 под речью дубляжа, 100% в паузах (сохраняет вздохи, крики, стоны);
+/// 3) Dubbing TTS (голос дубляжа) — накладывается поверх.
+pub fn mix_3way_dub_sample_accurate(
+    inst_channels: &[Vec<f32>],
+    voc_channels: &[Vec<f32>],
+    tts_channels: &[Vec<f32>],
+    sr: u32,
+    speech_blocks: &[SpeechBlock],
+    params: &DuckEnvelopeParams,
+    duck_mode: &str,
+) -> Result<(Vec<Vec<f32>>, DiagnosticMetrics), String> {
+    if inst_channels.is_empty() {
+        return Err("inst_channels is empty".into());
+    }
+    let n_channels = inst_channels.len();
+    let n_frames = inst_channels[0].len();
+    for ch in inst_channels {
+        if ch.len() != n_frames {
+            return Err("mismatched channel lengths in inst_channels".into());
+        }
+    }
+
+    // Генерируем непрерывную огибающую для оригинального вокала (0.0 под речью, 1.0 в паузах)
+    let envelope = generate_duck_envelope(n_frames, sr, speech_blocks, params);
+
+    let mut mixed_channels = vec![vec![0.0f32; n_frames]; n_channels];
+    let mut tts_peak = 0.0f32;
+    let mut orig_peak = 0.0f32;
+    let mut mix_peak = 0.0f32;
+    let mut clipping_count = 0usize;
+
+    for i in 0..n_frames {
+        let env_val = envelope[i];
+        let tts_mono = if !tts_channels.is_empty() {
+            if tts_channels.len() == 1 {
+                tts_channels[0].get(i).copied().unwrap_or(0.0)
+            } else {
+                let sum: f32 = tts_channels.iter().map(|ch| ch.get(i).copied().unwrap_or(0.0)).sum();
+                sum / tts_channels.len() as f32
+            }
+        } else {
+            0.0
+        };
+
+        tts_peak = tts_peak.max(tts_mono.abs());
+
+        for c in 0..n_channels {
+            let inst_s = inst_channels[c][i];
+            let voc_s = voc_channels.get(c)
+                .or_else(|| voc_channels.get(0))
+                .and_then(|ch| ch.get(i))
+                .copied()
+                .unwrap_or(0.0);
+
+            orig_peak = orig_peak.max(inst_s.abs().max(voc_s.abs()));
+
+            let ducked_voc_s = voc_s * env_val;
+            let sum_s = inst_s + ducked_voc_s + tts_mono;
+
+            mix_peak = mix_peak.max(sum_s.abs());
+            if sum_s.abs() > 1.0 {
+                clipping_count += 1;
+            }
+            mixed_channels[c][i] = sum_s;
+        }
+    }
+
+    let true_peak_est = mix_peak * 1.05;
+
+    let metrics = DiagnosticMetrics {
+        duck_mode: duck_mode.to_string(),
+        sample_rate: sr,
+        channels: n_channels,
+        tts_peak,
+        original_peak: orig_peak,
+        mix_peak,
+        true_peak_est,
+        clipping_samples: clipping_count,
+    };
+
+    Ok((mixed_channels, metrics))
+}
+
 /// Мягкое параболическое ограничение пиков (Soft-Knee Peak Limiting) для 1D-среза сэмплов.
 /// Предотвращает цифровой клиппинг и щелчки без внесения ступенек формы волны.
 pub fn apply_peak_control_slice(samples: &mut [f32], ceiling_dbfs: f32) {

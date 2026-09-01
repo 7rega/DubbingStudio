@@ -6204,7 +6204,7 @@ function Editor() {
                   <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.voiceGainHint")}</div>
                 </div>
 
-                {p.audio.keep_music && p.mode !== "voiceover" && (p.audio.dub_mix_mode ?? "separated") !== "master_mute" && (
+                {p.audio.keep_music && p.mode !== "voiceover" && (
                   <div className="pt-2">
                     <div className="flex items-center justify-between text-[11px] mb-1">
                       <span className="text-[var(--color-muted)]">{t("voice.musicGain")}</span>

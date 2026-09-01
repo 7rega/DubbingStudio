@@ -584,7 +584,7 @@ fn build_dub(
     let _needs_clone = proj.audio.voice.mode == "clone"
         || proj.audio.voice.mode == "autocast"
         || proj.audio.voice.name.as_deref().unwrap_or("").split(',').any(|s| s.trim() == crate::voice_slots::CLONE_SLOT);
-    let want_inst = keep_music && !voiceover && proj.audio.dub_mix_mode != "master_mute";
+    let want_inst = keep_music && !voiceover;
     let needs_clean_vocals = true; // ВСЕГДА пытаемся получить чистый вокал для референса (TTS/клонирование работает лучше)
     let mut did_sep = false;
 
@@ -1885,10 +1885,10 @@ fn build_dub(
             }
         }
     } else if proj.audio.dub_mix_mode == "master_mute" {
-        // Дубляж «С эффектами» (#dub master_mute): сведение с оригинальной мастер-дорожкой.
-        // В паузах звучит 100% оригинальный звук (сохраняет вздохи, крики, звуки боя и звон оружия),
-        // а под речью дубляжа мастер плавно глушится в 0 (-100 dB).
-        // Защита от обрубков речи: объединяем спаны укладки TTS и исходные ASR-сегменты.
+        // Дубляж «С эффектами» (#dub master_mute — 3-трековое сведение):
+        // 1) Фоновый инструментал (BGM) — играет 100% НЕПРЕРЫВНО (музыка НЕ глушится и не прерывается!);
+        // 2) Вокал оригинала (vocals.wav) — глушится в 0 под речью дубляжа, а в паузах звучит 100% (сохраняет вздохи, крики, стоны, звуки боя);
+        // 3) Дубляж (dub_vocals.wav) — звучит поверх.
         let mut mute_spans = laid_spans.clone();
         for (_, s) in &segs {
             if s.end > s.start {
@@ -1897,37 +1897,67 @@ fn build_dub(
         }
         let master_speech_blocks = build_speech_blocks(&mute_spans);
 
-        emit(progress, "mix", &format!(
-            "дубляж: режим «С эффектами» (мастер 100% в паузах, срез в 0 под речью, sample-accurate, {} блоков)",
-            master_speech_blocks.len()
-        ));
-
         let mixed_float_wav = wd.join("mixed_float.wav");
-        match media::mix_voiceover_file(
-            &dub,
-            &audio_hq,
-            &master_speech_blocks,
-            -100.0,
-            &mixed_float_wav,
-            "dub_master_mute",
-        ) {
-            Ok(metrics) => {
-                emit(progress, "mix", &format!(
-                    "дубляж метрики (с эффектами): sr={} tts_peak={:.2} orig_peak={:.2} mix_peak={:.2} true_peak~{:.2} clip_samples={}",
-                    metrics.sample_rate, metrics.tts_peak, metrics.original_peak, metrics.mix_peak, metrics.true_peak_est, metrics.clipping_samples
-                ));
-                mixed_float_wav
-            }
-            Err(e) => {
-                emit(progress, "mix", &format!("дубляж (с эффектами): sample-accurate mix failed ({e}) -> fallback"));
-                if let Some(inst) = instrumental {
-                    let new_audio = wd.join("new_audio.m4a");
-                    media::mix(&dub, &inst, &new_audio)?;
-                    new_audio
-                } else {
-                    dub
+
+        if let Some(ref inst) = instrumental {
+            let inst_to_use = if proj.audio.music_gain_db.abs() > 0.05 {
+                let gained_inst = wd.join("inst_gained_3way.wav");
+                emit(progress, "mix", &format!("гейн фоновой музыки {:+.1} dB", proj.audio.music_gain_db));
+                match media::gain_wav(inst, &gained_inst, proj.audio.music_gain_db) {
+                    Ok(()) => gained_inst,
+                    Err(_) => inst.clone(),
+                }
+            } else {
+                inst.clone()
+            };
+
+            emit(progress, "mix", &format!(
+                "дубляж: режим «С эффектами» (3-трековый микс: непрерывный BGM + вокал 100% в паузах / 0% под речью, {} блоков)",
+                master_speech_blocks.len()
+            ));
+
+            match media::mix_3way_dub_file(
+                &dub,
+                &inst_to_use,
+                &cached_voc,
+                &master_speech_blocks,
+                &mixed_float_wav,
+            ) {
+                Ok(metrics) => {
+                    emit(progress, "mix", &format!(
+                        "дубляж метрики (3-трековый микс): sr={} tts_peak={:.2} orig_peak={:.2} mix_peak={:.2} true_peak~{:.2} clip_samples={}",
+                        metrics.sample_rate, metrics.tts_peak, metrics.original_peak, metrics.mix_peak, metrics.true_peak_est, metrics.clipping_samples
+                    ));
+                    mixed_float_wav
+                }
+                Err(e) => {
+                    emit(progress, "mix", &format!("дубляж (3-трековый микс failed: {e}) -> fallback to master mix"));
+                    let _ = media::mix_voiceover_file(
+                        &dub,
+                        &audio_hq,
+                        &master_speech_blocks,
+                        -100.0,
+                        &mixed_float_wav,
+                        "dub_master_fallback",
+                    );
+                    mixed_float_wav
                 }
             }
+        } else {
+            // Фолбэк, если сепарация не сработала: сведение с оригинальным мастером
+            emit(progress, "mix", &format!(
+                "дубляж: режим «С эффектами» (фолбэк на мастер-трек, {} блоков)",
+                master_speech_blocks.len()
+            ));
+            let _ = media::mix_voiceover_file(
+                &dub,
+                &audio_hq,
+                &master_speech_blocks,
+                -100.0,
+                &mixed_float_wav,
+                "dub_master_fallback",
+            );
+            mixed_float_wav
         }
     } else if let Some(inst) = instrumental {
         // Применение гейна фоновой музыки (BGM) перед сведением, если задан (music_gain_db)

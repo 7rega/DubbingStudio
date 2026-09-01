@@ -540,7 +540,7 @@ pub fn mix_voiceover_hybrid(
 
 pub use crate::duck::{
     apply_peak_control, generate_duck_envelope, mix_voiceover_sample_accurate,
-    DiagnosticMetrics, DuckEnvelopeParams, SpeechBlock,
+    mix_3way_dub_sample_accurate, DiagnosticMetrics, DuckEnvelopeParams, SpeechBlock,
 };
 
 /// Высококачественный ресемплинг аудио через FFmpeg soxr (32-bit float):
@@ -598,6 +598,61 @@ pub fn mix_voiceover_file(
     apply_peak_control(&mut mixed, -1.0);
 
     crate::wavio::write_audio_f32(out_wav, &mixed, orig_sr)?;
+    Ok(metrics)
+}
+
+/// Свести 3-трековый дубляж «С эффектами»:
+/// 1) instrumental (фоновая музыка/шумы) 100% непрерывно (не глушится!);
+/// 2) vocals (оригинальный вокал) глушится в 0 под речью, 100% в паузах (сохраняет вздохи, крики, стоны, звуки боя);
+/// 3) voice (голос дубляжа TTS) суммируется поверх.
+pub fn mix_3way_dub_file(
+    voice_wav: &Path,
+    inst_wav: &Path,
+    voc_wav: &Path,
+    blocks: &[SpeechBlock],
+    out_wav: &Path,
+) -> Result<DiagnosticMetrics, String> {
+    let (inst_ch, inst_sr) = crate::wavio::read_audio_f32(inst_wav)?;
+    let (voc_ch, voc_sr) = crate::wavio::read_audio_f32(voc_wav)?;
+    let (tts_ch, tts_sr) = crate::wavio::read_audio_f32(voice_wav)?;
+
+    let tts_resampled_ch = if tts_sr != inst_sr {
+        let temp_resampled = out_wav.with_extension("temp_tts_resampled_3way.wav");
+        resample_soxr(voice_wav, &temp_resampled, inst_sr)?;
+        let (ch, _) = crate::wavio::read_audio_f32(&temp_resampled)?;
+        let _ = std::fs::remove_file(&temp_resampled);
+        ch
+    } else {
+        tts_ch
+    };
+
+    let voc_resampled_ch = if voc_sr != inst_sr {
+        let temp_resampled = out_wav.with_extension("temp_voc_resampled_3way.wav");
+        resample_soxr(voc_wav, &temp_resampled, inst_sr)?;
+        let (ch, _) = crate::wavio::read_audio_f32(&temp_resampled)?;
+        let _ = std::fs::remove_file(&temp_resampled);
+        ch
+    } else {
+        voc_ch
+    };
+
+    let params = DuckEnvelopeParams {
+        duck_db: -100.0, // срез оригинального вокала в 0 под речью дубляжа
+        ..DuckEnvelopeParams::default()
+    };
+
+    let (mut mixed, metrics) = mix_3way_dub_sample_accurate(
+        &inst_ch,
+        &voc_resampled_ch,
+        &tts_resampled_ch,
+        inst_sr,
+        blocks,
+        &params,
+        "dub_3way_effects",
+    )?;
+
+    apply_peak_control(&mut mixed, -1.0);
+    crate::wavio::write_audio_f32(out_wav, &mixed, inst_sr)?;
     Ok(metrics)
 }
 
