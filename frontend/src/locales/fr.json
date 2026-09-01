@@ -121,6 +121,11 @@
     "duckDynamic": "Dynamique",
     "duckFlat": "Statique",
     "duckModeHint": "Dynamique — atténue l’original uniquement pendant la voix (100% en pause) ; Statique — atténue toute la piste d’origine.",
+    "dubMixMode": "Fond du doublage",
+    "dubMixClassic": "Classique",
+    "dubMixClassicHint": "Musique et arrière-plan continus, voix originale supprimée",
+    "dubMixEffects": "Avec effets",
+    "dubMixEffectsHint": "Son original pendant les pauses (cris, soupirs, combats), atténué sous la traduction",
     "langSearch": "Rechercher une langue…",
     "noMatch": "Aucun résultat"
   },

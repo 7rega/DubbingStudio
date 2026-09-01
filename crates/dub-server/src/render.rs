@@ -584,7 +584,7 @@ fn build_dub(
     let _needs_clone = proj.audio.voice.mode == "clone"
         || proj.audio.voice.mode == "autocast"
         || proj.audio.voice.name.as_deref().unwrap_or("").split(',').any(|s| s.trim() == crate::voice_slots::CLONE_SLOT);
-    let want_inst = keep_music && !voiceover;
+    let want_inst = keep_music && !voiceover && proj.audio.dub_mix_mode != "master_mute";
     let needs_clean_vocals = true; // ВСЕГДА пытаемся получить чистый вокал для референса (TTS/клонирование работает лучше)
     let mut did_sep = false;
 
@@ -1881,6 +1881,51 @@ fn build_dub(
                     };
                     media::mix(&dub, &bed, &new_audio)?;
                     new_audio
+                }
+            }
+        }
+    } else if proj.audio.dub_mix_mode == "master_mute" {
+        // Дубляж «С эффектами» (#dub master_mute): сведение с оригинальной мастер-дорожкой.
+        // В паузах звучит 100% оригинальный звук (сохраняет вздохи, крики, звуки боя и звон оружия),
+        // а под речью дубляжа мастер плавно глушится в 0 (-100 dB).
+        // Защита от обрубков речи: объединяем спаны укладки TTS и исходные ASR-сегменты.
+        let mut mute_spans = laid_spans.clone();
+        for (_, s) in &segs {
+            if s.end > s.start {
+                mute_spans.push((s.start, s.end));
+            }
+        }
+        let master_speech_blocks = build_speech_blocks(&mute_spans);
+
+        emit(progress, "mix", &format!(
+            "дубляж: режим «С эффектами» (мастер 100% в паузах, срез в 0 под речью, sample-accurate, {} блоков)",
+            master_speech_blocks.len()
+        ));
+
+        let mixed_float_wav = wd.join("mixed_float.wav");
+        match media::mix_voiceover_file(
+            &dub,
+            &audio_hq,
+            &master_speech_blocks,
+            -100.0,
+            &mixed_float_wav,
+            "dub_master_mute",
+        ) {
+            Ok(metrics) => {
+                emit(progress, "mix", &format!(
+                    "дубляж метрики (с эффектами): sr={} tts_peak={:.2} orig_peak={:.2} mix_peak={:.2} true_peak~{:.2} clip_samples={}",
+                    metrics.sample_rate, metrics.tts_peak, metrics.original_peak, metrics.mix_peak, metrics.true_peak_est, metrics.clipping_samples
+                ));
+                mixed_float_wav
+            }
+            Err(e) => {
+                emit(progress, "mix", &format!("дубляж (с эффектами): sample-accurate mix failed ({e}) -> fallback"));
+                if let Some(inst) = instrumental {
+                    let new_audio = wd.join("new_audio.m4a");
+                    media::mix(&dub, &inst, &new_audio)?;
+                    new_audio
+                } else {
+                    dub
                 }
             }
         }

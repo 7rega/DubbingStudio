@@ -121,6 +121,11 @@
     "duckDynamic": "动态",
     "duckFlat": "静态",
     "duckModeHint": "动态 — 仅在配音说话时压低原声（停顿处100%）；静态 — 始终压低整条原声轨道。",
+    "dubMixMode": "配音背景",
+    "dubMixClassic": "经典",
+    "dubMixClassicHint": "音乐与背景声连续播放，移除原声语音",
+    "dubMixEffects": "保留特效",
+    "dubMixEffectsHint": "停顿处保留原声（喘息、尖叫、打斗声），翻译语音时静音",
     "langSearch": "搜索语言…",
     "noMatch": "无匹配项"
   },

@@ -459,6 +459,20 @@ fn op_voiceover_duck(p: &mut Project, edit: &Value) -> PatchResult {
     Ok(())
 }
 
+/// Режим сведения в дубляже (#dub): "separated" (классический / музыка) | "master_mute" (с эффектами / срез мастера).
+fn op_dub_mix_mode(p: &mut Project, edit: &Value) -> PatchResult {
+    if let Some(m) = s(edit, "mode") {
+        let m = m.to_lowercase();
+        p.audio.dub_mix_mode = if m == "master_mute" || m == "master" || m == "effects" || m == "with_effects" {
+            "master_mute".into()
+        } else {
+            "separated".into()
+        };
+        p.audio.mix_dirty = true;
+    }
+    Ok(())
+}
+
 /// clear_mix_dirty — сброс флага несведённых изменений после успешного сведения мастер-трека.
 fn op_clear_mix_dirty(p: &mut Project, _edit: &Value) -> PatchResult {
     p.audio.mix_dirty = false;
@@ -846,6 +860,7 @@ pub fn apply(p: &mut Project, edit: &Value) -> PatchResult {
         "music_gain" => op_music_gain(p, edit),
         "voiceover_gain" => op_voiceover_gain(p, edit),
         "voiceover_duck" => op_voiceover_duck(p, edit),
+        "dub_mix_mode" => op_dub_mix_mode(p, edit),
         "clear_mix_dirty" => op_clear_mix_dirty(p, edit),
         "sub_blur" => op_sub_blur(p, edit),
         "keep_original" => op_keep_original(p, edit),

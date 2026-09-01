@@ -72,7 +72,11 @@ pub fn generate_duck_envelope(
     if n_samples == 0 {
         return Vec::new();
     }
-    let g = 10f64.powf(params.duck_db / 20.0).clamp(0.001, 1.0);
+    let g = if params.duck_db <= -60.0 {
+        0.0f64
+    } else {
+        10f64.powf(params.duck_db / 20.0).clamp(0.0, 1.0)
+    };
     if blocks.is_empty() {
         return vec![1.0f32; n_samples];
     }

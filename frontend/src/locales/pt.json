@@ -121,6 +121,11 @@
     "duckDynamic": "Dinâmico",
     "duckFlat": "Estático",
     "duckModeHint": "Dinâmico — reduz o original apenas durante a fala (100% em pausas); Estático — reduz toda a faixa original de forma uniforme.",
+    "dubMixMode": "Fundo da dublagem",
+    "dubMixClassic": "Clássico",
+    "dubMixClassicHint": "Música e fundo contínuos, voz original removida",
+    "dubMixEffects": "Com efeitos",
+    "dubMixEffectsHint": "Som original nas pausas (preserva gritos, suspiros, lutas), atenuado sob a tradução",
     "langSearch": "Buscar idioma…",
     "noMatch": "Nenhum resultado"
   },

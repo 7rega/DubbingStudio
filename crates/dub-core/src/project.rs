@@ -84,6 +84,11 @@ pub struct Audio {
     /// "flat" — классическое плоское приглушение всей дорожки оригинала целиком на voiceover_gain_db.
     #[serde(default = "default_voiceover_duck")]
     pub voiceover_duck: String,
+    /// Режим сведения в дубляже (#dub):
+    /// "separated" (дефолт) — классический дубляж (инструментал/музыка + дубляж).
+    /// "master_mute" — дубляж с эффектами (сведение с мастер-треком, срез в 0 под речью, 100% в паузах).
+    #[serde(default = "default_dub_mix_mode")]
+    pub dub_mix_mode: String,
     /// Экспортировать ВТОРУЮ звуковую дорожку с оригиналом (дубляж — default 1-я, оригинал — 2-я).
     /// false = один трек как раньше. Только dub/voiceover (в nodub/transcribe оригинал уже основной).
     #[serde(default)]
@@ -114,6 +119,10 @@ fn default_voiceover_duck() -> String {
     "dynamic".to_string()
 }
 
+fn default_dub_mix_mode() -> String {
+    "separated".to_string()
+}
+
 fn default_container() -> String {
     "mp4".to_string()
 }
@@ -130,6 +139,7 @@ impl Default for Audio {
             music_gain_db: 0.0,
             voiceover_gain_db: default_voiceover_gain(),
             voiceover_duck: default_voiceover_duck(),
+            dub_mix_mode: default_dub_mix_mode(),
             keep_original_track: false,
             container: default_container(),
             content_type: String::new(),
