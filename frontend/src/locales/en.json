@@ -220,7 +220,13 @@
     "balanced": "Balanced",
     "lively": "Lively",
     "langSearch": "Search language…",
-    "noMatch": "No matches"
+    "noMatch": "No matches",
+    "mixBtn": "Mix audio",
+    "mixBtnHint": "Mix dubbing track with background music, ducking, and EBU R128 normalization",
+    "mixBusy": "Mixing audio track...",
+    "mixUpToDate": "Mix up to date",
+    "mixDirty": "Unmixed lines: {{n}}",
+    "playSolo": "Play solo phrase"
   },
   "remix": {
     "title": "Remix",

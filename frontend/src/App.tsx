@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -3994,6 +3994,8 @@ function Editor() {
   const [trackState, setTrackState] = useState<{ dub: boolean; bgm: boolean; vocals: boolean }>({ dub: true, bgm: true, vocals: false });
   const playSpeed = 1.0;
   const [loopSegId, setLoopSegId] = useState<string | null>(null);
+  const soloAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [soloPlayingId, setSoloPlayingId] = useState<string | null>(null);
 
   // Виртуализация списка субтитров (60 карточек в DOM)
   const [subsScrollTop, setSubsScrollTop] = useState(0);
@@ -4383,27 +4385,29 @@ function Editor() {
       useStore.getState().setProgress(e.stage || "tts", e.msg || "", e.pct ?? null);
     }
   });
-  async function doRegen(segId: string) {                            // re-synthesize the TTS for ONE phrase (mark dirty -> /render)
+  async function doRegen(segId: string) {                            // быстрый ре-синтез TTS ТОЛЬКО для одной фразы (< 1 сек)
     if (regenId) return;
     setRegenId(segId); pushActivity(t("seg.regen"));
     setProject({
       ...p,
+      audio: { ...p.audio, mix_dirty: true },
       segments: p.segments.map((s) =>
         s.id === segId ? { ...s, extra: { ...s.extra, regenerated: true }, dirty: true } : s
       ),
     });
     try {
       await api.patch(pid, { op: "regen", id: segId });
-      const { job_id } = await api.dubAudio(pid);                     // ре-TTS ТОЛЬКО dirty-сегмент -> свежая озвучка (без сборки видео; финал — на Экспорте)
+      const { job_id } = await api.synthSegments(pid);                // быстрый синтез без сборки и тяжелого микса всего фильма
       await watchDub(job_id);
       const fresh = await api.getProject(pid);
       const updated = {
         ...fresh,
+        audio: { ...fresh.audio, mix_dirty: true },
         segments: fresh.segments.map((s) =>
           s.id === segId ? { ...s, extra: { ...s.extra, regenerated: true } } : s
         ),
       };
-      setProject(updated); setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify");   // refresh preview + reload the re-rendered dub audio
+      setProject(updated); setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify");
     } catch (e) { await surfaceErr(e); }
     finally { setRegenId(null); }
   }
@@ -4444,17 +4448,19 @@ function Editor() {
     setRegenId("__bulk__"); pushActivity(t("sel.regenBusy", { n: ids.length }));
     setProject({
       ...p,
+      audio: { ...p.audio, mix_dirty: true },
       segments: p.segments.map((s) =>
         ids.includes(s.id) ? { ...s, extra: { ...s.extra, regenerated: true }, dirty: true } : s
       ),
     });
     try {
       await api.patch(pid, { op: "regen_multi", ids });
-      const { job_id } = await api.dubAudio(pid);
+      const { job_id } = await api.synthSegments(pid);                // быстрый синтез группы фраз
       await watchDub(job_id);
       const fresh = await api.getProject(pid);
       const updated = {
         ...fresh,
+        audio: { ...fresh.audio, mix_dirty: true },
         segments: fresh.segments.map((s) =>
           ids.includes(s.id) ? { ...s, extra: { ...s.extra, regenerated: true } } : s
         ),
@@ -4601,6 +4607,33 @@ function Editor() {
       setProject(await api.getProject(pid)); setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify");   // покадровое превью; /dub обновлён -> плей играет новый дуб
     } catch (e) { await surfaceErr(e); }
     finally { setRegenId(null); }
+  }
+  async function doMixAudio() {                                       // явное сведение мастер-трека дубляжа с фоном и EBU R128
+    if (regenId) return;
+    setRegenId("__all__"); pushActivity(t("voice.mixBusy"));
+    try {
+      const { job_id } = await api.mixAudio(pid);
+      await watchDub(job_id);
+      const fresh = await api.getProject(pid);
+      setProject({ ...fresh, audio: { ...fresh.audio, mix_dirty: false } });
+      setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify");
+    } catch (e) { await surfaceErr(e); }
+    finally { setRegenId(null); }
+  }
+  function playSoloSeg(segId: string) {                               // быстрое прослушивание ТОЛЬКО одной фразы
+    if (soloAudioRef.current) {
+      soloAudioRef.current.pause();
+    }
+    if (soloPlayingId === segId) {
+      setSoloPlayingId(null);
+      return;
+    }
+    const a = new Audio(api.segmentAudioUrl(pid, segId, Date.now()));
+    soloAudioRef.current = a;
+    setSoloPlayingId(segId);
+    a.onended = () => setSoloPlayingId(null);
+    a.onerror = () => setSoloPlayingId(null);
+    a.play().catch(() => setSoloPlayingId(null));
   }
   async function doAlignProject() {                                   // автовыравнивание субтитров по звуковой волне вокала
     if (isAligning || !p) return;
@@ -5125,6 +5158,34 @@ function Editor() {
                 </button>
               </div>
 
+              {/* Кнопка сведения аудио и индикатор актуальности микса */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                {p.audio.mix_dirty ? (
+                  <button
+                    type="button"
+                    onClick={doMixAudio}
+                    disabled={regenId !== null}
+                    title={t("voice.mixBtnHint")}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/50 hover:bg-amber-500/30 text-[11px] font-medium transition-all shadow-sm animate-pulse"
+                  >
+                    <Sliders size={12} className="text-amber-400" />
+                    <span>{t("voice.mixBtn")}</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={doMixAudio}
+                    disabled={regenId !== null}
+                    title={t("voice.mixBtnHint")}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] border border-[var(--color-border)] text-[11px] font-medium transition-all"
+                  >
+                    <Sliders size={12} />
+                    <span>{t("voice.mixBtn")}</span>
+                  </button>
+                )}
+              </div>
+
               {/* Справа: Точный таймкод, Скорость (0.5x, 1.0x, 1.5x, 2.0x) и Громкость */}
               <div className="flex items-center gap-2 shrink-0">
                 {/* Точный таймкод с миллисекундами */}
@@ -5496,6 +5557,8 @@ function Editor() {
                                   {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
                                   <button onClick={(e) => { e.stopPropagation(); playSeg(seg); }} title={t("seg.play")}
                                     className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><Play size={13} /></button>
+                                  <button onClick={(e) => { e.stopPropagation(); playSoloSeg(seg.id); }} title={t("voice.playSolo")}
+                                    className={`p-0.5 transition-colors ${soloPlayingId === seg.id ? "text-amber-400 font-bold" : "text-[var(--color-muted)] hover:text-amber-400"}`}><Headphones size={13} /></button>
                                   <button onClick={(e) => { e.stopPropagation(); doRegen(seg.id); }} disabled={regenId !== null} title={t("seg.regen")}
                                     className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
                                     {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}

@@ -95,6 +95,9 @@ pub struct Audio {
     /// "real" (реальные лица) | "anime" (рисованные). Пусто = не определяли (юзер задал явно/кастинг выкл).
     #[serde(default)]
     pub content_type: String,
+    /// Флаг наличия несведённых изменений (перегенерированных фраз, не запечённых в мастер-трек dub_audio.m4a).
+    #[serde(default)]
+    pub mix_dirty: bool,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -130,6 +133,7 @@ impl Default for Audio {
             keep_original_track: false,
             container: default_container(),
             content_type: String::new(),
+            mix_dirty: false,
             extra: Extra::new(),
         }
     }

@@ -28,7 +28,7 @@ export type Title = {
 export type Project = {
   meta: { video: string; duration: number; width: number; height: number; fps: number; src_codec: string };
   mode: string; tgt_lang: string;
-  audio: { keep_music: boolean; voice: { mode: string; name?: string | null }; rewrite?: string | null; gain_db?: number; voice_gain_db?: number; music_gain_db?: number; voiceover_gain_db?: number; voiceover_duck?: string; translate_style?: string; keep_original_track?: boolean; container?: string };
+  audio: { keep_music: boolean; voice: { mode: string; name?: string | null }; rewrite?: string | null; gain_db?: number; voice_gain_db?: number; music_gain_db?: number; voiceover_gain_db?: number; voiceover_duck?: string; translate_style?: string; keep_original_track?: boolean; container?: string; mix_dirty?: boolean };
   segments: Segment[];
   subs: { mode: string; burn?: boolean };
   captions: {
@@ -183,6 +183,9 @@ export const api = {
   // #122: смена режима из транскрипта — перевод готовых сегментов на lang + смена режима, БЕЗ повторного ASR.
   retranslate: (pid: string, lang: string, mode: string) => fetch(`${BASE}/projects/${pid}/retranslate?lang=${encodeURIComponent(lang)}&mode=${encodeURIComponent(mode)}`, { method: "POST" }).then(j<{ job_id: string; project_id: string }>),
   dubAudio: (pid: string) => fetch(`${BASE}/projects/${pid}/dub-audio`, { method: "POST" }).then(j<{ job_id: string }>),   // сгенерить только озвучку (без сборки видео) — слушать дуб в редакторе
+  synthSegments: (pid: string) => fetch(`${BASE}/projects/${pid}/synth-segments`, { method: "POST" }).then(j<{ job_id: string }>), // быстрый синтез только изменённых фраз (< 1 сек)
+  mixAudio: (pid: string) => fetch(`${BASE}/projects/${pid}/mix-audio`, { method: "POST" }).then(j<{ job_id: string }>), // явное сведение мастер-трека дубляжа
+  segmentAudioUrl: (pid: string, segId: string, rev = 0) => `${BASE}/projects/${pid}/segments/${encodeURIComponent(segId)}/audio?rev=${rev}`, // изолированный WAV фразы
   remix: (pid: string, instruction: string) =>
     fetch(`${BASE}/projects/${pid}/remix?instruction=${encodeURIComponent(instruction)}`, { method: "POST" }).then(j<{ job_id: string }>),
   previewUrl: (pid: string, t: number, rev = 0, lowres = false) => `${BASE}/projects/${pid}/preview?t=${t}&rev=${rev}${lowres ? "&lr=1" : ""}`,   // lr=1 при плее -> низкое разрешение на больших видео (быстрее)

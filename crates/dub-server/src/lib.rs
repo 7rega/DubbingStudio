@@ -435,6 +435,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/projects/{pid}/save-text", post(save_text))
         .route("/projects/{pid}/save-output", post(save_output))
         .route("/projects/{pid}/dub-audio", post(dub_audio_project))
+        .route("/projects/{pid}/synth-segments", post(synth_segments_project))
+        .route("/projects/{pid}/mix-audio", post(mix_audio_project))
+        .route("/projects/{pid}/segments/{id}/audio", get(segment_audio))
         .route("/projects/{pid}/original", get(endpoints::original_frame))
         .route("/projects/{pid}/source-video", get(source_video))
         .route("/projects/{pid}/dub", get(dub_video))
@@ -2151,16 +2154,110 @@ async fn dub_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         let text = std::fs::read_to_string(&proj_path).map_err(|e| e.to_string())?;
         let proj = Project::from_json(&text).map_err(|e| e.to_string())?;
         let regen = proj.segments.iter().any(|s| s.dirty);
-        let out = render::dub_audio(&proj, &paths, regen, &cb)?;
-        // Правки запечены в озвучку (seg_XXX.wav) -> сбросить dirty, как делает render_project. Иначе
-        // последующий Экспорт (render видит dirty) РЕ-РОЛЛИТ уже одобренный дубляж — регресс «скидывается».
+        let out = render::dub_audio(&proj, &paths, regen, false, &cb)?;
         if regen {
             reset_baked_dirty(&proj, &proj_path, &dir_for_job);
+        }
+        // Сбросить mix_dirty, так как полный микс успешно сведён
+        if let Ok(fresh_text) = std::fs::read_to_string(&proj_path) {
+            if let Ok(mut fresh_proj) = Project::from_json(&fresh_text) {
+                fresh_proj.audio.mix_dirty = false;
+                let _ = std::fs::write(&proj_path, fresh_proj.to_json().unwrap_or_default());
+            }
         }
         Ok(json!({ "audio": out.to_string_lossy() }))
     });
     let job_id = st.jobs.enqueue(job).await;
     Json(json!({ "job_id": job_id })).into_response()
+}
+
+/// POST /projects/{pid}/synth-segments — БЫСТРЫЙ синтез dirty-сегментов (< 1 сек) без пересведения фильма.
+async fn synth_segments_project(State(st): State<AppState>, AxPath(pid): AxPath<String>) -> Response {
+    let dir = match st.proj_dir(&pid) {
+        Ok(d) => d,
+        Err(resp) => return resp,
+    };
+    let proj_path = dir.join("project.json");
+    if !proj_path.is_file() {
+        return (StatusCode::CONFLICT, "project not analyzed yet").into_response();
+    }
+    let input = match std::fs::read_to_string(dir.join("source.txt")) {
+        Ok(s) => PathBuf::from(s.trim()),
+        Err(_) => return (StatusCode::CONFLICT, "no source uploaded").into_response(),
+    };
+    let sel = models::load_selection(&st.models_root);
+    let (higgs_model_root, higgs_quant) = models::resolve_tts(&st.models_root, &sel);
+    let paths = render::RenderPaths {
+        input,
+        bench: models::bench_enabled(&st.models_root),
+        work_dir: dir.clone(),
+        output: dir.join("output.mp4"),
+        bsroformer_cli: dub_sep::engine_cli(&st.repo_root, models::stage_backend(&st.models_root, "sep_backend")),
+        bsroformer_model: models::resolve_sep(&st.models_root, &sel),
+        higgs_dll: st.higgs_dll.clone(),
+        higgs_model_root,
+        higgs_quant,
+        fonts_dir: st.fonts_dir.clone(),
+        higgs_backend: "cuda".to_string(),
+        higgs_device: 0,
+        higgs_threads: st.opts.num_threads,
+        max_stretch: st.opts.max_stretch as f64,
+        voices_dir: st.voices_dir.clone(),
+        asr: models::resolve_asr_choice(&st.repo_root, &st.models_root, &sel),
+        ref_secs: models::higgs_ref_secs(&st.models_root),
+        models_root: st.models_root.clone(),
+        tts_cache: st.tts_cache.clone(),
+    };
+    let dir_for_job = dir.clone();
+    let job: jobs::JobFn = Box::new(move |progress: jobs::ProgressFn| {
+        let cb = |ev: Value| progress(ev);
+        let text = std::fs::read_to_string(&proj_path).map_err(|e| e.to_string())?;
+        let proj = Project::from_json(&text).map_err(|e| e.to_string())?;
+        let regen = proj.segments.iter().any(|s| s.dirty);
+        let out = render::dub_audio(&proj, &paths, regen, true, &cb)?;
+        if regen {
+            reset_baked_dirty(&proj, &proj_path, &dir_for_job);
+            // Сохраняем mix_dirty = true (есть несведенные изменения)
+            if let Ok(fresh_text) = std::fs::read_to_string(&proj_path) {
+                if let Ok(mut fresh_proj) = Project::from_json(&fresh_text) {
+                    fresh_proj.audio.mix_dirty = true;
+                    let _ = std::fs::write(&proj_path, fresh_proj.to_json().unwrap_or_default());
+                }
+            }
+        }
+        Ok(json!({ "mode": "synth", "audio": out.to_string_lossy() }))
+    });
+    let job_id = st.jobs.enqueue(job).await;
+    Json(json!({ "job_id": job_id })).into_response()
+}
+
+/// POST /projects/{pid}/mix-audio — явное сведение дорожки дубляжа/закадра в dub_audio.m4a (кнопка «Свести аудио»).
+async fn mix_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<String>) -> Response {
+    dub_audio_project(State(st), AxPath(pid)).await
+}
+
+/// GET /projects/{pid}/segments/{id}/audio — изолированный WAV-файл сгенерированной фразы для мгновенного превью.
+async fn segment_audio(
+    State(st): State<AppState>,
+    AxPath((pid, id)): AxPath<(String, String)>,
+    req: axum::http::Request<axum::body::Body>,
+) -> Response {
+    let dir = match st.proj_dir(&pid) {
+        Ok(d) => d,
+        Err(resp) => return resp,
+    };
+    let sid: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+    let sid = if sid.is_empty() { format!("i{id}") } else { sid };
+    let fit_p = dir.join(format!("seg_{sid}_fit.wav"));
+    let raw_p = dir.join(format!("seg_{sid}.wav"));
+    let f = if fit_p.is_file() {
+        fit_p
+    } else if raw_p.is_file() {
+        raw_p
+    } else {
+        return (StatusCode::NOT_FOUND, "segment audio not synthesized yet").into_response();
+    };
+    serve_file_range(&f, req, None).await
 }
 
 // ─── GET /projects/{pid}/output ; /original ; /dub (Range-раздача файла) ─────

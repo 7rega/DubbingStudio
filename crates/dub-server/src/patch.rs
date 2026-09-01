@@ -321,6 +321,7 @@ fn op_recast(p: &mut Project, edit: &Value) -> PatchResult {
     let mode = s(edit, "voice_mode").unwrap_or_else(|| "clone".into());
     p.audio.voice.mode = mode;
     p.audio.voice.name = s(edit, "voice_name");
+    p.audio.mix_dirty = true;
     mark_all_dirty(p);
     Ok(())
 }
@@ -341,6 +342,7 @@ fn op_regen(p: &mut Project, edit: &Value) -> PatchResult {
     if !found {
         return Err((404, format!("segment {target_id:?} not found")));
     }
+    p.audio.mix_dirty = true;
     Ok(())
 }
 
@@ -357,6 +359,7 @@ fn op_regen_multi(p: &mut Project, edit: &Value) -> PatchResult {
             s.extra.insert("regenerated".into(), Value::Bool(true));
         }
     }
+    p.audio.mix_dirty = true;
     Ok(())
 }
 
@@ -366,6 +369,7 @@ fn op_regen_all(p: &mut Project, _edit: &Value) -> PatchResult {
     for s in &mut p.segments {
         s.extra.remove("regenerated");
     }
+    p.audio.mix_dirty = true;
     Ok(())
 }
 
@@ -407,6 +411,7 @@ fn op_add_segment(p: &mut Project, edit: &Value) -> PatchResult {
 fn op_gain(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(g) = f(edit, "gain_db") {
         p.audio.gain_db = g.clamp(-24.0, 24.0);
+        p.audio.mix_dirty = true;
     }
     Ok(())
 }
@@ -415,6 +420,7 @@ fn op_gain(p: &mut Project, edit: &Value) -> PatchResult {
 fn op_voice_gain(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(g) = f(edit, "gain_db") {
         p.audio.voice_gain_db = g.clamp(-24.0, 24.0);
+        p.audio.mix_dirty = true;
     }
     Ok(())
 }
@@ -423,6 +429,7 @@ fn op_voice_gain(p: &mut Project, edit: &Value) -> PatchResult {
 fn op_music_gain(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(g) = f(edit, "gain_db") {
         p.audio.music_gain_db = g.clamp(-40.0, 6.0);
+        p.audio.mix_dirty = true;
     }
     Ok(())
 }
@@ -432,10 +439,12 @@ fn op_music_gain(p: &mut Project, edit: &Value) -> PatchResult {
 fn op_voiceover_gain(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(g) = f(edit, "gain_db") {
         p.audio.voiceover_gain_db = g.clamp(-40.0, 0.0);
+        p.audio.mix_dirty = true;
     }
     if let Some(m) = s(edit, "mode").or_else(|| s(edit, "duck_mode")) {
         let m = m.to_lowercase();
         p.audio.voiceover_duck = if m == "flat" || m == "static" { "flat".into() } else { "dynamic".into() };
+        p.audio.mix_dirty = true;
     }
     Ok(())
 }
@@ -445,7 +454,14 @@ fn op_voiceover_duck(p: &mut Project, edit: &Value) -> PatchResult {
     if let Some(m) = s(edit, "mode").or_else(|| s(edit, "duck_mode")) {
         let m = m.to_lowercase();
         p.audio.voiceover_duck = if m == "flat" || m == "static" { "flat".into() } else { "dynamic".into() };
+        p.audio.mix_dirty = true;
     }
+    Ok(())
+}
+
+/// clear_mix_dirty — сброс флага несведённых изменений после успешного сведения мастер-трека.
+fn op_clear_mix_dirty(p: &mut Project, _edit: &Value) -> PatchResult {
+    p.audio.mix_dirty = false;
     Ok(())
 }
 
@@ -830,6 +846,7 @@ pub fn apply(p: &mut Project, edit: &Value) -> PatchResult {
         "music_gain" => op_music_gain(p, edit),
         "voiceover_gain" => op_voiceover_gain(p, edit),
         "voiceover_duck" => op_voiceover_duck(p, edit),
+        "clear_mix_dirty" => op_clear_mix_dirty(p, edit),
         "sub_blur" => op_sub_blur(p, edit),
         "keep_original" => op_keep_original(p, edit),
         "reorder_segments" => op_reorder_segments(p, edit),

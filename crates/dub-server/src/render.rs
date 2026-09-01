@@ -134,7 +134,7 @@ pub fn run(
     // Готовим финальную аудио-дорожку new_audio: dub (клон) поверх инструментала, либо оригинал.
     bench.stage("dub_audio");
     let new_audio: PathBuf = if is_dub {
-        build_dub(proj, paths, total, keep_music, is_voiceover, regen_dub, progress)?
+        build_dub(proj, paths, total, keep_music, is_voiceover, regen_dub, false, progress)?
     } else {
         // nodub/transcribe: оставляем оригинальную дорожку — mux возьмёт её из исходного видео.
         emit(progress, "mix", "nodub: оригинальная аудиодорожка");
@@ -296,6 +296,7 @@ pub fn dub_audio(
     proj: &Project,
     paths: &RenderPaths,
     regen_dub: bool,
+    synth_only: bool,
     progress: &Progress,
 ) -> Result<PathBuf, String> {
     let wd = &paths.work_dir;
@@ -303,10 +304,15 @@ pub fn dub_audio(
     let meta = media::probe(&paths.input)?;
     let total = if proj.meta.duration > 0.0 { proj.meta.duration } else { meta.duration };
     let src: PathBuf = if proj.mode == "dub" || proj.mode == "voiceover" {
-        build_dub(proj, paths, total, proj.audio.keep_music, proj.mode == "voiceover", regen_dub, progress)?
+        build_dub(proj, paths, total, proj.audio.keep_music, proj.mode == "voiceover", regen_dub, synth_only, progress)?
     } else {
         paths.input.clone() // nodub/transcribe -> оригинальная дорожка
     };
+    if synth_only {
+        emit(progress, "done", "синтез фраз завершён");
+        crate::evict_tts_cache();
+        return Ok(src);
+    }
     let out = wd.join("dub_audio.m4a");
     // Если build_dub уже выдал final_audio.m4a, копируем его в dub_audio.m4a для плеера
     if src.is_file() && src.extension().and_then(|x| x.to_str()) == Some("m4a") {
@@ -542,6 +548,7 @@ fn build_dub(
     keep_music: bool,
     voiceover: bool,
     regen_dub: bool,
+    synth_only: bool,
     progress: &Progress,
 ) -> Result<PathBuf, String> {
     let wd = &paths.work_dir;
@@ -1757,6 +1764,13 @@ fn build_dub(
 
     if engine_dead {
         emit(progress, "tts", "⚠ Higgs движок завис в DLL — часть фраз оставлена на оригинальном языке. Перезапустите приложение и повторите экспорт для досинтеза.");
+    }
+
+    // Быстрый режим (Fast Segment Regen): завершить сразу после синтеза dirty сегментов, не запуская
+    // тяжелую укладку, SoXR ресемплинг, микширование и EBU R128 на весь фильм.
+    if synth_only {
+        emit(progress, "tts", "быстрый синтез сегментов завершён");
+        return Ok(wd.clone());
     }
 
     // 5) timeline -> dub_vocals.wav. Возвращает фактические спаны укладки.
