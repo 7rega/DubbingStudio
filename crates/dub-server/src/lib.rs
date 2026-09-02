@@ -2256,12 +2256,23 @@ async fn segment_audio(
     let sid = if sid.is_empty() { format!("i{id}") } else { sid };
     let fit_p = dir.join(format!("seg_{sid}_fit.wav"));
     let raw_p = dir.join(format!("seg_{sid}.wav"));
-    let f = if fit_p.is_file() {
-        fit_p
-    } else if raw_p.is_file() {
-        raw_p
-    } else {
-        return (StatusCode::NOT_FOUND, "segment audio not synthesized yet").into_response();
+    let f = match (fit_p.is_file(), raw_p.is_file()) {
+        (true, true) => {
+            // Если raw свежее fit (например, fit не успел перезаписаться или остался от старого прогона),
+            // отдаём более свежий raw_p, иначе актуальный уложенный fit_p.
+            let m_fit = std::fs::metadata(&fit_p).and_then(|m| m.modified()).ok();
+            let m_raw = std::fs::metadata(&raw_p).and_then(|m| m.modified()).ok();
+            if m_raw > m_fit {
+                raw_p
+            } else {
+                fit_p
+            }
+        }
+        (true, false) => fit_p,
+        (false, true) => raw_p,
+        (false, false) => {
+            return (StatusCode::NOT_FOUND, "segment audio not synthesized yet").into_response();
+        }
     };
     serve_file_range(&f, req, None).await
 }

@@ -1084,6 +1084,7 @@ fn build_dub(
         let sid: String = s.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
         let sid = if sid.is_empty() { format!("i{fi}") } else { sid };
         let raw = wd.join(format!("seg_{sid}.wav"));
+        let fitp = wd.join(format!("seg_{sid}_fit.wav"));
         // 'оставить оригинал': вырезаем ИСХОДНУЮ речь сюда, без TTS и без atempo-подгонки (порт _build_dub keep-ветки).
         // Режем СРАЗУ в 24к моно (питон media.trim(..., sr=24000)) — timeline кладёт по sr ПЕРВОГО файла (TTS=24к),
         // без ресемпла; 44.1к-вырез играл бы не на той скорости. Без промежуточного 16к (не терять ВЧ).
@@ -1207,6 +1208,11 @@ fn build_dub(
         // (объявлен на уровне итерации: ниже гейтит и ASR-QC этого сегмента).
         let mut kept_original = false;
         if need_synth {
+            // Удаляем устаревший fit-файл и временные дубли перед ре-синтезом, чтобы не осталось старых артефактов
+            let _ = std::fs::remove_file(&fitp);
+            let _ = std::fs::remove_file(fitp.with_extension("squeezed.wav"));
+            let _ = std::fs::remove_file(wd.join(format!("seg_{sid}_take1.wav")));
+            let _ = std::fs::remove_file(wd.join(format!("seg_{sid}_take2.wav")));
             synth_counter += 1;
             if engine_dead && !cloud_tts_on {
                 // Движок завис в DLL ранее — подставляем оригинал для всех оставшихся
@@ -1447,7 +1453,6 @@ fn build_dub(
             found
         };
         let room = (nxt - at).max(0.3);
-        let fitp = wd.join(format!("seg_{sid}_fit.wav"));
 
         // ── MULTI-TAKE: адаптивный отбор дублей ──
         if multitake_on && need_synth && !kept_original && !cloud_tts_on && engine.is_some() {
@@ -2358,6 +2363,9 @@ fn build_speech_blocks(spans: &[(f64, f64)]) -> Vec<media::SpeechBlock> {
 fn fit_to_slot(seg_wav: &Path, target_dur: f64, work_path: &Path, cap: f64, pause_squeeze: bool) -> Result<(PathBuf, f64), String> {
     let actual = media::duration(seg_wav)?;
     if target_dur <= 0.05 || actual <= 0.05 {
+        if std::fs::copy(seg_wav, work_path).is_ok() {
+            return Ok((work_path.to_path_buf(), actual.max(0.0)));
+        }
         return Ok((seg_wav.to_path_buf(), actual.max(0.0)));
     }
     const MIN_SLOW: f64 = 0.85;
@@ -2382,6 +2390,10 @@ fn fit_to_slot(seg_wav: &Path, target_dur: f64, work_path: &Path, cap: f64, paus
             let _ = std::fs::copy(&cur_wav, work_path);
             let _ = std::fs::remove_file(&cur_wav);
             return Ok((work_path.to_path_buf(), actual_dur));
+        }
+        // Сохраняем результат в work_path, чтобы seg_{sid}_fit.wav ВСЕГДА был актуален и перезаписан
+        if std::fs::copy(seg_wav, work_path).is_ok() {
+            return Ok((work_path.to_path_buf(), actual));
         }
         return Ok((seg_wav.to_path_buf(), actual));
     }
