@@ -185,7 +185,8 @@ fn op_subpos(p: &mut Project, edit: &Value) -> PatchResult {
 
 /// mode — верхнеуровневый режим вывода. Порт api.set_mode:
 ///   subtitles -> nodub + subs.translate; dub -> dub + subs.translate; funny -> dub + subs.translate + rewrite.
-/// Помечает все сегменты dirty. ValueError (неизвестное значение) -> 400.
+/// Переключение режимов выставляет mix_dirty = true (пересведение мастер-дорожки), не инвалидируя
+/// уже готовые фразы TTS в кэше. Режим funny с новым prompt помечает сегменты dirty на ре-генерацию.
 fn op_mode(p: &mut Project, edit: &Value) -> PatchResult {
     let value = edit.get("value").and_then(|x| x.as_str()).unwrap_or_default();
     // Композируемость: пресет режима НЕ трогает ЯВНЫЙ выбор «без субтитров». Иначе клик по чипу режима
@@ -226,17 +227,19 @@ fn op_mode(p: &mut Project, edit: &Value) -> PatchResult {
             set_subs(p, "translate");
             if p.audio.rewrite.is_none() {
                 p.audio.rewrite = Some("make it a funny, playful dub".into());
+                mark_all_dirty(p);
             }
         }
         other => return Err((400, format!("unknown mode {other:?}"))),
     }
-    mark_all_dirty(p);
+    p.audio.mix_dirty = true;
     Ok(())
 }
 
 /// dub — независимо задать аудио-выход: none (оригинал, без дубляжа) | dub | voiceover. Развязано от
 /// субтитров и шуточного ремикса (audio.rewrite сохраняется) — можно комбинировать: шуточный дубляж +
 /// свои голоса, дубляж без субтитров, перевод субтитров без дубляжа и т.д.
+/// Не сбрасывает кэш уже синтезированных фраз (mix_dirty=true; недостающие сегменты синтезируются при рендере).
 fn op_dub(p: &mut Project, edit: &Value) -> PatchResult {
     let v = edit.get("value").and_then(|x| x.as_str()).unwrap_or_default();
     match v {
@@ -245,10 +248,7 @@ fn op_dub(p: &mut Project, edit: &Value) -> PatchResult {
         "voiceover" => p.mode = "voiceover".into(),
         other => return Err((400, format!("unknown audio output {other:?}"))),
     }
-    // dub/voiceover требуют TTS -> пометить сегменты dirty (следующий /render синтезирует озвучку).
-    if p.mode == "dub" || p.mode == "voiceover" {
-        mark_all_dirty(p);
-    }
+    p.audio.mix_dirty = true;
     Ok(())
 }
 
@@ -931,11 +931,34 @@ mod tests {
     #[test]
     fn mode_dub_and_unknown() {
         let mut p = proj_with_seg();
+        assert!(!p.segments[0].dirty);
         apply(&mut p, &json!({"op":"mode","value":"dub"})).unwrap();
         assert_eq!(p.mode, "dub");
-        assert!(p.segments[0].dirty);
+        assert!(!p.segments[0].dirty);
+        assert!(p.audio.mix_dirty);
+
+        // Переключение между dub и voiceover сохраняет сегменты чистыми (кэш TTS) и метит mix_dirty
+        apply(&mut p, &json!({"op":"mode","value":"voiceover"})).unwrap();
+        assert_eq!(p.mode, "voiceover");
+        assert!(!p.segments[0].dirty);
+        assert!(p.audio.mix_dirty);
+
         let e = apply(&mut p, &json!({"op":"mode","value":"nope"})).unwrap_err();
         assert_eq!(e.0, 400);
+    }
+
+    #[test]
+    fn op_dub_preserves_clean_segments() {
+        let mut p = proj_with_seg();
+        apply(&mut p, &json!({"op":"dub","value":"voiceover"})).unwrap();
+        assert_eq!(p.mode, "voiceover");
+        assert!(!p.segments[0].dirty);
+        assert!(p.audio.mix_dirty);
+
+        apply(&mut p, &json!({"op":"dub","value":"dub"})).unwrap();
+        assert_eq!(p.mode, "dub");
+        assert!(!p.segments[0].dirty);
+        assert!(p.audio.mix_dirty);
     }
 
     #[test]
