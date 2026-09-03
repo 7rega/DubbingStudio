@@ -467,6 +467,14 @@ pub fn strip_higgs_tags(s: &str) -> String {
     out.split_whitespace().collect::<Vec<&str>>().join(" ")
 }
 
+/// Подсчет реальных произносимых буквенно-цифровых символов без управляющих тегов Higgs (<|...|>)
+pub fn count_speech_chars(s: &str) -> usize {
+    strip_higgs_tags(s)
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .count()
+}
+
 /// Похожесть ожидаемого перевода и услышанного ASR: нормализация (lowercase, ё→е, только буквы/цифры)
 /// + доля общих слов от максимума. Мягкая метрика: ловим «совсем не то/тишину», не орфографию.
 fn qc_similarity(expected: &str, heard: &str) -> f64 {
@@ -1064,7 +1072,7 @@ fn build_dub(
                 continue; // уже в кэше
             }
             let voice = cloud_voice_map.get(s.speaker.as_deref().unwrap_or("0")).cloned().unwrap_or_default();
-            jobs.push((raw, tgt.to_string(), voice));
+            jobs.push((raw, strip_higgs_tags(tgt), voice));
         }
         if jobs.len() > 1 && conc > 1 {
             emit(progress, "tts", &format!("облачный TTS: {} сегментов в {} параллельных потоков", jobs.len(), conc));
@@ -1105,7 +1113,7 @@ fn build_dub(
             continue;
         }
         let tgt = s.tgt_text.trim();
-        let tgt_chars = tgt.chars().filter(|c| c.is_alphanumeric()).count();
+        let tgt_chars = count_speech_chars(tgt);
 
         // Референс голоса для сегмента: custom_ref (голос из пака или донор) -> emo_ref -> identity-реф
         let custom_ref: Option<(PathBuf, Option<String>)> = if let Some(v) = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
@@ -1232,7 +1240,8 @@ fn build_dub(
                 .get(s.speaker.as_deref().unwrap_or("0"))
                 .map(String::as_str)
                 .unwrap_or("");
-            match crate::cloud_tts::synth_audio(&paths.models_root, tgt, cv) {
+            let clean_cloud_tgt = strip_higgs_tags(tgt);
+            match crate::cloud_tts::synth_audio(&paths.models_root, &clean_cloud_tgt, cv) {
                 Ok(wav) => {
                     std::fs::write(&raw, &wav).map_err(|e| format!("запись облачного seg_{sid}: {e}"))?;
                 }
@@ -1467,7 +1476,7 @@ fn build_dub(
             let take1_ok = if delta <= 0.10 && raw_dur > 0.0 {
                 // Первый дубль уложился в 10% от слота — проверяем на отсутствие дефектов синтеза
                 if let Ok((samples, sr)) = crate::wavio::read_mono_f32(&raw) {
-                    synth_defect(&samples, sr as i32, tgt.chars().filter(|c| c.is_alphanumeric()).count()).is_none()
+                    synth_defect(&samples, sr as i32, count_speech_chars(tgt)).is_none()
                 } else {
                     false
                 }
@@ -1503,7 +1512,7 @@ fn build_dub(
                     let eng = engine.as_ref().unwrap();
                     match voice_clone_guarded(eng, tgt, &ref_wav_mt.to_string_lossy(), rt_mt, &opts, vc_to) {
                         Ok((samples, sr)) => {
-                            if synth_defect(&samples, sr, tgt.chars().filter(|c| c.is_alphanumeric()).count()).is_none() {
+                            if synth_defect(&samples, sr, count_speech_chars(tgt)).is_none() {
                                 let wav = AudiocppEngine::encode_wav(&samples, sr, 1);
                                 let _ = std::fs::write(&take_path, &wav);
                                 if let Ok(td) = media::duration(&take_path) {
@@ -1664,7 +1673,7 @@ fn build_dub(
                 let main_rw = if has_custom_voice { seg_rw.clone() } else { ref_of(s) };
                 let main_rt = if has_custom_voice { seg_rt.clone() } else { reftext_of(s) };
                 let alt = if has_custom_voice { None } else { alt_refs.get(spk) };
-                let tgt_chars = tgtq.chars().filter(|c| c.is_alphanumeric()).count();
+                let tgt_chars = count_speech_chars(tgtq);
                 // до 3 свежих попыток (низкая temperature по ENGINES_FINDINGS §1.3 + кап токенов §1.1):
                 // альт-реф 0.3 → альт-реф 0.15+RAS1 → основной 0.10 с новым seed
                 let e_dur = (s.end - s.start).max(0.6);
@@ -3120,6 +3129,12 @@ mod tests {
         assert_eq!(strip_higgs_tags("<|emotion:fear|><|style:shouting|> Помогите! <|prosody:speed_fast|>"), "Помогите!");
         assert_eq!(strip_higgs_tags("Обычный текст без тегов."), "Обычный текст без тегов.");
         assert_eq!(strip_higgs_tags("<|emotion:sadness|>"), "");
+
+        // Подсчет реальных букв без раздувания тегами
+        assert_eq!(count_speech_chars("<|emotion:anger|>Привет мир!"), 9); // "Приветмир" = 9 букв
+        assert_eq!(count_speech_chars("<|style:whispering|>Тихий шепот"), 10);
+        assert_eq!(count_speech_chars("<|emotion:fear|><|style:shouting|> Помогите! <|prosody:speed_fast|>"), 8);
+        assert_eq!(count_speech_chars("<|emotion:sadness|>"), 0);
     }
 
     #[test]
