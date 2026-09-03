@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -4598,7 +4598,6 @@ function Editor() {
     } catch (e) { await surfaceErr(e); }
     finally { setRegenId(null); }
   }
-  const [dragSegId, setDragSegId] = useState<string | null>(null);
   async function moveSeg(segId: string, dir: "up" | "down") {
     const idx = p.segments.findIndex((s) => s.id === segId);
     if (idx === -1) return;
@@ -4608,20 +4607,6 @@ function Editor() {
     const [moved] = newSegs.splice(idx, 1);
     newSegs.splice(targetIdx, 0, moved);
     const newIds = newSegs.map((s) => s.id);
-    setProject({ ...p, segments: newSegs });
-    try { setProject(await api.patch(pid, { op: "reorder_segments", ids: newIds })); }
-    catch (e) { await surfaceErr(e); }
-  }
-  async function dropSeg(targetId: string) {
-    if (!dragSegId || dragSegId === targetId) return;
-    const fromIdx = p.segments.findIndex((s) => s.id === dragSegId);
-    const toIdx = p.segments.findIndex((s) => s.id === targetId);
-    if (fromIdx === -1 || toIdx === -1) return;
-    const newSegs = [...p.segments];
-    const [moved] = newSegs.splice(fromIdx, 1);
-    newSegs.splice(toIdx, 0, moved);
-    const newIds = newSegs.map((s) => s.id);
-    setDragSegId(null);
     setProject({ ...p, segments: newSegs });
     try { setProject(await api.patch(pid, { op: "reorder_segments", ids: newIds })); }
     catch (e) { await surfaceErr(e); }
@@ -4858,20 +4843,48 @@ function Editor() {
   const subsContainerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLDivElement>(null);
   const prevActiveIdRef = useRef<string | null>(null);
+  const userScrolledAtRef = useRef<number>(0);
   useEffect(() => {
     if (!activeId || activeId === prevActiveIdRef.current) return;
     prevActiveIdRef.current = activeId;
+
+    // Пауза автоскролла: если пользователь недавно скроллил список вручную, не перебиваем его действия во время воспроизведения
+    if (play && Date.now() - userScrolledAtRef.current < 4000) {
+      return;
+    }
+
+    const container = subsContainerRef.current;
+    if (!container) return;
+
+    // Липкая панель инструментов внутри контейнера занимает ~52px (или ~98px при активном множественном выборе)
+    const STICKY_HEADER_H = selSegs.size > 0 ? 98 : 52;
+
     if (activeRef.current) {
-      activeRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      const containerRect = container.getBoundingClientRect();
+      const elRect = activeRef.current.getBoundingClientRect();
+
+      const elRelativeTop = elRect.top - containerRect.top;
+      const elRelativeBottom = elRect.bottom - containerRect.top;
+
+      // Зона видимости (Deadzone): если карточка уже комфортно видна между шапкой и низом контейнера — не скроллим
+      if (elRelativeTop >= STICKY_HEADER_H + 10 && elRelativeBottom <= container.clientHeight - 10) {
+        return;
+      }
+
+      // При выходе за пределы видимости — позиционируем карточку с отступом под липкой шапкой
+      const delta = elRelativeTop - (STICKY_HEADER_H + 16);
+      const targetTop = Math.max(0, container.scrollTop + delta);
+      container.scrollTo({ top: targetTop, behavior: play ? "auto" : "smooth" });
     } else {
+      // Карточка вне текущего диапазона DOM — скроллим контейнер к её оценочной позиции
       const activeIdx = p.segments.findIndex((s) => s.id === activeId);
-      if (activeIdx >= 0 && subsContainerRef.current) {
+      if (activeIdx >= 0) {
         const ROW_ESTIMATE = subsViewMode === "table" ? 28 : 135;
-        const targetTop = Math.max(0, activeIdx * ROW_ESTIMATE - subsContainerRef.current.clientHeight / 2);
-        subsContainerRef.current.scrollTo({ top: targetTop, behavior: "smooth" });
+        const targetTop = Math.max(0, activeIdx * ROW_ESTIMATE - STICKY_HEADER_H - 16);
+        container.scrollTo({ top: targetTop, behavior: play ? "auto" : "smooth" });
       }
     }
-  }, [activeId, subsViewMode]);
+  }, [activeId, subsViewMode, play, selSegs.size]);
   return (
     <div className="flex-1 grid grid-cols-[1fr_420px] min-h-0">
       {/* Левая / Центральная секция: Видеопревью + Таймлайн на всю ширину */}
@@ -5372,7 +5385,15 @@ function Editor() {
             </div>
 
             {/* Скролл-тело списка субтитров */}
-            <div ref={subsContainerRef} data-kb-scroll onScroll={handleSubsScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4">
+            <div
+              ref={subsContainerRef}
+              data-kb-scroll
+              onScroll={handleSubsScroll}
+              onWheel={() => { userScrolledAtRef.current = Date.now(); }}
+              onPointerDown={() => { userScrolledAtRef.current = Date.now(); }}
+              onTouchStart={() => { userScrolledAtRef.current = Date.now(); }}
+              className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4"
+            >
               {lane === "subs" && (
                 <div className="space-y-2">
                   {(() => {
@@ -5504,7 +5525,7 @@ function Editor() {
                       })}
                     </div>
                   ) : ((() => {
-                    const VIRTUAL_WINDOW = 60;
+                    const VIRTUAL_WINDOW = 70;
                     const CARD_ESTIMATE = 135;
                     const totalSegs = p.segments.length;
 
@@ -5515,7 +5536,9 @@ function Editor() {
 
                     if (totalSegs > VIRTUAL_WINDOW) {
                       const approxIdx = Math.floor(subsScrollTop / CARD_ESTIMATE);
-                      startIndex = Math.max(0, Math.min(approxIdx - 20, totalSegs - VIRTUAL_WINDOW));
+                      const rawStart = Math.max(0, Math.min(approxIdx - 25, totalSegs - VIRTUAL_WINDOW));
+                      // Шаг гистерезиса в 5 карточек: предотвращает мерцание спейсеров на пограничных пикселях скролла
+                      startIndex = Math.min(totalSegs - VIRTUAL_WINDOW, Math.floor(rawStart / 5) * 5);
                       endIndex = Math.min(totalSegs, startIndex + VIRTUAL_WINDOW);
                       topSpacer = startIndex * CARD_ESTIMATE;
                       bottomSpacer = (totalSegs - endIndex) * CARD_ESTIMATE;
@@ -5532,13 +5555,9 @@ function Editor() {
                           const isRegen = Boolean(seg.extra?.regenerated);
                           return (
                             <div key={seg.id} ref={on ? activeRef : undefined}
-                              onDragOver={(e) => { e.preventDefault(); }}
-                              onDrop={(e) => { e.preventDefault(); dropSeg(seg.id); }}
                               onClick={() => { setRendered(false); setScrub(seg.start); }}
                               title={isRegen ? "Фраза перегенерирована вручную" : undefined}
-                              className={`rounded-xl p-2 border-l-[3px] transition-all cursor-pointer ${
-                                dragSegId === seg.id ? "opacity-30 border-dashed border-[var(--color-accent)]" : ""
-                              } ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${
+                              className={`rounded-xl p-2 border-l-[3px] transition-all cursor-pointer ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${
                                 on
                                   ? `bg-[var(--color-surface-2)] ${isRegen ? "border-emerald-400 ring-1 ring-emerald-400/40" : "border-[var(--color-accent)]"}`
                                   : isRegen
@@ -5547,13 +5566,6 @@ function Editor() {
                               }`}>
                               <div className="flex items-center justify-between gap-1">
                                 <div className="flex items-center gap-1 flex-1 min-w-0">
-                                  <button type="button" draggable
-                                    onDragStart={(e) => { e.dataTransfer.setData("text/plain", seg.id); setDragSegId(seg.id); }}
-                                    onClick={(e) => e.stopPropagation()}
-                                    title="Перетащить фразу (Drag & Drop)"
-                                    className="cursor-grab active:cursor-grabbing text-[var(--color-muted)] hover:text-[var(--color-accent)] p-0.5 rounded shrink-0">
-                                    <GripVertical size={13} />
-                                  </button>
                                   <span className={`mono px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 transition-colors ${isRegen ? "bg-emerald-500/25 text-emerald-300 border-emerald-400 font-extrabold shadow-sm" : "bg-[var(--color-surface)] text-[var(--color-muted)] border-[var(--color-border)] opacity-70"}`} title={`Фраза #${idx + 1}\nID: ${seg.id}\nКэш: seg_${seg.id}.wav${isRegen ? "\n✨ Перегенерирована вручную" : ""}`}>#{idx + 1}</span>
                                   <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "up"); }} disabled={idx === 0} title="Переместить вверх"
                                     className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronUp size={13} /></button>
@@ -8245,7 +8257,16 @@ function TranscriptView() {
   // активная фраза = та, чей [start,end] накрывает скраб; при смене — подсветка + автоскролл к ней
   const activeId = rows.find((s) => scrub >= s.start && scrub < (s.end > s.start ? s.end : s.start + 3))?.id;
   const activeRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [activeId]);
+  const transcribeContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!activeRef.current || !transcribeContainerRef.current) return;
+    const container = transcribeContainerRef.current;
+    const cRect = container.getBoundingClientRect();
+    const elRect = activeRef.current.getBoundingClientRect();
+    if (elRect.top >= cRect.top + 8 && elRect.bottom <= cRect.bottom - 8) return;
+    const delta = elRect.top - (cRect.top + 24);
+    container.scrollTo({ top: Math.max(0, container.scrollTop + delta), behavior: play ? "auto" : "smooth" });
+  }, [activeId, play]);
   const durOf = (spk: string) => p.segments.filter((s) => (s.speaker ?? "0") === spk).reduce((a, s) => a + Math.max(0, s.end - s.start), 0);
   const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
@@ -8330,7 +8351,7 @@ function TranscriptView() {
           </div>
           <WaveformTimeline pid={pid} duration={p.meta.duration || 0} scrub={scrub} segments={p.segments} onSeek={seek} />
         </div>
-        <div data-kb-scroll className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-1.5">
+        <div ref={transcribeContainerRef} data-kb-scroll className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-1.5">
           {rows.map((s) => {
             const spk = s.speaker ?? "0";
             const active = s.id === activeId;
