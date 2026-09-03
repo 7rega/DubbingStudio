@@ -157,7 +157,8 @@ export default function PreviewCanvas({
     } catch {}
   }, [playbackRate]);
 
-  const playStartedAtRef = useRef<number>(0);
+  const lastScrubRef = useRef<number>(scrub);
+  const lastSeekTimeRef = useRef<number>(0);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -166,14 +167,19 @@ export default function PreviewCanvas({
     v.volume = vol;
     v.playbackRate = playbackRate;
     if (playing) {
-      playStartedAtRef.current = Date.now();
-      if (Math.abs(v.currentTime - scrub) > 0.08) v.currentTime = scrub;
+      // При старте: если рассинхрон больше 150мс и видео не в процессе seek — выравниваем
+      if (Math.abs(v.currentTime - scrub) > 0.15 && !v.seeking) {
+        v.currentTime = scrub;
+        lastSeekTimeRef.current = Date.now();
+      }
       const playPromise = v.play();
       if (playPromise !== undefined) playPromise.catch((err) => console.warn("Video playback start:", err));
     } else {
       v.pause();
       v.playbackRate = playbackRate;
-      if (Math.abs(v.currentTime - scrub) > 0.03) v.currentTime = scrub;
+      if (Math.abs(v.currentTime - scrub) > 0.03 && !v.seeking) {
+        v.currentTime = scrub;
+      }
     }
   }, [playing, audioMuted, vol, playbackRate]);
 
@@ -183,42 +189,64 @@ export default function PreviewCanvas({
     v.muted = audioMuted;
     v.volume = vol;
 
+    const prevScrub = lastScrubRef.current;
+    lastScrubRef.current = scrub;
+
     if (!playing) {
       if (Math.abs(v.playbackRate - playbackRate) > 0.01) v.playbackRate = playbackRate;
-      if (Math.abs(v.currentTime - scrub) > 0.03) v.currentTime = scrub;
+      if (Math.abs(v.currentTime - scrub) > 0.03 && !v.seeking) {
+        v.currentTime = scrub;
+      }
       return;
     }
 
-    // Защита от «рваного старта»: в первые 400 мс после запуска даём аппаратному декодеру раскрутить поток
-    if (Date.now() - playStartedAtRef.current < 400) {
+    // Ручной скачок пользователя по таймлайну / вейформе / карточке (> 0.35 сек за 1 тик)
+    const isUserJump = Math.abs(scrub - prevScrub) > 0.35;
+    if (isUserJump) {
+      if (!v.seeking) {
+        v.currentTime = scrub;
+        lastSeekTimeRef.current = Date.now();
+      }
+      if (Math.abs(v.playbackRate - playbackRate) > 0.01) v.playbackRate = playbackRate;
       return;
     }
 
-    // timeDiff > 0 -> видео отстаёт от аудио (scrub > v.currentTime)
-    // timeDiff < 0 -> видео опережает аудио (v.currentTime > scrub)
+    // Если видео занято поиском кадра (seeking) или ждет данные буфера — НЕ ТРОГАЕМ декодер
+    if (v.seeking || v.readyState < 3) {
+      return;
+    }
+
+    // Кулдаун: не трогать скорость и seek чаще 1 раза в секунду после любого скачка
+    if (Date.now() - lastSeekTimeRef.current < 1000) {
+      return;
+    }
+
     const timeDiff = scrub - v.currentTime;
     const absDiff = Math.abs(timeDiff);
 
-    // Большой скачок (> 0.65 сек — клик на таймлайне, перемотка хоткеем): выполняем мгновенный seek
-    if (absDiff > 0.65) {
+    // Только при критическом срыве синхронизации (> 1.2 сек) делаем разовый seek с кулдауном 1 сек
+    if (absDiff > 1.2) {
       v.currentTime = scrub;
+      lastSeekTimeRef.current = Date.now();
       if (Math.abs(v.playbackRate - playbackRate) > 0.01) v.playbackRate = playbackRate;
-    } else if (timeDiff > 0.04) {
-      // Видео отстаёт (от 40мс до 650мс): плавно подгоняем скорость (от +4% до +8%), не сбрасывая аппаратный декодер
-      const factor = timeDiff > 0.25 ? 1.08 : 1.04;
-      const targetRate = Math.min(4.0, playbackRate * factor);
+      return;
+    }
+
+    // Мягкая фазовая автоподстройка скорости (Rate Steering)
+    if (timeDiff > 0.05) {
+      // Видео слегка отстает: ускоряем на 4%
+      const targetRate = Math.min(4.0, playbackRate * 1.04);
       if (Math.abs(v.playbackRate - targetRate) > 0.01) {
         v.playbackRate = targetRate;
       }
-    } else if (timeDiff < -0.04) {
-      // Видео опережает: плавно притормаживаем (от -4% до -8%)
-      const factor = timeDiff < -0.25 ? 0.92 : 0.96;
-      const targetRate = Math.max(0.25, playbackRate * factor);
+    } else if (timeDiff < -0.05) {
+      // Видео слегка спешит: замедляем на 4%
+      const targetRate = Math.max(0.25, playbackRate * 0.96);
       if (Math.abs(v.playbackRate - targetRate) > 0.01) {
         v.playbackRate = targetRate;
       }
     } else {
-      // Идеальный синхрон (в пределах 40 мс): стандартная скорость
+      // Идеальный синхрон (в пределах 50 мс): базовая скорость
       if (Math.abs(v.playbackRate - playbackRate) > 0.01) {
         v.playbackRate = playbackRate;
       }
@@ -366,7 +394,7 @@ export default function PreviewCanvas({
           <video ref={videoRef} src={previewSrc} playsInline controls onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)} onEnded={() => onEnded?.()} className="absolute inset-0 w-full h-full rounded-lg" />
         ) : (
           <>
-            <video ref={videoRef} src={api.sourceVideoUrl(pid)} playsInline muted={audioMuted} preload="metadata" onTimeUpdate={(e) => { if (playing) onTimeUpdate?.(e.currentTarget.currentTime); }} onEnded={() => onEnded?.()} className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black" />
+            <video ref={videoRef} src={api.sourceVideoUrl(pid)} playsInline muted={audioMuted} preload="auto" onTimeUpdate={(e) => { if (playing) onTimeUpdate?.(e.currentTarget.currentTime); }} onEnded={() => onEnded?.()} className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black" />
             {disp.w > 0 && (
               <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
                 {shouldRenderAutoSubBlur && (
