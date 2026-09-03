@@ -663,6 +663,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [pauseSqueezeOn, setPauseSqueezeOn] = useState(true);
   const [speechRateOn, setSpeechRateOn] = useState(true);
   const [emoRefOn, setEmoRefOn] = useState(true);
+  const [emoRefClean, setEmoRefClean] = useState(false);
   const [voLeadIn, setVoLeadIn] = useState(true);
   const [dubReverbMatch, setDubReverbMatch] = useState(true);
   useEffect(() => {
@@ -674,6 +675,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       setPauseSqueezeOn(c.selection?.pause_squeeze_on !== "0");
       setSpeechRateOn(c.selection?.speech_rate_on !== "0");
       setEmoRefOn(c.selection?.emo_ref_on !== "0");
+      setEmoRefClean(c.selection?.emo_ref_clean === "1");
       setVoLeadIn(c.selection?.vo_lead_in !== "0");
       setDubReverbMatch(c.selection?.dub_reverb_match !== "0");
     }).catch(() => {});
@@ -788,6 +790,30 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${emoRefOn ? "left-[18px]" : "left-0.5"}`} />
               </button>
             </label>
+            {/* Зависимый тумблер: Умный Emo-Ref (Smart Word-Trim & Context) */}
+            {emoRefOn && (
+              <label className="flex items-center justify-between gap-3 mb-2.5 pl-6 border-l-2 border-[var(--color-accent-2)] ml-2 py-0.5"
+                     title="Отсекать предвдохи и фоновый шум по словам Whisper, синхронизировать текст референса при обрезке и сохранять экспрессию коротких восклицаний">
+                <div className="min-w-0 flex-1">
+                  <span className="text-[12px] text-[var(--color-text)] inline-flex items-center gap-1.5 font-medium">
+                    Умный Emo-Ref (Smart Word-Trim)
+                  </span>
+                  <span className="block text-[10px] text-[var(--color-muted)]">
+                    чистый срез без вздохов, синхронизация текста при капе и охват восклицаний
+                  </span>
+                </div>
+                <button 
+                  onClick={() => { 
+                    const v = !emoRefClean; 
+                    setEmoRefClean(v); 
+                    api.setSelection("emo_ref_clean", v ? "1" : "0").catch(() => {}); 
+                  }}
+                  title="Умная пословная зачистка Emo-Ref"
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${emoRefClean ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${emoRefClean ? "left-[18px]" : "left-0.5"}`} />
+                </button>
+              </label>
+            )}
             {/* Сжатие пауз речи */}
             <label className="flex items-center justify-between gap-3 mb-2.5" title={t("settings.pauseSqueezeHint")}>
               <div className="min-w-0 flex-1">
