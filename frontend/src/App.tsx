@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
@@ -2446,11 +2446,14 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   );
 }
 
+const HAS_FIELD_SIZING = typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("field-sizing", "content");
+
 function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { onSplit?: (el: HTMLTextAreaElement) => void }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [menuState, setMenuState] = useState<HiggsContextMenuState | null>(null);
 
   useLayoutEffect(() => {
+    if (HAS_FIELD_SIZING) return;
     const el = ref.current;
     if (!el) return;
     el.style.height = "auto";                       // сброс, чтобы уметь и уменьшаться
@@ -2478,10 +2481,15 @@ function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElemen
           } else {
             el.value = newText;
           }
-          el.dispatchEvent(new Event("input", { bubbles: true }));
+          const event = new Event("input", { bubbles: true });
+          el.dispatchEvent(event);
         }
       },
-      onSplit: props.onSplit ? () => props.onSplit!(el) : undefined,
+      onSplit: () => {
+        if (props.onSplit) {
+          props.onSplit(el);
+        }
+      },
     });
   };
 
@@ -2493,6 +2501,7 @@ function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElemen
         ref={ref}
         rows={1}
         {...textareaProps}
+        style={{ ...(HAS_FIELD_SIZING ? { fieldSizing: "content" as any } : {}), ...textareaProps.style }}
         onContextMenu={(e) => {
           handleContextMenu(e);
           if (props.onContextMenu) props.onContextMenu(e);
@@ -3917,6 +3926,286 @@ function parseSrtAssText(content: string): { start: number; end: number; speaker
   return results.sort((a, b) => a.start - b.start);
 }
 
+interface SubtitleCardProps {
+  seg: Project["segments"][number];
+  idx: number;
+  totalSegs: number;
+  on: boolean;
+  isRegen: boolean;
+  isSelected: boolean;
+  isRegenerating: boolean;
+  isSolo: boolean;
+  isAnyRegen: boolean;
+  speakers: string[];
+  donorDisplayNum: string | number | null;
+  fmtT: (s: number) => string;
+  activeRef?: Ref<HTMLDivElement>;
+  onScrub: (start: number) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onToggleSelect: () => void;
+  onVoiceMenu: (rect: DOMRect) => void;
+  onPlay: () => void;
+  onPlaySolo: () => void;
+  onRegen: () => void;
+  onKeep: () => void;
+  onHide: () => void;
+  onDel: () => void;
+  onPatchText: (val: string) => void;
+  onPersistText: (val: string) => void;
+  onSplitAtTextCursor: (textarea: HTMLTextAreaElement) => void;
+  onTimingBlur: (field: "start" | "end", val: number) => void;
+  onSpeakerChange: (val: string) => void;
+}
+
+const SubtitleCard = memo(function SubtitleCard({
+  seg,
+  idx,
+  totalSegs,
+  on,
+  isRegen,
+  isSelected,
+  isRegenerating,
+  isSolo,
+  isAnyRegen,
+  speakers,
+  donorDisplayNum,
+  fmtT,
+  activeRef,
+  onScrub,
+  onMoveUp,
+  onMoveDown,
+  onToggleSelect,
+  onVoiceMenu,
+  onPlay,
+  onPlaySolo,
+  onRegen,
+  onKeep,
+  onHide,
+  onDel,
+  onPatchText,
+  onPersistText,
+  onSplitAtTextCursor,
+  onTimingBlur,
+  onSpeakerChange,
+}: SubtitleCardProps) {
+  const { t } = useTranslation();
+  return (
+    <div
+      key={seg.id}
+      ref={on ? activeRef : undefined}
+      onClick={() => onScrub(seg.start)}
+      title={isRegen ? "Фраза перегенерирована вручную" : undefined}
+      className={`rounded-xl p-2 border-l-[3px] transition-all cursor-pointer ${seg.hidden ? "opacity-50" : ""} ${isSelected ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${
+        on
+          ? `bg-[var(--color-surface-2)] ${isRegen ? "border-emerald-400 ring-1 ring-emerald-400/40" : "border-[var(--color-accent)]"}`
+          : isRegen
+          ? "bg-emerald-500/10 border-emerald-400 hover:bg-emerald-500/15"
+          : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-1">
+        <div className="flex items-center gap-1 flex-1 min-w-0">
+          <span
+            className={`mono px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 transition-colors ${
+              isRegen
+                ? "bg-emerald-500/25 text-emerald-300 border-emerald-400 font-extrabold shadow-sm"
+                : "bg-[var(--color-surface)] text-[var(--color-muted)] border-[var(--color-border)] opacity-70"
+            }`}
+            title={`Фраза #${idx + 1}\nID: ${seg.id}\nКэш: seg_${seg.id}.wav${isRegen ? "\n✨ Перегенерирована вручную" : ""}`}
+          >
+            #{idx + 1}
+          </span>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
+            disabled={idx === 0}
+            title="Переместить вверх"
+            className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"
+          >
+            <ChevronUp size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
+            disabled={idx === totalSegs - 1}
+            title="Переместить вниз"
+            className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"
+          >
+            <ChevronDown size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
+            className={`grid place-items-center w-3.5 h-3.5 rounded shrink-0 border transition-colors ${
+              isSelected ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
+            }`}
+          >
+            {isSelected && <Check size={10} />}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onVoiceMenu(e.currentTarget.getBoundingClientRect());
+            }}
+            title="Сменить спикера или индивидуальный голос фразы"
+            className={`mono px-1.5 py-0.5 rounded text-[9px] font-semibold flex items-center gap-1 transition-all border shrink-0 ${
+              seg.voice
+                ? "bg-purple-500/20 text-purple-300 border-purple-500/50 shadow-sm"
+                : "bg-[var(--color-overlay)] text-[var(--color-muted)] hover:text-white border-transparent hover:border-[var(--color-border)]"
+            }`}
+          >
+            {seg.voice ? (
+              <>
+                <span>SPK {seg.speaker ?? "0"}</span>
+                <span className="opacity-50">·</span>
+                {donorDisplayNum != null ? (
+                  <span className="text-cyan-300 font-bold" title={`Донор: фраза #${donorDisplayNum}`}>
+                    🧬 #{donorDisplayNum}
+                  </span>
+                ) : (
+                  <span className="text-purple-300 font-bold">🎙️ {seg.voice}</span>
+                )}
+              </>
+            ) : (
+              <span>SPK {seg.speaker ?? "0"}</span>
+            )}
+          </button>
+          <span
+            className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${
+              on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"
+            }`}
+          >
+            {fmtT(seg.start)} → {fmtT(seg.end)}
+          </span>
+        </div>
+        <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
+          {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onPlay(); }}
+            title={t("seg.play")}
+            className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+          >
+            <Play size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onPlaySolo(); }}
+            title={t("voice.playSolo")}
+            className={`p-0.5 transition-colors ${isSolo ? "text-amber-400 font-bold" : "text-[var(--color-muted)] hover:text-amber-400"}`}
+          >
+            <Headphones size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onRegen(); }}
+            disabled={isAnyRegen}
+            title={t("seg.regen")}
+            className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"
+          >
+            {isRegenerating ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onKeep(); }}
+            disabled={isAnyRegen}
+            title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
+            className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}
+          >
+            <Music size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onHide(); }}
+            disabled={isAnyRegen}
+            title={seg.hidden ? t("seg.show") : t("seg.hide")}
+            className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"
+          >
+            {seg.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onDel(); }}
+            disabled={isAnyRegen}
+            title={t("seg.del")}
+            className="p-0.5 text-[var(--color-muted)] hover:text-[#ef4444] disabled:opacity-40 transition-colors"
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+      </div>
+      <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
+      <AutoGrowTextarea
+        id={`seg-txt-${seg.id}`}
+        value={seg.tgt_text}
+        onChange={(e) => onPatchText(e.target.value)}
+        onSplit={(textarea) => onSplitAtTextCursor(textarea)}
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            onSplitAtTextCursor(e.currentTarget);
+          }
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onBlur={(e) => onPersistText(e.target.value)}
+        title="ПКМ — теги эмоций и эффектов, Ctrl+Enter — разрезать фразу"
+        className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors"
+      />
+      {on && (
+        <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
+          <Clock size={11} className="text-[var(--color-muted)] shrink-0" />
+          <input
+            type="number"
+            step={0.1}
+            min={0}
+            defaultValue={seg.start.toFixed(2)}
+            key={`st${seg.id}-${seg.start}`}
+            onBlur={(e) => {
+              const v = parseFloat(e.target.value);
+              if (!isNaN(v) && Math.abs(v - seg.start) > 0.001) onTimingBlur("start", v);
+            }}
+            className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none"
+          />
+          <ArrowRight size={11} className="text-[var(--color-muted)] shrink-0" />
+          <input
+            type="number"
+            step={0.1}
+            min={0}
+            defaultValue={seg.end.toFixed(2)}
+            key={`en${seg.id}-${seg.end}`}
+            onBlur={(e) => {
+              const v = parseFloat(e.target.value);
+              if (!isNaN(v) && Math.abs(v - seg.end) > 0.001) onTimingBlur("end", v);
+            }}
+            className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none"
+          />
+          <span className="text-[10px] text-[var(--color-muted)]">{t("seg.seconds")}</span>
+        </div>
+      )}
+      {(on || isSelected) && !seg.keep_original && (
+        <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.speakerHint")}>
+          <Users size={11} className="text-[var(--color-muted)] shrink-0" />
+          <select
+            value={seg.speaker ?? ""}
+            onChange={(e) => onSpeakerChange(e.target.value)}
+            className="flex-1 min-w-0 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none transition-colors"
+          >
+            {seg.speaker == null && <option value="">—</option>}
+            {speakers.map((s) => (
+              <option key={s} value={s}>
+                SPK {s}
+              </option>
+            ))}
+            <option value="__new__">＋ {t("seg.newSpeaker")}</option>
+          </select>
+        </div>
+      )}
+    </div>
+  );
+});
+
 function Editor() {
   const { t, i18n } = useTranslation();
   const p = useStore((s) => s.project) as Project;
@@ -4065,18 +4354,6 @@ function Editor() {
   const soloAudioRef = useRef<HTMLAudioElement | null>(null);
   const [soloPlayingId, setSoloPlayingId] = useState<string | null>(null);
 
-  // Виртуализация списка субтитров (60 карточек в DOM)
-  const [subsScrollTop, setSubsScrollTop] = useState(0);
-  const latestSubsScrollTop = useRef(0);
-  const subsScrollRaf = useRef<number | null>(null);
-  const handleSubsScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    latestSubsScrollTop.current = e.currentTarget.scrollTop;
-    if (subsScrollRaf.current !== null) return;
-    subsScrollRaf.current = requestAnimationFrame(() => {
-      setSubsScrollTop(latestSubsScrollTop.current);
-      subsScrollRaf.current = null;
-    });
-  };
 
   const playEndRef = useRef<number>(Infinity);                        // stop time for single-phrase playback (Infinity = full)
   const [dubRev, setDubRev] = useState(0);                            // dub-audio cache-buster — bumped ONLY when the dub track is re-rendered (regen/export), NOT on every edit, so live edits don't reload <audio> mid-playback
@@ -5414,473 +5691,360 @@ function Editor() {
             <div
               ref={subsContainerRef}
               data-kb-scroll
-              onScroll={handleSubsScroll}
               onWheel={() => { userScrolledAtRef.current = Date.now(); }}
               onPointerDown={() => { userScrolledAtRef.current = Date.now(); }}
               onTouchStart={() => { userScrolledAtRef.current = Date.now(); }}
               className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4"
             >
-              {lane === "subs" && (
-                <div className="space-y-2">
-                  {(() => {
-                    const spks = [...new Set(p.segments.map((x) => x.speaker ?? "0"))].sort();
-                    const idsOf = (spk: string | null) => p.segments.filter((x) => spk === null || (x.speaker ?? "0") === spk).map((x) => x.id);
-                    const toggleMany = (ids: string[]) => setSelSegs((prev) => {
-                      const next = new Set(prev), all = ids.length > 0 && ids.every((i) => next.has(i));
-                      ids.forEach((i) => (all ? next.delete(i) : next.add(i)));
-                      return next;
-                    });
-                    const chip = "px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors";
-                    return (
-                      <div className="sticky top-0 z-20 -mx-3 px-3 pt-1 pb-2 mb-1 space-y-1.5 bg-[var(--color-surface)] border-b border-[var(--color-border)]">
-                        <div className="flex flex-wrap items-center gap-1">
-                          <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mr-0.5">{t("sel.pick")}</span>
-                          <button onClick={() => toggleMany(idsOf(null))} className={chip}>{t("sel.all")}</button>
-                          {spks.length > 1 && spks.map((spk) => <button key={spk} onClick={() => toggleMany(idsOf(spk))} className={chip}>{spk !== "0" ? spk : "SPK 0"}</button>)}
+              <div className={lane === "subs" ? "space-y-2" : "hidden"}>
+                {(() => {
+                  const spks = [...new Set(p.segments.map((x) => x.speaker ?? "0"))].sort();
+                  const idsOf = (spk: string | null) => p.segments.filter((x) => spk === null || (x.speaker ?? "0") === spk).map((x) => x.id);
+                  const toggleMany = (ids: string[]) => setSelSegs((prev) => {
+                    const next = new Set(prev), all = ids.length > 0 && ids.every((i) => next.has(i));
+                    ids.forEach((i) => (all ? next.delete(i) : next.add(i)));
+                    return next;
+                  });
+                  const chip = "px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors";
+                  return (
+                    <div className="sticky top-0 z-20 -mx-3 px-3 pt-1 pb-2 mb-1 space-y-1.5 bg-[var(--color-surface)] border-b border-[var(--color-border)]">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mr-0.5">{t("sel.pick")}</span>
+                        <button onClick={() => toggleMany(idsOf(null))} className={chip}>{t("sel.all")}</button>
+                        {spks.length > 1 && spks.map((spk) => <button key={spk} onClick={() => toggleMany(idsOf(spk))} className={chip}>{spk !== "0" ? spk : "SPK 0"}</button>)}
 
-                          <div className="ml-auto inline-flex items-center gap-1.5 shrink-0">
-                            <button onClick={handleSaveSubtitles} title="Сохранить субтитры в файл (.srt)"
-                              className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
-                              <Save size={13} />
-                              <span className="text-[10px] font-bold">SRT</span>
+                        <div className="ml-auto inline-flex items-center gap-1.5 shrink-0">
+                          <button onClick={handleSaveSubtitles} title="Сохранить субтитры в файл (.srt)"
+                            className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
+                            <Save size={13} />
+                            <span className="text-[10px] font-bold">SRT</span>
+                          </button>
+                          <button onClick={handleSaveAss} title="Сохранить субтитры в файл (.ass)"
+                            className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
+                            <Save size={13} />
+                            <span className="text-[10px] font-bold">ASS</span>
+                          </button>
+                          <label title="Импортировать файл субтитров (.srt, .ass, .vtt)" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold cursor-pointer hover:brightness-110 transition shrink-0">
+                            <Upload size={12} />
+                            <span>{t("import.importShort")}</span>
+                            <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
+                          </label>
+                        </div>
+                      </div>
+                      {subsViewMode === "cards" && selSegs.size > 0 && (
+                        <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-accent)]/50 bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)] px-2 py-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[12px] font-medium">{selSegs.size} {t("sel.count")}</span>
+                            <button onClick={() => setSelSegs(new Set())} className="text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><X size={14} /></button>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <select value="" onChange={(e) => { if (e.target.value) { doBulkSetSpeaker(e.target.value); e.target.value = ""; } }} disabled={regenId !== null}
+                              title={t("sel.spkHint")}
+                              className="bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[12px] rounded-md px-1.5 py-1 text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none transition-colors cursor-pointer disabled:opacity-40">
+                              <option value="">{t("sel.spkPlaceholder")}</option>
+                              {speakers.map((spk) => <option key={spk} value={spk}>SPK {spk}</option>)}
+                              <option value="__new__">{t("sel.spkNew")}</option>
+                            </select>
+                            <button onClick={() => bulkSeg("keep_segments", { keep: true })} disabled={regenId !== null}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><Music size={13} />{t("sel.keep")}</button>
+                            <button onClick={() => bulkSeg("hide_segments", { hidden: true })} disabled={regenId !== null}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><EyeOff size={13} />{t("sel.hide")}</button>
+                            <button onClick={doBulkRegen} disabled={regenId !== null} title={t("sel.regenHint")}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
+                              {regenId === "__bulk__" ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
+                              <span>{t("sel.regen")}</span>
                             </button>
-                            <button onClick={handleSaveAss} title="Сохранить субтитры в файл (.ass)"
-                              className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
-                              <Save size={13} />
-                              <span className="text-[10px] font-bold">ASS</span>
-                            </button>
-                            <label title="Импортировать файл субтитров (.srt, .ass, .vtt)" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold cursor-pointer hover:brightness-110 transition shrink-0">
-                              <Upload size={12} />
-                              <span>{t("import.importShort")}</span>
-                              <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
-                            </label>
+                            <button onClick={() => bulkSeg("del_segments")} disabled={regenId !== null}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
                           </div>
                         </div>
-                        {subsViewMode === "cards" && selSegs.size > 0 && (
-                          <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-accent)]/50 bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)] px-2 py-1.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[12px] font-medium">{selSegs.size} {t("sel.count")}</span>
-                              <button onClick={() => setSelSegs(new Set())} className="text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><X size={14} /></button>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <select value="" onChange={(e) => { if (e.target.value) { doBulkSetSpeaker(e.target.value); e.target.value = ""; } }} disabled={regenId !== null}
-                                title={t("sel.spkHint")}
-                                className="bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[12px] rounded-md px-1.5 py-1 text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none transition-colors cursor-pointer disabled:opacity-40">
-                                <option value="">{t("sel.spkPlaceholder")}</option>
-                                {speakers.map((spk) => <option key={spk} value={spk}>SPK {spk}</option>)}
-                                <option value="__new__">{t("sel.spkNew")}</option>
-                              </select>
-                              <button onClick={() => bulkSeg("keep_segments", { keep: true })} disabled={regenId !== null}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><Music size={13} />{t("sel.keep")}</button>
-                              <button onClick={() => bulkSeg("hide_segments", { hidden: true })} disabled={regenId !== null}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><EyeOff size={13} />{t("sel.hide")}</button>
-                              <button onClick={doBulkRegen} disabled={regenId !== null} title={t("sel.regenHint")}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                                {regenId === "__bulk__" ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
-                                <span>{t("sel.regen")}</span>
-                              </button>
-                              <button onClick={() => bulkSeg("del_segments")} disabled={regenId !== null}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
-                            </div>
-                          </div>
-                        )}
+                      )}
+                    </div>
+                  );
+                })()}
+                <div className={subsViewMode === "table" ? "rounded-lg border border-[var(--color-border)] overflow-hidden divide-y divide-[var(--color-border)]/40 bg-[var(--color-surface)] select-none" : "hidden"}>
+                  {p.segments.map((seg, idx) => {
+                    const isSelected = selSegs.has(seg.id);
+                    const isCurrent = scrub >= seg.start && scrub < seg.end;
+                    const actorName = seg.speaker && seg.speaker !== "0" ? seg.speaker : "";
+                    return (
+                      <div
+                        key={seg.id}
+                        ref={isCurrent ? activeRef : undefined}
+                        onMouseDown={(e) => handleRowMouseDown(idx, seg.id, e)}
+                        onMouseEnter={() => handleRowMouseEnter(idx)}
+                        onDoubleClick={() => { setRendered(false); setScrub(seg.start); }}
+                        className={`flex items-center gap-2 px-2.5 py-1 text-[11px] cursor-pointer transition-colors ${
+                          isSelected
+                            ? "bg-[var(--color-accent)]/20 text-[var(--color-text)] ring-1 ring-inset ring-[var(--color-accent)]/50"
+                            : isCurrent
+                            ? "bg-[var(--color-surface-2)] text-[var(--color-text)]"
+                            : "hover:bg-[var(--color-surface-2)]/60 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                        }`}
+                      >
+                        <span className="mono text-[10px] w-6 shrink-0 opacity-50 font-bold">#{idx + 1}</span>
+                        <span className="mono text-[9.5px] shrink-0 opacity-60 w-11 tabnum">{fmtT(seg.start)}</span>
+                        <input
+                          type="text"
+                          value={seg.tgt_text ?? seg.src_text ?? ""}
+                          onChange={(e) => patchSeg(seg.id, e.target.value)}
+                          onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              (e.target as HTMLInputElement).blur();
+                            }
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          title={`${seg.tgt_text || seg.src_text || ""}\n\n(Двойной клик по строке — перейти к видео)`}
+                          placeholder="Текст перевода…"
+                          className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-surface)] rounded px-1.5 py-0.5 text-[11.5px] text-[var(--color-text)] focus:outline-none transition-colors truncate"
+                        />
+                        <div className="shrink-0" onMouseDown={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const targetIds = (selSegs.has(seg.id) || selSegs.size > 1) && selSegs.size > 0 ? [...selSegs] : [seg.id];
+                              setActorPickerState({ targetIds, x: rect.left, y: rect.bottom + 4 });
+                            }}
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors max-w-[110px] truncate ${
+                              actorName
+                                ? "bg-[var(--color-surface-2)] text-emerald-400 border-emerald-500/30 hover:border-emerald-500/60 font-semibold"
+                                : "bg-transparent text-[var(--color-muted)] border-dashed border-[var(--color-border)] hover:border-[var(--color-muted)] hover:text-[var(--color-text)]"
+                            }`}
+                            title={actorName ? `Актёр: ${actorName}` : "Назначить актёра"}
+                          >
+                            <span className="truncate">{actorName || t("voice.noActor", "+ Актёр")}</span>
+                            <ChevronDown size={10} className="opacity-50 shrink-0" />
+                          </button>
+                        </div>
                       </div>
                     );
-                  })()}
-                  {subsViewMode === "table" ? (
-                    <div className="rounded-lg border border-[var(--color-border)] overflow-hidden divide-y divide-[var(--color-border)]/40 bg-[var(--color-surface)] select-none">
-                      {p.segments.map((seg, idx) => {
-                        const isSelected = selSegs.has(seg.id);
-                        const isCurrent = scrub >= seg.start && scrub < seg.end;
-                        const actorName = seg.speaker && seg.speaker !== "0" ? seg.speaker : "";
-                        return (
-                          <div
-                            key={seg.id}
-                            ref={isCurrent ? activeRef : undefined}
-                            onMouseDown={(e) => handleRowMouseDown(idx, seg.id, e)}
-                            onMouseEnter={() => handleRowMouseEnter(idx)}
-                            onDoubleClick={() => { setRendered(false); setScrub(seg.start); }}
-                            className={`flex items-center gap-2 px-2.5 py-1 text-[11px] cursor-pointer transition-colors ${
-                              isSelected
-                                ? "bg-[var(--color-accent)]/20 text-[var(--color-text)] ring-1 ring-inset ring-[var(--color-accent)]/50"
-                                : isCurrent
-                                ? "bg-[var(--color-surface-2)] text-[var(--color-text)]"
-                                : "hover:bg-[var(--color-surface-2)]/60 text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                            }`}
-                          >
-                            <span className="mono text-[10px] w-6 shrink-0 opacity-50 font-bold">#{idx + 1}</span>
-                            <span className="mono text-[9.5px] shrink-0 opacity-60 w-11 tabnum">{fmtT(seg.start)}</span>
-                            <input
-                              type="text"
-                              value={seg.tgt_text ?? seg.src_text ?? ""}
-                              onChange={(e) => patchSeg(seg.id, e.target.value)}
-                              onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  (e.target as HTMLInputElement).blur();
-                                }
-                              }}
-                              onMouseDown={(e) => e.stopPropagation()}
-                              title={`${seg.tgt_text || seg.src_text || ""}\n\n(Двойной клик по строке — перейти к видео)`}
-                              placeholder="Текст перевода…"
-                              className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-surface)] rounded px-1.5 py-0.5 text-[11.5px] text-[var(--color-text)] focus:outline-none transition-colors truncate"
-                            />
-                            <div className="shrink-0" onMouseDown={(e) => e.stopPropagation()}>
-                              <button
-                                type="button"
-                                onMouseDown={(e) => e.stopPropagation()}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const targetIds = (selSegs.has(seg.id) || selSegs.size > 1) && selSegs.size > 0 ? [...selSegs] : [seg.id];
-                                  setActorPickerState({ targetIds, x: rect.left, y: rect.bottom + 4 });
-                                }}
-                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors max-w-[110px] truncate ${
-                                  actorName
-                                    ? "bg-[var(--color-surface-2)] text-emerald-400 border-emerald-500/30 hover:border-emerald-500/60 font-semibold"
-                                    : "bg-transparent text-[var(--color-muted)] border-dashed border-[var(--color-border)] hover:border-[var(--color-muted)] hover:text-[var(--color-text)]"
-                                }`}
-                                title={actorName ? `Актёр: ${actorName}` : "Назначить актёра"}
-                              >
-                                <span className="truncate">{actorName || t("voice.noActor", "+ Актёр")}</span>
-                                <ChevronDown size={10} className="opacity-50 shrink-0" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : ((() => {
-                    const VIRTUAL_WINDOW = 70;
-                    const CARD_ESTIMATE = 135;
-                    const totalSegs = p.segments.length;
-
-                    let startIndex = 0;
-                    let endIndex = totalSegs;
-                    let topSpacer = 0;
-                    let bottomSpacer = 0;
-
-                    if (totalSegs > VIRTUAL_WINDOW) {
-                      const approxIdx = Math.floor(subsScrollTop / CARD_ESTIMATE);
-                      const rawStart = Math.max(0, Math.min(approxIdx - 25, totalSegs - VIRTUAL_WINDOW));
-                      // Шаг гистерезиса в 5 карточек: предотвращает мерцание спейсеров на пограничных пикселях скролла
-                      startIndex = Math.min(totalSegs - VIRTUAL_WINDOW, Math.floor(rawStart / 5) * 5);
-                      endIndex = Math.min(totalSegs, startIndex + VIRTUAL_WINDOW);
-                      topSpacer = startIndex * CARD_ESTIMATE;
-                      bottomSpacer = (totalSegs - endIndex) * CARD_ESTIMATE;
+                  })}
+                </div>
+                <div className={subsViewMode === "cards" ? "space-y-2" : "hidden"}>
+                  {p.segments.map((seg, idx) => {
+                    const on = isActive(seg);
+                    const isRegen = Boolean(seg.extra?.regenerated);
+                    let donorDisplayNum: string | number | null = null;
+                    if (seg.voice && (seg.voice.startsWith("donor:") || seg.voice.startsWith("clone:"))) {
+                      const donorKey = seg.voice.replace(/^(donor|clone):/, "");
+                      const donorIdx = p.segments.findIndex((s) => s.id === donorKey);
+                      donorDisplayNum = donorIdx !== -1 ? donorIdx + 1 : donorKey;
                     }
 
-                    const visibleSegments = totalSegs > VIRTUAL_WINDOW ? p.segments.slice(startIndex, endIndex) : p.segments;
-
                     return (
-                      <>
-                        {topSpacer > 0 && <div style={{ height: `${topSpacer}px` }} className="w-full pointer-events-none shrink-0" />}
-                        {visibleSegments.map((seg, i) => {
-                          const idx = startIndex + i;
-                          const on = isActive(seg);
-                          const isRegen = Boolean(seg.extra?.regenerated);
-                          return (
-                            <div key={seg.id} ref={on ? activeRef : undefined}
-                              onClick={() => { setRendered(false); setScrub(seg.start); }}
-                              title={isRegen ? "Фраза перегенерирована вручную" : undefined}
-                              className={`rounded-xl p-2 border-l-[3px] transition-all cursor-pointer ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${
-                                on
-                                  ? `bg-[var(--color-surface-2)] ${isRegen ? "border-emerald-400 ring-1 ring-emerald-400/40" : "border-[var(--color-accent)]"}`
-                                  : isRegen
-                                  ? "bg-emerald-500/10 border-emerald-400 hover:bg-emerald-500/15"
-                                  : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"
-                              }`}>
-                              <div className="flex items-center justify-between gap-1">
-                                <div className="flex items-center gap-1 flex-1 min-w-0">
-                                  <span className={`mono px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 transition-colors ${isRegen ? "bg-emerald-500/25 text-emerald-300 border-emerald-400 font-extrabold shadow-sm" : "bg-[var(--color-surface)] text-[var(--color-muted)] border-[var(--color-border)] opacity-70"}`} title={`Фраза #${idx + 1}\nID: ${seg.id}\nКэш: seg_${seg.id}.wav${isRegen ? "\n✨ Перегенерирована вручную" : ""}`}>#{idx + 1}</span>
-                                  <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "up"); }} disabled={idx === 0} title="Переместить вверх"
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronUp size={13} /></button>
-                                  <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "down"); }} disabled={idx === p.segments.length - 1} title="Переместить вниз"
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronDown size={13} /></button>
-                                  <button onClick={(e) => { e.stopPropagation(); setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; }); }}
-                                    className={`grid place-items-center w-3.5 h-3.5 rounded shrink-0 border transition-colors ${selSegs.has(seg.id) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>
-                                    {selSegs.has(seg.id) && <Check size={10} />}</button>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      const rect = e.currentTarget.getBoundingClientRect();
-                                      setVoiceMenuSeg(voiceMenuSeg?.id === seg.id ? null : { id: seg.id, x: rect.left, y: rect.bottom + 4 });
-                                    }}
-                                    title="Сменить спикера или индивидуальный голос фразы"
-                                    className={`mono px-1.5 py-0.5 rounded text-[9px] font-semibold flex items-center gap-1 transition-all border shrink-0 ${
-                                      seg.voice
-                                        ? "bg-purple-500/20 text-purple-300 border-purple-500/50 shadow-sm"
-                                        : "bg-[var(--color-overlay)] text-[var(--color-muted)] hover:text-white border-transparent hover:border-[var(--color-border)]"
-                                    }`}
-                                  >
-                                    {seg.voice ? (
-                                      <>
-                                        <span>SPK {seg.speaker ?? "0"}</span>
-                                        <span className="opacity-50">·</span>
-                                        {seg.voice.startsWith("donor:") || seg.voice.startsWith("clone:") ? (() => {
-                                          const donorKey = seg.voice.replace(/^(donor|clone):/, "");
-                                          const donorIdx = p.segments.findIndex((s) => s.id === donorKey);
-                                          const displayNum = donorIdx !== -1 ? donorIdx + 1 : donorKey;
-                                          return (
-                                            <span className="text-cyan-300 font-bold" title={`Донор: фраза #${displayNum} (ID: ${donorKey})`}>
-                                              🧬 #{displayNum}
-                                            </span>
-                                          );
-                                        })() : (
-                                          <span className="text-purple-300 font-bold">🎙️ {seg.voice}</span>
-                                        )}
-                                      </>
-                                    ) : (
-                                      <span>SPK {seg.speaker ?? "0"}</span>
-                                    )}
-                                  </button>
-                                  <span className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"}`}>{fmtT(seg.start)} → {fmtT(seg.end)}</span>
-                                </div>
-                                <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
-                                  {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
-                                  <button onClick={(e) => { e.stopPropagation(); playSeg(seg); }} title={t("seg.play")}
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><Play size={13} /></button>
-                                  <button onClick={(e) => { e.stopPropagation(); playSoloSeg(seg.id); }} title={t("voice.playSolo")}
-                                    className={`p-0.5 transition-colors ${soloPlayingId === seg.id ? "text-amber-400 font-bold" : "text-[var(--color-muted)] hover:text-amber-400"}`}><Headphones size={13} /></button>
-                                  <button onClick={(e) => { e.stopPropagation(); doRegen(seg.id); }} disabled={regenId !== null} title={t("seg.regen")}
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                                    {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
-                                  </button>
-                                  <button onClick={(e) => { e.stopPropagation(); doKeepSeg(seg.id); }} disabled={regenId !== null} title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
-                                    className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}><Music size={13} /></button>
-                                  <button onClick={(e) => { e.stopPropagation(); doHideSeg(seg.id); }} disabled={regenId !== null} title={seg.hidden ? t("seg.show") : t("seg.hide")}
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                                    {seg.hidden ? <EyeOff size={13} /> : <Eye size={13} />}</button>
-                                  <button onClick={(e) => { e.stopPropagation(); doDelSeg(seg.id); }} disabled={regenId !== null} title={t("seg.del")}
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
-                                </div>
-                              </div>
-                              <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
-                              <AutoGrowTextarea
-                                id={`seg-txt-${seg.id}`}
-                                value={seg.tgt_text}
-                                onChange={(e) => patchSeg(seg.id, e.target.value)}
-                                onSplit={(textarea) => handleSplitAtTextCursor(seg, textarea)}
-                                onKeyDown={(e) => {
-                                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                                    e.preventDefault();
-                                    handleSplitAtTextCursor(seg, e.currentTarget);
-                                  }
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                                onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
-                                title="ПКМ — теги эмоций и эффектов, Ctrl+Enter — разрезать фразу"
-                                className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors"
-                              />
-                              {on && (
-                                <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
-                                  <Clock size={11} className="text-[var(--color-muted)] shrink-0" />
-                                  <input type="number" step={0.1} min={0} defaultValue={seg.start.toFixed(2)} key={`st${seg.id}-${seg.start}`}
-                                    onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.start) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, start: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
-                                    className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
-                                  <ArrowRight size={11} className="text-[var(--color-muted)] shrink-0" />
-                                  <input type="number" step={0.1} min={0} defaultValue={seg.end.toFixed(2)} key={`en${seg.id}-${seg.end}`}
-                                    onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.end) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, end: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
-                                    className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
-                                  <span className="text-[10px] text-[var(--color-muted)]">{t("seg.seconds")}</span>
-                                </div>
-                              )}
-                              {(on || selSegs.has(seg.id)) && !seg.keep_original && (
-                                <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.speakerHint")}>
-                                  <Users size={11} className="text-[var(--color-muted)] shrink-0" />
-                                  <select value={seg.speaker ?? ""}
-                                    onChange={async (e) => {
-                                      let val = e.target.value;
-                                      if (val === "__new__") {
-                                        const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
-                                        val = String(nums.length ? Math.max(...nums) + 1 : 1);
-                                      }
-                                      setRendered(false);
-                                      try { setProject(await api.patch(pid, { op: "segment", id: seg.id, speaker: val })); bump(); } catch (err) { await surfaceErr(err); }
-                                    }}
-                                    className="flex-1 min-w-0 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none transition-colors">
-                                    {seg.speaker == null && <option value="">—</option>}
-                                    {speakers.map((s) => <option key={s} value={s}>SPK {s}</option>)}
-                                    <option value="__new__">＋ {t("seg.newSpeaker")}</option>
-                                  </select>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                        {bottomSpacer > 0 && <div style={{ height: `${bottomSpacer}px` }} className="w-full pointer-events-none shrink-0" />}
-                      </>
-                    );
-                  })())}
-                  <button onClick={addSeg} disabled={regenId !== null} title={t("seg.addHint")}
-                    className="w-full mt-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                    <Plus size={14} />{t("seg.add")}
-                  </button>
-                  <label title="Загрузить готовые субтитры из файла (.srt, .ass)"
-                    className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] cursor-pointer transition-colors">
-                    <Upload size={14} /> Импортировать субтитры (.srt, .ass)
-                    <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
-                  </label>
-                </div>
-              )}
-              {lane === "blur" && (
-                <div className="space-y-2">
-                  <Toggle label={t("blur.on")} on={p.render.blur} onClick={() => branch("blur_enable", { on: !p.render.blur })} />
-                  {p.render.blur && (
-                    <div className="py-1">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="mono text-[10px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
-                        <span className="mono text-[10px] text-[var(--color-text)] font-semibold">{blurSigmaDraft ?? p.render.blur_sigma ?? 60} σ</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={5}
-                        max={150}
-                        step={5}
-                        value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
-                        onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
-                        onPointerUp={async () => {
-                          if (blurSigmaDraft != null) {
-                            await branch("blur_enable", { on: p.render.blur, sigma: blurSigmaDraft });
-                            setBlurSigmaDraft(null);
-                          }
+                      <SubtitleCard
+                        key={seg.id}
+                        seg={seg}
+                        idx={idx}
+                        totalSegs={p.segments.length}
+                        on={on}
+                        isRegen={isRegen}
+                        isSelected={selSegs.has(seg.id)}
+                        isRegenerating={regenId === seg.id}
+                        isSolo={soloPlayingId === seg.id}
+                        isAnyRegen={regenId !== null}
+                        speakers={speakers}
+                        donorDisplayNum={donorDisplayNum}
+                        fmtT={fmtT}
+                        activeRef={on ? activeRef : undefined}
+                        onScrub={(start) => { setRendered(false); setScrub(start); }}
+                        onMoveUp={() => moveSeg(seg.id, "up")}
+                        onMoveDown={() => moveSeg(seg.id, "down")}
+                        onToggleSelect={() => setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; })}
+                        onVoiceMenu={(rect) => setVoiceMenuSeg(voiceMenuSeg?.id === seg.id ? null : { id: seg.id, x: rect.left, y: rect.bottom + 4 })}
+                        onPlay={() => playSeg(seg)}
+                        onPlaySolo={() => playSoloSeg(seg.id)}
+                        onRegen={() => doRegen(seg.id)}
+                        onKeep={() => doKeepSeg(seg.id)}
+                        onHide={() => doHideSeg(seg.id)}
+                        onDel={() => doDelSeg(seg.id)}
+                        onPatchText={(val) => patchSeg(seg.id, val)}
+                        onPersistText={(val) => { burstRef.current = null; persistSeg(seg.id, val); }}
+                        onSplitAtTextCursor={(textarea) => handleSplitAtTextCursor(seg, textarea)}
+                        onTimingBlur={async (field, val) => {
+                          setRendered(false);
+                          try { setProject(await api.patch(pid, { op: "segment", id: seg.id, [field]: val })); bump(); } catch (err) { await surfaceErr(err); }
                         }}
-                        className="w-full accent-[var(--color-accent)] cursor-pointer"
+                        onSpeakerChange={async (rawVal) => {
+                          let val = rawVal;
+                          if (val === "__new__") {
+                            const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
+                            val = String(nums.length ? Math.max(...nums) + 1 : 1);
+                          }
+                          setRendered(false);
+                          try { setProject(await api.patch(pid, { op: "segment", id: seg.id, speaker: val })); bump(); } catch (err) { await surfaceErr(err); }
+                        }}
                       />
+                    );
+                  })}
+                </div>
+                <button onClick={addSeg} disabled={regenId !== null} title={t("seg.addHint")}
+                  className="w-full mt-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
+                  <Plus size={14} />{t("seg.add")}
+                </button>
+                <label title="Загрузить готовые субтитры из файла (.srt, .ass)"
+                  className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] cursor-pointer transition-colors">
+                  <Upload size={14} /> Импортировать субтитры (.srt, .ass)
+                  <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
+                </label>
+              </div>
+              <div className={lane === "blur" ? "space-y-2" : "hidden"}>
+                <Toggle label={t("blur.on")} on={p.render.blur} onClick={() => branch("blur_enable", { on: !p.render.blur })} />
+                {p.render.blur && (
+                  <div className="py-1">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="mono text-[10px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
+                      <span className="mono text-[10px] text-[var(--color-text)] font-semibold">{blurSigmaDraft ?? p.render.blur_sigma ?? 60} σ</span>
                     </div>
-                  )}
-                  <div className={p.render.blur ? "" : "opacity-40 pointer-events-none"}>
-                    <div className="flex items-center justify-between mt-2 mb-1.5">
-                      <span className="mono text-[10px] text-[var(--color-muted)]">{blurAll ? `${t("blur.all")} · ${(p.captions.blur_boxes || []).length}` : t("blur.frame")}</span>
-                      <button onClick={() => setBlurAll(!blurAll)} className="mono text-[10px] text-[var(--color-accent)] hover:underline">
-                        {blurAll ? t("blur.frame") : `${t("blur.all")} (${(p.captions.blur_boxes || []).length})`}
-                      </button>
-                    </div>
-                    {(p.captions.blur_boxes || []).length > 0 && (
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <button onClick={() => setSelBlurs((prev) => prev.size === (p.captions.blur_boxes || []).length ? new Set() : new Set((p.captions.blur_boxes || []).map((_, i) => i)))}
-                          className="px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">{t("sel.all")}</button>
-                        {selBlurs.size > 0 && (<>
-                          <span className="text-[11px] text-[var(--color-muted)]">{selBlurs.size} {t("sel.count")}</span>
-                          <button onClick={() => bulkDelIdx("del_blurs", selBlurs, () => setSelBlurs(new Set()))}
-                            className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-surface-2)] hover:text-[#ef4444] transition-colors"><Trash2 size={12} /></button>
-                        </>)}
-                      </div>
-                    )}
-                    <div className="space-y-1 max-h-[46vh] overflow-y-auto pr-1">
-                      {(p.captions.blur_boxes || []).map((b, i) => ({ b, i }))
-                        .filter(({ b }) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4))
-                        .map(({ b, i }) => (
-                          <div key={i} onClick={() => { setSelBlur(i); setRendered(false); setScrub(Math.max(b.t0, 0)); }}
-                            className={`flex items-center gap-2 mono text-[10px] rounded px-2 py-1 cursor-pointer transition-colors ${selBlur === i ? "bg-[color-mix(in_oklab,var(--color-accent)_18%,transparent)] text-[var(--color-text)] ring-1 ring-[var(--color-accent)]" : "text-[var(--color-muted)] bg-[var(--color-surface-2)]/40 hover:text-[var(--color-text)]"} ${b.hidden ? "opacity-50" : ""} ${selBlurs.has(i) ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
-                            <button onClick={(e) => { e.stopPropagation(); setSelBlurs((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; }); }}
-                              className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selBlurs.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selBlurs.has(i) && <Check size={9} />}</button>
-                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, hidden: !b.hidden }); }}
-                              title={b.hidden ? t("blur.show") : t("blur.hide")}
-                              className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.hidden ? <EyeOff size={12} /> : <Eye size={12} />}</button>
-                            <span className="flex-1 truncate">#{i + 1} · {b.w}×{b.h} · {fmtT(b.t0)}{b.hidden ? ` · ${t("blur.off")}` : ""}</span>
-                            {b.fill && (
-                              <input type="color" value={b.fill} onClick={(e) => e.stopPropagation()}
-                                onChange={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: e.target.value }); }}
-                                title={t("blur.fillColor")} className="w-4 h-4 shrink-0 p-0 border-0 bg-transparent rounded cursor-pointer" />
-                            )}
-                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: b.fill ? null : "#000000" }); }}
-                              title={b.fill ? t("blur.modeFill") : t("blur.modeBlur")}
-                              className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.fill ? <Square size={12} /> : <Droplet size={12} />}</button>
-                            <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
-                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: Math.max(scrub, 0) }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
-                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
-                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
-                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
-                            </span>
-                            <button onClick={(e) => { e.stopPropagation(); branch("blur_del", { idx: i }); setSelBlur(null); }} className="shrink-0 hover:text-[var(--color-warn)] transition-colors"><Trash2 size={12} /></button>
-                          </div>
-                        ))}
-                      {!(p.captions.blur_boxes || []).some((b) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4)) &&
-                        <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
-                    </div>
-                    <button onClick={async () => { const fresh = await branch("blur_add", { x: Math.round((p.meta.width || 0) * 0.25), y: Math.round((p.meta.height || 0) * 0.45), w: Math.round((p.meta.width || 0) * 0.5), h: Math.round((p.meta.height || 0) * 0.08), t0: Math.max(0, scrub - 1), t1: scrub + 2 }); if (fresh) setSelBlur((fresh.captions.blur_boxes || []).length - 1); }}
-                      className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
-                      <Plus size={13} /> {t("blur.add")}
+                    <input
+                      type="range"
+                      min={5}
+                      max={150}
+                      step={5}
+                      value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
+                      onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
+                      onPointerUp={async () => {
+                        if (blurSigmaDraft != null) {
+                          await branch("blur_enable", { on: p.render.blur, sigma: blurSigmaDraft });
+                          setBlurSigmaDraft(null);
+                        }
+                      }}
+                      className="w-full accent-[var(--color-accent)] cursor-pointer"
+                    />
+                  </div>
+                )}
+                <div className={p.render.blur ? "" : "opacity-40 pointer-events-none"}>
+                  <div className="flex items-center justify-between mt-2 mb-1.5">
+                    <span className="mono text-[10px] text-[var(--color-muted)]">{blurAll ? `${t("blur.all")} · ${(p.captions.blur_boxes || []).length}` : t("blur.frame")}</span>
+                    <button onClick={() => setBlurAll(!blurAll)} className="mono text-[10px] text-[var(--color-accent)] hover:underline">
+                      {blurAll ? t("blur.frame") : `${t("blur.all")} (${(p.captions.blur_boxes || []).length})`}
                     </button>
                   </div>
-                </div>
-              )}
-              {lane === "titles" && (
-                <div className="space-y-2">
-                  {!(p.captions.titles || []).length && <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
-                  {(p.captions.titles || []).length > 0 && (
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <button onClick={() => setSelTitles((prev) => prev.size === (p.captions.titles || []).length ? new Set() : new Set((p.captions.titles || []).map((_, i) => i)))}
+                  {(p.captions.blur_boxes || []).length > 0 && (
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <button onClick={() => setSelBlurs((prev) => prev.size === (p.captions.blur_boxes || []).length ? new Set() : new Set((p.captions.blur_boxes || []).map((_, i) => i)))}
                         className="px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">{t("sel.all")}</button>
-                      {selTitles.size > 0 && (<>
-                        <span className="text-[11px] text-[var(--color-muted)]">{selTitles.size} {t("sel.count")}</span>
-                        <button onClick={() => bulkDelIdx("del_titles", selTitles, () => setSelTitles(new Set()))}
+                      {selBlurs.size > 0 && (<>
+                        <span className="text-[11px] text-[var(--color-muted)]">{selBlurs.size} {t("sel.count")}</span>
+                        <button onClick={() => bulkDelIdx("del_blurs", selBlurs, () => setSelBlurs(new Set()))}
                           className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-surface-2)] hover:text-[#ef4444] transition-colors"><Trash2 size={12} /></button>
                       </>)}
                     </div>
                   )}
-                  {(p.captions.titles || []).map((ti, i) => (
-                    <div key={`${ti.start}_${ti.end}_${i}`} onClick={() => { setSelTitle(i); setRendered(false); setScrub(Math.max(ti.start, 0)); }}
-                      className={`rounded-xl p-2.5 bg-[var(--color-surface-2)]/50 cursor-pointer transition-shadow ${selTitle === i ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
-                      <div className="flex items-center gap-2 mono text-[10px] text-[var(--color-muted)] mb-1.5">
-                        <button onClick={() => setSelTitles((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
-                          className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selTitles.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selTitles.has(i) && <Check size={9} />}</button>
-                        <span className="tabnum">{fmtT(ti.start)} → {fmtT(ti.end)}</span>
-                        <button onClick={(e) => { e.stopPropagation(); branch("title_del", { idx: i }); setSelTitle(null); }} className="ml-auto hover:text-[var(--color-warn)] transition-colors" title="delete"><Trash2 size={12} /></button>
-                      </div>
-                      <input value={ti.tgt || ti.text} onChange={(e) => titleText(i, e.target.value)} onClick={(e) => e.stopPropagation()}
-                        onBlur={async (e) => { burstRef.current = null; setRendered(false); try { setProject(await api.patch(pid, { op: "title", idx: i, text: e.target.value, tgt: e.target.value })); bump(); } catch (err) { await surfaceErr(err); } }}
-                        className="w-full bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded p-1.5 text-[13px] focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
-                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                        <button onClick={() => branch("title", { idx: i, bold: !ti.bold })}
-                          className={`text-[11px] font-bold px-2 py-0.5 rounded border transition-colors ${ti.bold ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.bold")}</button>
-                        <button onClick={() => branch("title", { idx: i, italic: !ti.italic })}
-                          className={`text-[11px] italic px-2 py-0.5 rounded border transition-colors ${ti.italic ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.italic")}</button>
-                        <button onClick={() => branch("title", { idx: i, uppercase: !ti.uppercase })} title={t("style.caps")}
-                          className={`text-[11px] font-semibold px-2 py-0.5 rounded border transition-colors ${ti.uppercase ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>AA</button>
-                        <input type="color" value={ti.color || "#FFFFFF"} onChange={(e) => branch("title", { idx: i, color: e.target.value })}
-                          title={t("style.color")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-[var(--color-border)]" />
-                        <input type="color" value={ti.outline || "#000000"} onChange={(e) => branch("title", { idx: i, outline: e.target.value })}
-                          title={t("style.outline")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-dashed border-[var(--color-border)]" />
-                        <input key={`ow${i}-${ti.outline_w ?? "a"}`} type="number" min={0} max={20} defaultValue={ti.outline_w ?? undefined} placeholder={t("style.outlineW")} title={t("style.outlineWFull")}
-                          onBlur={(e) => branch("title", { idx: i, outline_w: e.target.value === "" ? null : parseInt(e.target.value) })}
-                          className="w-12 bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
-                        <select value={ti.shadow_dir ?? ""} title={t("style.shadow")}
-                          onChange={(e) => branch("title", { idx: i, shadow_dir: e.target.value === "" ? null : parseInt(e.target.value) })}
-                          className="bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
-                          {SHADOW_DIRS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                        </select>
-                        <input key={`sz${i}-${ti.size_px ?? "a"}`} type="number" min={12} max={300} defaultValue={ti.size_px ?? undefined} placeholder="px" title={t("style.size")}
-                          onBlur={(e) => branch("title", { idx: i, size_px: e.target.value ? parseInt(e.target.value) : null })}
-                          className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
-                        <select value={ti.font || ""} onChange={(e) => branch("title", { idx: i, font: e.target.value })}
-                          className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
-                          <option value="">{t("style.font")}</option>
-                          {Object.keys(fonts).map((f) => <option key={f} value={f}>{f}</option>)}
-                        </select>
-                        <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden">
-                          {([["left", AlignLeft, "edit.alignLeft"], ["center", AlignCenter, "edit.alignCenter"], ["right", AlignRight, "edit.alignRight"]] as const).map(([a, Ic, k]) => (
-                            <button key={a} onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, align: a }); }} title={t(k)}
-                              className={`px-1.5 py-1 transition-colors ${(ti.align || "center") === a ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}><Ic size={12} /></button>
-                          ))}
-                        </span>
-                        <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
-                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: scrub }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
-                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
-                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
-                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  <button onClick={async () => { const fresh = await branch("title_add", { text: "Title", x: Math.round((p.meta.width || 0) * 0.15), y: Math.round((p.meta.height || 0) * 0.4), w: Math.round((p.meta.width || 0) * 0.7), h: Math.round((p.meta.height || 0) * 0.1), t0: Math.max(0, scrub - 0.5), t1: scrub + 3 }); if (fresh) setSelTitle((fresh.captions.titles || []).length - 1); }}
-                    className="w-full inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
-                    <Plus size={13} /> {t("titles.add")}
+                  <div className="space-y-1 max-h-[46vh] overflow-y-auto pr-1">
+                    {(p.captions.blur_boxes || []).map((b, i) => ({ b, i }))
+                      .filter(({ b }) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4))
+                      .map(({ b, i }) => (
+                        <div key={i} onClick={() => { setSelBlur(i); setRendered(false); setScrub(Math.max(b.t0, 0)); }}
+                          className={`flex items-center gap-2 mono text-[10px] rounded px-2 py-1 cursor-pointer transition-colors ${selBlur === i ? "bg-[color-mix(in_oklab,var(--color-accent)_18%,transparent)] text-[var(--color-text)] ring-1 ring-[var(--color-accent)]" : "text-[var(--color-muted)] bg-[var(--color-surface-2)]/40 hover:text-[var(--color-text)]"} ${b.hidden ? "opacity-50" : ""} ${selBlurs.has(i) ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
+                          <button onClick={(e) => { e.stopPropagation(); setSelBlurs((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; }); }}
+                            className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selBlurs.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selBlurs.has(i) && <Check size={9} />}</button>
+                          <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, hidden: !b.hidden }); }}
+                            title={b.hidden ? t("blur.show") : t("blur.hide")}
+                            className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.hidden ? <EyeOff size={12} /> : <Eye size={12} />}</button>
+                          <span className="flex-1 truncate">#{i + 1} · {b.w}×{b.h} · {fmtT(b.t0)}{b.hidden ? ` · ${t("blur.off")}` : ""}</span>
+                          {b.fill && (
+                            <input type="color" value={b.fill} onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: e.target.value }); }}
+                              title={t("blur.fillColor")} className="w-4 h-4 shrink-0 p-0 border-0 bg-transparent rounded cursor-pointer" />
+                          )}
+                          <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: b.fill ? null : "#000000" }); }}
+                            title={b.fill ? t("blur.modeFill") : t("blur.modeBlur")}
+                            className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.fill ? <Square size={12} /> : <Droplet size={12} />}</button>
+                          <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: Math.max(scrub, 0) }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
+                          </span>
+                          <button onClick={(e) => { e.stopPropagation(); branch("blur_del", { idx: i }); setSelBlur(null); }} className="shrink-0 hover:text-[var(--color-warn)] transition-colors"><Trash2 size={12} /></button>
+                        </div>
+                      ))}
+                    {!(p.captions.blur_boxes || []).some((b) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4)) &&
+                      <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
+                  </div>
+                  <button onClick={async () => { const fresh = await branch("blur_add", { x: Math.round((p.meta.width || 0) * 0.25), y: Math.round((p.meta.height || 0) * 0.45), w: Math.round((p.meta.width || 0) * 0.5), h: Math.round((p.meta.height || 0) * 0.08), t0: Math.max(0, scrub - 1), t1: scrub + 2 }); if (fresh) setSelBlur((fresh.captions.blur_boxes || []).length - 1); }}
+                    className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
+                    <Plus size={13} /> {t("blur.add")}
                   </button>
                 </div>
-              )}
+              </div>
+              <div className={lane === "titles" ? "space-y-2" : "hidden"}>
+                {!(p.captions.titles || []).length && <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
+                {(p.captions.titles || []).length > 0 && (
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <button onClick={() => setSelTitles((prev) => prev.size === (p.captions.titles || []).length ? new Set() : new Set((p.captions.titles || []).map((_, i) => i)))}
+                      className="px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">{t("sel.all")}</button>
+                    {selTitles.size > 0 && (<>
+                      <span className="text-[11px] text-[var(--color-muted)]">{selTitles.size} {t("sel.count")}</span>
+                      <button onClick={() => bulkDelIdx("del_titles", selTitles, () => setSelTitles(new Set()))}
+                        className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-surface-2)] hover:text-[#ef4444] transition-colors"><Trash2 size={12} /></button>
+                    </>)}
+                  </div>
+                )}
+                {(p.captions.titles || []).map((ti, i) => (
+                  <div key={`${ti.start}_${ti.end}_${i}`} onClick={() => { setSelTitle(i); setRendered(false); setScrub(Math.max(ti.start, 0)); }}
+                    className={`rounded-xl p-2.5 bg-[var(--color-surface-2)]/50 cursor-pointer transition-shadow ${selTitle === i ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
+                    <div className="flex items-center gap-2 mono text-[10px] text-[var(--color-muted)] mb-1.5">
+                      <button onClick={() => setSelTitles((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
+                        className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selTitles.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selTitles.has(i) && <Check size={9} />}</button>
+                      <span className="tabnum">{fmtT(ti.start)} → {fmtT(ti.end)}</span>
+                      <button onClick={(e) => { e.stopPropagation(); branch("title_del", { idx: i }); setSelTitle(null); }} className="ml-auto hover:text-[var(--color-warn)] transition-colors" title="delete"><Trash2 size={12} /></button>
+                    </div>
+                    <input value={ti.tgt || ti.text} onChange={(e) => titleText(i, e.target.value)} onClick={(e) => e.stopPropagation()}
+                      onBlur={async (e) => { burstRef.current = null; setRendered(false); try { setProject(await api.patch(pid, { op: "title", idx: i, text: e.target.value, tgt: e.target.value })); bump(); } catch (err) { await surfaceErr(err); } }}
+                      className="w-full bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded p-1.5 text-[13px] focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                      <button onClick={() => branch("title", { idx: i, bold: !ti.bold })}
+                        className={`text-[11px] font-bold px-2 py-0.5 rounded border transition-colors ${ti.bold ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.bold")}</button>
+                      <button onClick={() => branch("title", { idx: i, italic: !ti.italic })}
+                        className={`text-[11px] italic px-2 py-0.5 rounded border transition-colors ${ti.italic ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.italic")}</button>
+                      <button onClick={() => branch("title", { idx: i, uppercase: !ti.uppercase })} title={t("style.caps")}
+                        className={`text-[11px] font-semibold px-2 py-0.5 rounded border transition-colors ${ti.uppercase ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>AA</button>
+                      <input type="color" value={ti.color || "#FFFFFF"} onChange={(e) => branch("title", { idx: i, color: e.target.value })}
+                        title={t("style.color")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-[var(--color-border)]" />
+                      <input type="color" value={ti.outline || "#000000"} onChange={(e) => branch("title", { idx: i, outline: e.target.value })}
+                        title={t("style.outline")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-dashed border-[var(--color-border)]" />
+                      <input key={`ow${i}-${ti.outline_w ?? "a"}`} type="number" min={0} max={20} defaultValue={ti.outline_w ?? undefined} placeholder={t("style.outlineW")} title={t("style.outlineWFull")}
+                        onBlur={(e) => branch("title", { idx: i, outline_w: e.target.value === "" ? null : parseInt(e.target.value) })}
+                        className="w-12 bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
+                      <select value={ti.shadow_dir ?? ""} title={t("style.shadow")}
+                        onChange={(e) => branch("title", { idx: i, shadow_dir: e.target.value === "" ? null : parseInt(e.target.value) })}
+                        className="bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
+                        {SHADOW_DIRS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                      <input key={`sz${i}-${ti.size_px ?? "a"}`} type="number" min={12} max={300} defaultValue={ti.size_px ?? undefined} placeholder="px" title={t("style.size")}
+                        onBlur={(e) => branch("title", { idx: i, size_px: e.target.value ? parseInt(e.target.value) : null })}
+                        className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
+                      <select value={ti.font || ""} onChange={(e) => branch("title", { idx: i, font: e.target.value })}
+                        className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
+                        <option value="">{t("style.font")}</option>
+                        {Object.keys(fonts).map((f) => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                      <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden">
+                        {([["left", AlignLeft, "edit.alignLeft"], ["center", AlignCenter, "edit.alignCenter"], ["right", AlignRight, "edit.alignRight"]] as const).map(([a, Ic, k]) => (
+                          <button key={a} onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, align: a }); }} title={t(k)}
+                            className={`px-1.5 py-1 transition-colors ${(ti.align || "center") === a ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}><Ic size={12} /></button>
+                        ))}
+                      </span>
+                      <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
+                        <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: scrub }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                <button onClick={async () => { const fresh = await branch("title_add", { text: "Title", x: Math.round((p.meta.width || 0) * 0.15), y: Math.round((p.meta.height || 0) * 0.4), w: Math.round((p.meta.width || 0) * 0.7), h: Math.round((p.meta.height || 0) * 0.1), t0: Math.max(0, scrub - 0.5), t1: scrub + 3 }); if (fresh) setSelTitle((fresh.captions.titles || []).length - 1); }}
+                  className="w-full inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
+                  <Plus size={13} /> {t("titles.add")}
+                </button>
+              </div>
             </div>
           </>
         ) : (
