@@ -157,6 +157,8 @@ export default function PreviewCanvas({
     } catch {}
   }, [playbackRate]);
 
+  const playStartedAtRef = useRef<number>(0);
+
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -164,11 +166,13 @@ export default function PreviewCanvas({
     v.volume = vol;
     v.playbackRate = playbackRate;
     if (playing) {
+      playStartedAtRef.current = Date.now();
       if (Math.abs(v.currentTime - scrub) > 0.08) v.currentTime = scrub;
       const playPromise = v.play();
       if (playPromise !== undefined) playPromise.catch((err) => console.warn("Video playback start:", err));
     } else {
       v.pause();
+      v.playbackRate = playbackRate;
       if (Math.abs(v.currentTime - scrub) > 0.03) v.currentTime = scrub;
     }
   }, [playing, audioMuted, vol, playbackRate]);
@@ -178,11 +182,48 @@ export default function PreviewCanvas({
     if (!v) return;
     v.muted = audioMuted;
     v.volume = vol;
-    const diff = Math.abs(v.currentTime - scrub);
+
     if (!playing) {
-      if (diff > 0.03) v.currentTime = scrub;
-    } else if (diff > 0.18) v.currentTime = scrub;
-  }, [scrub, playing, audioMuted, vol]);
+      if (Math.abs(v.playbackRate - playbackRate) > 0.01) v.playbackRate = playbackRate;
+      if (Math.abs(v.currentTime - scrub) > 0.03) v.currentTime = scrub;
+      return;
+    }
+
+    // Защита от «рваного старта»: в первые 400 мс после запуска даём аппаратному декодеру раскрутить поток
+    if (Date.now() - playStartedAtRef.current < 400) {
+      return;
+    }
+
+    // timeDiff > 0 -> видео отстаёт от аудио (scrub > v.currentTime)
+    // timeDiff < 0 -> видео опережает аудио (v.currentTime > scrub)
+    const timeDiff = scrub - v.currentTime;
+    const absDiff = Math.abs(timeDiff);
+
+    // Большой скачок (> 0.65 сек — клик на таймлайне, перемотка хоткеем): выполняем мгновенный seek
+    if (absDiff > 0.65) {
+      v.currentTime = scrub;
+      if (Math.abs(v.playbackRate - playbackRate) > 0.01) v.playbackRate = playbackRate;
+    } else if (timeDiff > 0.04) {
+      // Видео отстаёт (от 40мс до 650мс): плавно подгоняем скорость (от +4% до +8%), не сбрасывая аппаратный декодер
+      const factor = timeDiff > 0.25 ? 1.08 : 1.04;
+      const targetRate = Math.min(4.0, playbackRate * factor);
+      if (Math.abs(v.playbackRate - targetRate) > 0.01) {
+        v.playbackRate = targetRate;
+      }
+    } else if (timeDiff < -0.04) {
+      // Видео опережает: плавно притормаживаем (от -4% до -8%)
+      const factor = timeDiff < -0.25 ? 0.92 : 0.96;
+      const targetRate = Math.max(0.25, playbackRate * factor);
+      if (Math.abs(v.playbackRate - targetRate) > 0.01) {
+        v.playbackRate = targetRate;
+      }
+    } else {
+      // Идеальный синхрон (в пределах 40 мс): стандартная скорость
+      if (Math.abs(v.playbackRate - playbackRate) > 0.01) {
+        v.playbackRate = playbackRate;
+      }
+    }
+  }, [scrub, playing, audioMuted, vol, playbackRate]);
 
   useEffect(() => {
     const el = wrap.current; if (!el) return;
@@ -325,7 +366,7 @@ export default function PreviewCanvas({
           <video ref={videoRef} src={previewSrc} playsInline controls onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)} onEnded={() => onEnded?.()} className="absolute inset-0 w-full h-full rounded-lg" />
         ) : (
           <>
-            <video ref={videoRef} src={api.sourceVideoUrl(pid)} playsInline muted={audioMuted} preload="auto" onTimeUpdate={(e) => { if (playing) onTimeUpdate?.(e.currentTarget.currentTime); }} onEnded={() => onEnded?.()} className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black" />
+            <video ref={videoRef} src={api.sourceVideoUrl(pid)} playsInline muted={audioMuted} preload="metadata" onTimeUpdate={(e) => { if (playing) onTimeUpdate?.(e.currentTarget.currentTime); }} onEnded={() => onEnded?.()} className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black" />
             {disp.w > 0 && (
               <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
                 {shouldRenderAutoSubBlur && (
