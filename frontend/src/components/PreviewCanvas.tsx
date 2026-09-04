@@ -10,6 +10,7 @@ import type Konva from "konva";
 import { api, type Project, type SubStyle } from "../lib/api";
 import { useStore } from "../store";
 import { stripHiggsTags } from "./HiggsTagMenu";
+import { useVideoLifecycle, type SeekRequest } from "../hooks/useVideoLifecycle";
 
 type Lane = "subs" | "blur" | "titles";
 type Props = {
@@ -22,8 +23,11 @@ type Props = {
   vol?: number;
   audioMuted?: boolean;
   playbackRate?: number;
+  seekRequest?: SeekRequest | null;
   onTimeUpdate?: (currentTime: number) => void;
+  onSeeked?: (currentTime: number) => void;
   onEnded?: () => void;
+  onMediaError?: () => void;
   onChanged: (fresh: Project) => void;
 };
 
@@ -122,19 +126,19 @@ export default function PreviewCanvas({
   playing = false,
   vol = 1,
   audioMuted = true,
-  playbackRate = 1.0,
+  seekRequest = null,
   onTimeUpdate,
+  onSeeked,
   onEnded,
+  onMediaError,
   onChanged,
 }: Props) {
-  const rev = useStore((s) => s.rev);
   const bump = useStore((s) => s.bump);
   const sel = useStore((s) => s.selBlur);
   const setSel = useStore((s) => s.setSelBlur);
   const selT = useStore((s) => s.selTitle);
   const setSelT = useStore((s) => s.setSelTitle);
   const wrap = useRef<HTMLDivElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const trRef = useRef<Konva.Transformer>(null);
   const boxRefs = useRef<Record<number, Konva.Rect>>({});
   const titleRefs = useRef<Record<number, Konva.Rect>>({});
@@ -144,114 +148,21 @@ export default function PreviewCanvas({
 
   const vw = project.meta.width || 1, vh = project.meta.height || 1;
   const sx = disp.w / vw, sy = disp.h / vh;
-  const previewSrc = rendered ? api.outputUrl(pid) : api.previewUrl(pid, scrub, rev);
+  // One real media resource: edits/rev must not recreate or seek the decoder.
+  const previewSrc = rendered ? api.outputUrl(pid) : api.sourceVideoUrl(pid);
 
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.playbackRate = playbackRate;
-    try {
-      (v as any).preservesPitch = true;
-      (v as any).mozPreservesPitch = true;
-      (v as any).webkitPreservesPitch = true;
-    } catch {}
-  }, [playbackRate]);
-
-  const lastScrubRef = useRef<number>(scrub);
-  const lastSeekTimeRef = useRef<number>(0);
-
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.muted = audioMuted;
-    v.volume = vol;
-    v.playbackRate = playbackRate;
-    if (playing) {
-      // При старте: если рассинхрон больше 150мс и видео не в процессе seek — выравниваем
-      if (Math.abs(v.currentTime - scrub) > 0.15 && !v.seeking) {
-        v.currentTime = scrub;
-        lastSeekTimeRef.current = Date.now();
-      }
-      const playPromise = v.play();
-      if (playPromise !== undefined) playPromise.catch((err) => console.warn("Video playback start:", err));
-    } else {
-      v.pause();
-      v.playbackRate = playbackRate;
-      if (Math.abs(v.currentTime - scrub) > 0.03 && !v.seeking) {
-        v.currentTime = scrub;
-      }
-    }
-  }, [playing, audioMuted, vol, playbackRate]);
-
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.muted = audioMuted;
-    v.volume = vol;
-
-    const prevScrub = lastScrubRef.current;
-    lastScrubRef.current = scrub;
-
-    if (!playing) {
-      if (Math.abs(v.playbackRate - playbackRate) > 0.01) v.playbackRate = playbackRate;
-      if (Math.abs(v.currentTime - scrub) > 0.03 && !v.seeking) {
-        v.currentTime = scrub;
-      }
-      return;
-    }
-
-    // Ручной скачок пользователя по таймлайну / вейформе / карточке (> 0.35 сек за 1 тик)
-    const isUserJump = Math.abs(scrub - prevScrub) > 0.35;
-    if (isUserJump) {
-      if (!v.seeking) {
-        v.currentTime = scrub;
-        lastSeekTimeRef.current = Date.now();
-      }
-      if (Math.abs(v.playbackRate - playbackRate) > 0.01) v.playbackRate = playbackRate;
-      return;
-    }
-
-    // Если видео занято поиском кадра (seeking) или ждет данные буфера — НЕ ТРОГАЕМ декодер
-    if (v.seeking || v.readyState < 3) {
-      return;
-    }
-
-    // Кулдаун: не трогать скорость и seek чаще 1 раза в секунду после любого скачка
-    if (Date.now() - lastSeekTimeRef.current < 1000) {
-      return;
-    }
-
-    const timeDiff = scrub - v.currentTime;
-    const absDiff = Math.abs(timeDiff);
-
-    // Только при критическом срыве синхронизации (> 1.2 сек) делаем разовый seek с кулдауном 1 сек
-    if (absDiff > 1.2) {
-      v.currentTime = scrub;
-      lastSeekTimeRef.current = Date.now();
-      if (Math.abs(v.playbackRate - playbackRate) > 0.01) v.playbackRate = playbackRate;
-      return;
-    }
-
-    // Мягкая фазовая автоподстройка скорости (Rate Steering)
-    if (timeDiff > 0.05) {
-      // Видео слегка отстает: ускоряем на 4%
-      const targetRate = Math.min(4.0, playbackRate * 1.04);
-      if (Math.abs(v.playbackRate - targetRate) > 0.01) {
-        v.playbackRate = targetRate;
-      }
-    } else if (timeDiff < -0.05) {
-      // Видео слегка спешит: замедляем на 4%
-      const targetRate = Math.max(0.25, playbackRate * 0.96);
-      if (Math.abs(v.playbackRate - targetRate) > 0.01) {
-        v.playbackRate = targetRate;
-      }
-    } else {
-      // Идеальный синхрон (в пределах 50 мс): базовая скорость
-      if (Math.abs(v.playbackRate - playbackRate) > 0.01) {
-        v.playbackRate = playbackRate;
-      }
-    }
-  }, [scrub, playing, audioMuted, vol, playbackRate]);
+  const { videoRef, mediaReady, error: mediaError, retry } = useVideoLifecycle({
+    src: previewSrc,
+    playing,
+    requestedTime: scrub,
+    seekRequest,
+    muted: audioMuted,
+    volume: vol,
+    onClock: onTimeUpdate,
+    onSeeked,
+    onEnded,
+    onError: onMediaError,
+  });
 
   useEffect(() => {
     const el = wrap.current; if (!el) return;
@@ -390,12 +301,17 @@ export default function PreviewCanvas({
   return (
     <div ref={wrap} className="relative w-full h-full min-h-0 overflow-hidden grid place-items-center bg-black/40 rounded-xl">
       <div className="relative overflow-hidden rounded-lg" style={{ width: disp.w, height: disp.h }}>
-        {rendered ? (
-          <video ref={videoRef} src={previewSrc} playsInline controls onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)} onEnded={() => onEnded?.()} className="absolute inset-0 w-full h-full rounded-lg" />
-        ) : (
-          <>
-            <video ref={videoRef} src={api.sourceVideoUrl(pid)} playsInline muted={audioMuted} preload="auto" onTimeUpdate={(e) => { if (playing) onTimeUpdate?.(e.currentTarget.currentTime); }} onEnded={() => onEnded?.()} className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black" />
-            {disp.w > 0 && (
+        <>
+          <video ref={videoRef} playsInline muted={audioMuted} preload="auto" className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black" />
+          {!mediaReady && (
+            <div className="absolute inset-0 z-30 grid place-items-center bg-black/80 pointer-events-none">
+              <span className="text-xs text-white/70">{mediaError ? "Видео не загрузилось" : "Загрузка видео…"}</span>
+            </div>
+          )}
+          {mediaError && (
+            <button type="button" className="absolute z-40 bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded bg-white/10 text-xs text-white" onClick={retry}>Повторить</button>
+          )}
+          {!rendered && disp.w > 0 && (
               <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
                 {shouldRenderAutoSubBlur && (
                   <div
@@ -589,7 +505,6 @@ export default function PreviewCanvas({
               </Stage>
             )}
           </>
-        )}
         {busy && (
           <div className="absolute top-2 right-2 text-[11px] text-[var(--color-accent-2)] bg-black/60 px-2 py-0.5 rounded">
             updating…

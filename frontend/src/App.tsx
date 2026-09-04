@@ -11,6 +11,8 @@ import PreviewCanvas from "./components/PreviewCanvas";
 import { playSfx, sfxEnabled, setSfxEnabled } from "./lib/sfx";
 import ResourceMonitor from "./components/ResourceMonitor";
 import { HiggsContextMenu, type HiggsContextMenuState, stripHiggsTags } from "./components/HiggsTagMenu";
+import { useVideoLifecycle, type SeekRequest } from "./hooks/useVideoLifecycle";
+import { decimatePeaks, clampTime, computeFallbackPeaks } from "./lib/timelineUtils";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -2209,25 +2211,251 @@ function Toggle({ label, on, onClick }: { label: string; on: boolean; onClick: (
 }
 
 
-function WaveformTimeline({ pid, duration, scrub, segments, onSeek, gainDb = 0 }: {
-  pid: string; duration: number; scrub: number; segments: Project["segments"]; onSeek: (t: number) => void; gainDb?: number;
+type CanvasWaveformProps = {
+  peaks: number[];
+  duration: number;
+  height: number;
+  color?: string;
+  playedColor?: string;
+  segments?: Array<{ start: number; end: number }>;
+  gain?: number;
+  scrub?: number;
+  showPlayhead?: boolean;
+  className?: string;
+};
+
+function CanvasWaveform({
+  peaks,
+  duration,
+  height,
+  color = "#3a414c",
+  playedColor,
+  segments = [],
+  gain = 1,
+  scrub = 0,
+  showPlayhead = true,
+  className = "",
+}: CanvasWaveformProps) {
+  const wrap = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const playedCanvas = useRef<HTMLCanvasElement>(null);
+  const [measuredWidth, setMeasuredWidth] = useState(1);
+  const safeDuration = Math.max(0.001, duration || 1);
+  const drawWidth = measuredWidth;
+  const hasPlayedColor = Boolean(playedColor && playedColor !== color);
+
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const resize = () => setMeasuredWidth(Math.max(1, Math.round(el.clientWidth)));
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const drawWaveformOnCtx = (
+    c: HTMLCanvasElement | null,
+    drawColor: string,
+    drawSegments: boolean
+  ) => {
+    if (!c) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    c.width = Math.max(1, Math.round(drawWidth * dpr));
+    c.height = Math.max(1, Math.round(height * dpr));
+    c.style.width = `${drawWidth}px`;
+    c.style.height = `${height}px`;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, drawWidth, height);
+    const n = peaks.length;
+    if (n) {
+      const bar = drawWidth / n;
+      ctx.fillStyle = drawColor;
+      ctx.globalAlpha = 0.88;
+      peaks.forEach((pk, i) => {
+        const x = i * bar;
+        const bh = Math.max(2, Math.min(height - 2, Math.pow(Math.max(0, pk), 0.72) * gain * (height - 4)));
+        ctx.fillRect(x, (height - bh) / 2, Math.max(1, bar - 0.7), bh);
+      });
+    }
+    if (drawSegments && segments.length > 0) {
+      ctx.globalAlpha = 1;
+      for (const s of segments) {
+        const x = Math.max(0, Math.min(drawWidth, (s.start / safeDuration) * drawWidth));
+        const ex = Math.max(x, Math.min(drawWidth, (s.end / safeDuration) * drawWidth));
+        ctx.fillStyle = "#06b6d4";
+        ctx.globalAlpha = 0.08;
+        ctx.fillRect(x, 0, Math.max(1, ex - x), height);
+        ctx.globalAlpha = 0.7;
+        ctx.fillRect(x, 0, 1, height);
+        ctx.fillRect(ex, 0, 1, height);
+      }
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  useEffect(() => {
+    drawWaveformOnCtx(canvas.current, color, true);
+    if (hasPlayedColor && playedColor) {
+      drawWaveformOnCtx(playedCanvas.current, playedColor, false);
+    }
+  }, [peaks, drawWidth, height, color, playedColor, hasPlayedColor, safeDuration, segments, gain]);
+
+  const playheadLeft = Math.max(0, Math.min(drawWidth, (scrub / safeDuration) * drawWidth));
+
+  return (
+    <div
+      ref={wrap}
+      className={`absolute inset-0 ${className}`}
+      style={{ width: `${drawWidth}px` }}
+    >
+      <canvas ref={canvas} className="absolute inset-0 pointer-events-none" />
+      {hasPlayedColor && (
+        <div
+          className="absolute inset-0 overflow-hidden pointer-events-none"
+          style={{ width: `${playheadLeft}px` }}
+        >
+          <canvas ref={playedCanvas} className="absolute left-0 top-0 pointer-events-none" />
+        </div>
+      )}
+      {showPlayhead && (
+        <div
+          className="absolute top-0 bottom-0 w-px pointer-events-none bg-[var(--color-accent)] shadow-[0_0_6px_var(--color-accent)]"
+          style={{ transform: `translate3d(${playheadLeft}px, 0, 0)` }}
+        />
+      )}
+    </div>
+  );
+}
+
+type SvgWaveformProps = {
+  peaks: number[];
+  totalPx: number;
+  height: number;
+  color: string;
+  gain?: number;
+  className?: string;
+};
+
+const SvgWaveformTrack = memo(function SvgWaveformTrack({
+  peaks,
+  totalPx,
+  height,
+  color,
+  gain = 1,
+  className = "",
+}: SvgWaveformProps) {
+  const pathData = useMemo(() => {
+    const n = peaks.length;
+    if (!n || totalPx <= 0) return "";
+    const bw = totalPx / n;
+    // Step decimation for long tracks zoomed out (prevents redundant subpixel path vertices)
+    const step = bw < 1.5 ? Math.max(1, Math.round(1.5 / bw)) : 1;
+    const effectiveBw = bw * step;
+    const barW = Math.max(1.0, effectiveBw > 2 ? effectiveBw - 0.7 : effectiveBw);
+
+    let d = "";
+    for (let i = 0; i < n; i += step) {
+      const pk = peaks[i];
+      if (pk < 0.005) continue;
+      const boosted = Math.pow(Math.max(0, pk), 0.72) * gain;
+      const bh = Math.max(2, Math.min(height - 2, boosted * (height - 4)));
+      const x = (i / n) * totalPx;
+      const y = (height - bh) / 2;
+      d += `M${x.toFixed(1)},${y.toFixed(1)}h${barW.toFixed(1)}v${bh.toFixed(1)}h-${barW.toFixed(1)}Z `;
+    }
+    return d;
+  }, [peaks, totalPx, height, gain]);
+
+  if (!peaks.length || totalPx <= 0) return null;
+
+  return (
+    <svg
+      width={totalPx}
+      height={height}
+      className={`block pointer-events-none w-full h-full ${className}`}
+    >
+      <path d={pathData} fill={color} opacity={0.88} />
+    </svg>
+  );
+});
+
+
+
+function WaveformTimeline({
+  pid,
+  duration,
+  scrub,
+  segments,
+  onSeek,
+  gainDb = 0,
+}: {
+  pid: string;
+  duration: number;
+  scrub: number;
+  segments: Project["segments"];
+  onSeek: (t: number) => void;
+  gainDb?: number;
 }) {
   const [peaks, setPeaks] = useState<number[]>([]);
   const wrap = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(800);
   const isDragging = useRef(false);
+  const pendingX = useRef<number | null>(null);
+  const seekFrame = useRef<number | null>(null);
 
-  useEffect(() => { api.waveform(pid).then((r) => setPeaks(r.peaks)).catch(() => {}); }, [pid]);
-  useEffect(() => { const el = wrap.current; if (!el) return; const ro = new ResizeObserver(() => setW(el.clientWidth)); ro.observe(el); return () => ro.disconnect(); }, []);
-  const h = 40, dur = duration || 1, bw = peaks.length ? w / peaks.length : 1;
-  const gainLin = Math.pow(10, gainDb / 20);   // dB -> линейный коэффициент амплитуды (гейн дорожки визуально)
+  useEffect(() => {
+    let active = true;
+    api
+      .waveform(pid)
+      .then((r) => {
+        if (active) setPeaks(r.peaks || []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [pid]);
+
+  useEffect(
+    () => () => {
+      if (seekFrame.current != null) {
+        cancelAnimationFrame(seekFrame.current);
+        seekFrame.current = null;
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setW(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const h = 40;
+  const dur = Math.max(0.001, duration || 1);
+  const displayPeaks = useMemo(
+    () => decimatePeaks(peaks, Math.min(2000, Math.max(200, Math.ceil(w * 2)))),
+    [peaks, w]
+  );
+  const gainLin = Math.pow(10, gainDb / 20);
 
   const seekFromEvent = (clientX: number) => {
     const el = wrap.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const t = Math.max(0, Math.min(dur, ((clientX - r.left) / r.width) * dur));
-    onSeek(t);
+    const clamped = clampTime(((clientX - r.left) / (r.width || 1)) * dur, dur);
+    pendingX.current = clamped;
+    if (seekFrame.current != null) return;
+    seekFrame.current = requestAnimationFrame(() => {
+      seekFrame.current = null;
+      if (pendingX.current != null) onSeek(pendingX.current);
+    });
   };
 
   return (
@@ -2249,30 +2477,30 @@ function WaveformTimeline({ pid, duration, scrub, segments, onSeek, gainDb = 0 }
       onPointerUp={(e) => {
         if (isDragging.current) {
           isDragging.current = false;
-          try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+          try {
+            (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+          } catch {}
+          if (seekFrame.current != null) {
+            cancelAnimationFrame(seekFrame.current);
+            seekFrame.current = null;
+          }
+          if (pendingX.current != null) {
+            onSeek(pendingX.current);
+            pendingX.current = null;
+          }
         }
       }}
     >
-      <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="block pointer-events-none">
-        {peaks.map((pk, i) => {
-          const bh = Math.max(2, Math.min(h - 2, pk * gainLin * (h - 6))), played = (i / peaks.length) * dur <= scrub;
-          return <rect key={i} x={(i / peaks.length) * w} y={(h - bh) / 2} width={Math.max(1, bw - 0.5)} height={bh}
-                       fill={played ? "var(--color-accent)" : "#3a414c"} opacity={played ? 0.9 : 0.55} />;
-        })}
-        {segments.map((s, i) => {
-          const sx = (s.start / dur) * w;
-          const ex = (s.end / dur) * w;
-          const sw = Math.max(1, ex - sx);
-          return (
-            <g key={"s" + i}>
-              <rect x={sx} y={0} width={sw} height={h} fill="var(--color-accent)" opacity={0.06} />
-              <rect x={sx} y={0} width={1} height={h} fill="var(--color-muted)" opacity={0.45} />
-              <rect x={ex} y={0} width={1} height={h} fill="var(--color-muted)" opacity={0.3} />
-            </g>
-          );
-        })}
-      </svg>
-      <div className="absolute top-0 bottom-0 w-px bg-[var(--color-accent)] shadow-[0_0_6px_var(--color-accent)] pointer-events-none" style={{ left: `${(scrub / dur) * 100}%` }} />
+      <CanvasWaveform
+        peaks={displayPeaks}
+        duration={dur}
+        height={h}
+        color="#3a414c"
+        playedColor="var(--color-accent)"
+        segments={segments}
+        gain={gainLin}
+        scrub={scrub}
+      />
     </div>
   );
 }
@@ -2763,6 +2991,17 @@ function MultiTrackTimeline({
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const isTimelineDragging = useRef(false);
+  const pendingTimelineSeek = useRef<number | null>(null);
+  const timelineSeekFrame = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timelineSeekFrame.current != null) {
+        cancelAnimationFrame(timelineSeekFrame.current);
+        timelineSeekFrame.current = null;
+      }
+    },
+    []
+  );
   const [zoom, setZoom] = useState(60); // pixels per second
   const [draggingSeg, setDraggingSeg] = useState<{
     id: string;
@@ -2849,7 +3088,19 @@ function MultiTrackTimeline({
     if (!trackRef.current) return 0;
     const rect = trackRef.current.getBoundingClientRect();
     const x = clientX - rect.left;
-    return Math.max(0, Math.min(total, (x / totalPx) * total));
+    return clampTime((x / totalPx) * total, total);
+  };
+
+  const requestTimelineSeek = (clientX: number) => {
+    const t = getT(clientX);
+    pendingTimelineSeek.current = t;
+    if (timelineSeekFrame.current != null) return;
+    timelineSeekFrame.current = requestAnimationFrame(() => {
+      timelineSeekFrame.current = null;
+      if (pendingTimelineSeek.current != null) {
+        onSeek(pendingTimelineSeek.current);
+      }
+    });
   };
 
   const handlePointerDown = (
@@ -2902,10 +3153,34 @@ function MultiTrackTimeline({
   }, [segments, timelineScrollLeft, timelineClientWidth, zoom, total, draggingSeg?.id, loopSegId, scrub]);
 
   useEffect(() => {
-    api.waveform(pid).then((r) => setRawPeaksMaster(r.peaks || [])).catch(() => {});
-    api.waveformTrack(pid, "vocals").then((r) => setRawPeaksVocals(r.peaks || [])).catch(() => {});
-    api.waveformTrack(pid, "bgm").then((r) => setRawPeaksBgm(r.peaks || [])).catch(() => {});
-    api.waveformTrack(pid, "dub").then((r) => setRawPeaksDub(r.peaks || [])).catch(() => {});
+    let active = true;
+    api
+      .waveform(pid)
+      .then((r) => {
+        if (active) setRawPeaksMaster(r.peaks || []);
+      })
+      .catch(() => {});
+    api
+      .waveformTrack(pid, "vocals")
+      .then((r) => {
+        if (active) setRawPeaksVocals(r.peaks || []);
+      })
+      .catch(() => {});
+    api
+      .waveformTrack(pid, "bgm")
+      .then((r) => {
+        if (active) setRawPeaksBgm(r.peaks || []);
+      })
+      .catch(() => {});
+    api
+      .waveformTrack(pid, "dub")
+      .then((r) => {
+        if (active) setRawPeaksDub(r.peaks || []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, [pid, dubRev]);
 
   // 1. Vocals: rawPeaksVocals or rawPeaksMaster
@@ -2913,32 +3188,16 @@ function MultiTrackTimeline({
 
   // 2. Dub: clean synthesized dub speech strictly inside segments, flat silence outside
   const peaksDub = useMemo(() => {
-    if (rawPeaksDub.length > 0) {
-      return rawPeaksDub;
-    }
+    if (rawPeaksDub.length > 0) return rawPeaksDub;
     const base = peaksVocals.length ? peaksVocals : Array(400).fill(0.2);
-    const n = base.length;
-    const step = total / n;
-    return base.map((val, i) => {
-      const t = i * step;
-      const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
-      return insideSeg ? Math.min(1.0, val * 1.15 + 0.06) : 0.015;
-    });
+    return computeFallbackPeaks(base, segments, total, "dub");
   }, [rawPeaksDub, peaksVocals, segments, total]);
 
   // 3. BGM (Instrumental): background music and ambience
   const peaksBgm = useMemo(() => {
-    if (rawPeaksBgm.length > 0) {
-      return rawPeaksBgm;
-    }
+    if (rawPeaksBgm.length > 0) return rawPeaksBgm;
     const base = rawPeaksMaster.length ? rawPeaksMaster : Array(400).fill(0.15);
-    const n = base.length;
-    const step = total / n;
-    return base.map((val, i) => {
-      const t = i * step;
-      const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
-      return insideSeg ? Math.max(0.04, val * 0.4) : Math.min(1.0, val * 0.95 + 0.08);
-    });
+    return computeFallbackPeaks(base, segments, total, "bgm");
   }, [rawPeaksBgm, rawPeaksMaster, segments, total]);
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -3256,52 +3515,11 @@ function MultiTrackTimeline({
     });
   };
 
-  // Ultra-fast single-path SVG waveform renderer (0 DOM overhead, hardware 60fps)
-  const renderWaveform = (peaks: number[], color: string, h: number, isVocalsTrack = false) => {
-    if (!peaks.length) return null;
-    const n = peaks.length;
-    const bw = totalPx / n;
-    const barW = Math.max(1.0, bw > 2 ? bw - 0.7 : bw);
-
-    // Сплошной контур path объединяет все столбики волны в 1 единый GPU-вектор
-    let d = "";
-    for (let i = 0; i < n; i++) {
-      const pk = peaks[i];
-      if (pk < 0.005) continue; // тишину пропускаем — экономит вес SVG
-      // Мягкий логарифмический подъем (Power curve 0.72) — приподнимает тихие согласные и начала слов
-      const boosted = Math.pow(pk, 0.72);
-      const bh = Math.max(2, Math.min(h - 2, boosted * (h - 4)));
-      const x = (i / n) * totalPx;
-      const y = (h - bh) / 2;
-      d += `M${x.toFixed(1)},${y.toFixed(1)}h${barW.toFixed(1)}v${bh.toFixed(1)}h-${barW.toFixed(1)}Z `;
-    }
-
-    return (
-      <svg width={totalPx} height={h} className="block pointer-events-none w-full h-full">
-        {/* Render phrase delimiters & background highlights on Vocals track */}
-        {isVocalsTrack &&
-          segments.map((s, idx) => {
-            const sx = s.start * zoom;
-            const ex = s.end * zoom;
-            const sw = Math.max(2, ex - sx);
-            const isAct = scrub >= s.start && scrub <= s.end;
-            return (
-              <g key={"vseg-" + idx}>
-                <rect x={sx} y={0} width={sw} height={h} fill="#06b6d4" opacity={isAct ? 0.22 : 0.08} />
-                <line x1={sx} y1={0} x2={sx} y2={h} stroke="#06b6d4" strokeWidth={1.5} opacity={0.7} strokeDasharray="3 2" />
-                <rect x={sx - 1} y={0} width={3} height={5} fill="#06b6d4" opacity={0.95} />
-                <line x1={ex} y1={0} x2={ex} y2={h} stroke="#06b6d4" strokeWidth={1.5} opacity={0.7} strokeDasharray="3 2" />
-                <rect x={ex - 2} y={h - 5} width={3} height={5} fill="#06b6d4" opacity={0.95} />
-              </g>
-            );
-          })}
-
-        {/* Сплошной вектор звуковой волны */}
-        <path d={d} fill={color} opacity={0.88} />
-      </svg>
-    );
+  // Pure hardware-accelerated single-path SVG waveform (memoized, 0ms latency, zero redraws on playback)
+  const renderWaveform = (peaks: number[], color: string, h: number) => {
+    if (!peaks.length || totalPx <= 0) return null;
+    return <SvgWaveformTrack peaks={peaks} totalPx={totalPx} height={h} color={color} />;
   };
-
   return (
     <div className="flex flex-col gap-1.5 w-full select-none">
       {/* Zoom & Track Legend Header */}
@@ -3410,17 +3628,27 @@ function MultiTrackTimeline({
             if (e.button !== 0 || (e.target as HTMLElement).closest("[data-seg-block]")) return;
             isTimelineDragging.current = true;
             (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-            onSeek(getT(e.clientX));
+            requestTimelineSeek(e.clientX);
           }}
           onPointerMove={(e) => {
             if (isTimelineDragging.current) {
-              onSeek(getT(e.clientX));
+              requestTimelineSeek(e.clientX);
             }
           }}
           onPointerUp={(e) => {
             if (isTimelineDragging.current) {
               isTimelineDragging.current = false;
-              try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+              try {
+                (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+              } catch {}
+              if (timelineSeekFrame.current != null) {
+                cancelAnimationFrame(timelineSeekFrame.current);
+                timelineSeekFrame.current = null;
+              }
+              if (pendingTimelineSeek.current != null) {
+                onSeek(pendingTimelineSeek.current);
+                pendingTimelineSeek.current = null;
+              }
             }
           }}
           onContextMenu={(e) => {
@@ -3462,9 +3690,39 @@ function MultiTrackTimeline({
               {renderWaveform(peaksBgm, "#a855f7", 48)}
             </div>
 
-            {/* Track 3: 🗣️ Вокал оригинала Canvas (48px) with Phrase Delimiters */}
+            {/* Track 3: 🗣️ Вокал оригинала (48px) with Phrase Delimiters */}
             <div className="h-[48px] border-b border-[var(--color-border)]/40 relative bg-cyan-950/10">
-              {renderWaveform(peaksVocals, "#06b6d4", 48, true)}
+              {renderWaveform(peaksVocals, "#06b6d4", 48)}
+              {/* Phrase delimiters and segment highlights overlay */}
+              <div className="absolute inset-0 pointer-events-none">
+                {visibleSegments.map((s) => {
+                  const sx = s.start * zoom;
+                  const ex = s.end * zoom;
+                  const sw = Math.max(2, ex - sx);
+                  const isAct = scrub >= s.start && scrub <= s.end;
+                  return (
+                    <div
+                      key={"vseg-" + s.id}
+                      className="absolute top-0 bottom-0 pointer-events-none"
+                      style={{ left: `${sx}px`, width: `${sw}px` }}
+                    >
+                      <div
+                        className="absolute inset-0 transition-opacity"
+                        style={{
+                          backgroundColor: "#06b6d4",
+                          opacity: isAct ? 0.22 : 0.08,
+                        }}
+                      />
+                      <div className="absolute left-0 top-0 bottom-0 border-l border-dashed border-cyan-400/70">
+                        <div className="w-[3px] h-[5px] -ml-[1px] bg-cyan-400/95" />
+                      </div>
+                      <div className="absolute right-0 top-0 bottom-0 border-r border-dashed border-cyan-400/70">
+                        <div className="w-[3px] h-[5px] -mr-[1px] absolute bottom-0 bg-cyan-400/95" />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Track 4: 💬 Двухдорожечные субтитры (88px, Lane 0: top 4px, Lane 1: top 48px) */}
@@ -3580,7 +3838,7 @@ function MultiTrackTimeline({
             {/* Vertical Golden Playhead Line across all 4 tracks */}
             <div
               className="absolute top-0 bottom-0 w-0.5 bg-amber-300 z-30 pointer-events-none shadow-[0_0_10px_rgba(251,191,36,0.9)]"
-              style={{ left: `${scrub * zoom}px` }}
+              style={{ transform: `translate3d(${scrub * zoom}px, 0, 0)` }}
             >
               <div className="w-3 h-3 -ml-1.25 -top-0 bg-amber-400 rounded-b-sm shadow-md" />
             </div>
@@ -4237,6 +4495,7 @@ function Editor() {
   const canUndo = useStore((s) => s.past.length > 0);
   const canRedo = useStore((s) => s.future.length > 0);
   const [scrub, setScrub] = useState(initialScrub);                   // ?t=SEC — deep-link на кадр (для скринов/шаринга), иначе 1.0с
+  const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null);
   const [selSegs, setSelSegs] = useState<Set<string>>(new Set());     // multi-select for bulk hide/delete
   const [selBlurs, setSelBlurs] = useState<Set<number>>(new Set());   // multi-select: mask boxes
   const [selTitles, setSelTitles] = useState<Set<number>>(new Set()); // multi-select: titles
@@ -4356,6 +4615,7 @@ function Editor() {
 
 
   const playEndRef = useRef<number>(Infinity);                        // stop time for single-phrase playback (Infinity = full)
+  const pendingPlayOnSeekedRef = useRef<boolean>(false);              // Smart Seek-then-Play: flag to launch once video frame is ready
   const [dubRev, setDubRev] = useState(0);                            // dub-audio cache-buster — bumped ONLY when the dub track is re-rendered (regen/export), NOT on every edit, so live edits don't reload <audio> mid-playback
 
   useEffect(() => {
@@ -4403,7 +4663,7 @@ function Editor() {
     a.volume = effectiveVol;
   }, [effectiveVol]);
 
-  // Dub playback & timeline driver (Master Clock)
+  // Dub playback — запуск/остановка аудио + плавное обновление scrub/вейформы
   useEffect(() => {
     const a = audioRef.current;
     if (!play) {
@@ -4413,9 +4673,8 @@ function Editor() {
     }
     setRendered(false);
     if (a && hasDubTrack) {
-      a.playbackRate = playSpeed;
       a.volume = effectiveVol;
-      a.currentTime = scrub;
+      a.currentTime = scrubRef.current;   // свежее значение через ref (не stale-замыкание)
       a.play()
         .then(() => {
           audioPlayingRef.current = true;
@@ -4429,26 +4688,37 @@ function Editor() {
       audioPlayingRef.current = false;
     }
 
-    const id = window.setInterval(() => {
-      if (audioPlayingRef.current && a && !a.paused) {
-        if (loopSegId) {
-          const lSeg = p.segments.find((s) => s.id === loopSegId);
-          if (lSeg && a.currentTime >= lSeg.end) {
-            a.currentTime = lSeg.start;
-            setScrub(lSeg.start);
-            return;
-          }
-        }
+  }, [play, hasDubTrack, currentAudioSrc]);
+
+  // Контроль завершения фразы строго по часам звука (Audio as Master, 60/120 FPS):
+  // Звук — единственный арбитр окончания реплики, ни один слог не обрезается.
+  useEffect(() => {
+    if (!play || !hasDubTrack) return;
+    const a = audioRef.current;
+    if (!a) return;
+
+    let animId: number | null = null;
+    let running = true;
+
+    const checkAudioEnd = () => {
+      if (!running) return;
+      if (a && !a.paused) {
         if (a.currentTime >= playEndRef.current) {
+          running = false;
           a.pause();
           setPlay(false);
-        } else {
-          setScrub(a.currentTime);
+          return;
         }
       }
-    }, 40);
-    return () => window.clearInterval(id);
-  }, [play, hasDubTrack, currentAudioSrc]);
+      animId = requestAnimationFrame(checkAudioEnd);
+    };
+
+    animId = requestAnimationFrame(checkAudioEnd);
+    return () => {
+      running = false;
+      if (animId !== null) cancelAnimationFrame(animId);
+    };
+  }, [play, hasDubTrack]);
 
   // Text-cursor split helper (Ctrl+Enter in text area)
   const handleSplitAtTextCursor = async (seg: Project["segments"][number], textarea: HTMLTextAreaElement) => {
@@ -5002,6 +5272,7 @@ function Editor() {
     }
   }
   function playFull() {                                               // bottom-bar Play: play the whole dub from the playhead
+    pendingPlayOnSeekedRef.current = false;
     const a = audioRef.current;
     if (play) { setPlay(false); return; }
     playEndRef.current = Infinity;
@@ -5011,16 +5282,41 @@ function Editor() {
   function playSeg(seg: Project["segments"][number]) {               // play JUST this phrase's TTS [start, end]
     const a = audioRef.current;
     playEndRef.current = seg.end;
-    if (a && hasDubTrack) a.currentTime = seg.start;
-    setScrub(seg.start);
+    const clamped = clampTime(seg.start, p.meta.duration || seg.start);
+    if (a && hasDubTrack) a.currentTime = clamped;
+    setScrub(clamped);
+    setSeekRequest({ id: Date.now(), time: clamped });
     setRendered(false);
-    if (!play) setPlay(true);
+
+    if (play) {
+      return;
+    }
+
+    // «Умный старт»: дожидаемся готовности кадра видео (события seeked) или стартуем по таймауту 60 мс
+    pendingPlayOnSeekedRef.current = true;
+    setTimeout(() => {
+      if (pendingPlayOnSeekedRef.current) {
+        pendingPlayOnSeekedRef.current = false;
+        if (!play) setPlay(true);
+      }
+    }, 60);
   }
+
+  const handleVideoSeeked = () => {
+    if (pendingPlayOnSeekedRef.current) {
+      pendingPlayOnSeekedRef.current = false;
+      if (!play) setPlay(true);
+    }
+  };
+
   // единый seek: скраб вейформы/слайдера + позиция dub-аудио (используется хоткеями, слайдером и вейформой)
   function onSeek(tt: number) {
+    pendingPlayOnSeekedRef.current = false;
+    const clamped = clampTime(tt, p.meta.duration || tt);
     setRendered(false);
-    setScrub(tt);
-    if (audioRef.current && hasDubTrack) audioRef.current.currentTime = tt;
+    setScrub(clamped);
+    setSeekRequest({ id: Date.now(), time: clamped });
+    if (audioRef.current && hasDubTrack) audioRef.current.currentTime = clamped;
   }
   useEffect(() => { scrubRef.current = scrub; }, [scrub]);   // свежий scrub для хоткеев (без stale-замыкания)
   const setVolK = (v: number) => { setVol(v); if (audioRef.current) audioRef.current.volume = v; localStorage.setItem("dub-vol", String(v)); };
@@ -5330,21 +5626,34 @@ function Editor() {
                       : p
                   }
                   scrub={scrub}
+                  seekRequest={seekRequest}
                   rendered={rendered}
                   lane={lane}
                   playing={play}
                   vol={vol}
                   audioMuted={hasDubTrack}
                   onTimeUpdate={(t) => {
-                    if (!audioPlayingRef.current) {
+                    // Если дорожка дубляжа активна, ЗВУК является эталоном времени для завершения фразы.
+                    // Видео контролирует окончание фразы только в режиме без дубляжа (чистый видеорежим).
+                    if (!hasDubTrack) {
                       if (t >= playEndRef.current) {
                         setPlay(false);
-                      } else {
-                        setScrub(t);
+                        return;
                       }
                     }
+                    setScrub(t);
                   }}
-                  onEnded={() => setPlay(false)}
+                  onSeeked={handleVideoSeeked}
+                  onEnded={() => {
+                    audioPlayingRef.current = false;
+                    audioRef.current?.pause();
+                    setPlay(false);
+                  }}
+                  onMediaError={() => {
+                    audioPlayingRef.current = false;
+                    audioRef.current?.pause();
+                    setPlay(false);
+                  }}
                   onChanged={(fresh) => setProject(fresh)}
                 />
               )}
@@ -5588,6 +5897,12 @@ function Editor() {
             <audio
               ref={audioRef}
               src={hasDubTrack ? currentAudioSrc : undefined}
+              onTimeUpdate={(e) => {
+                if (!play) return;
+                if (e.currentTarget.currentTime >= playEndRef.current) {
+                  setPlay(false);
+                }
+              }}
               onEnded={() => setPlay(false)}
               onError={() => {
                 console.warn("Audio element error, falling back to video audio");
@@ -5773,7 +6088,7 @@ function Editor() {
                         ref={isCurrent ? activeRef : undefined}
                         onMouseDown={(e) => handleRowMouseDown(idx, seg.id, e)}
                         onMouseEnter={() => handleRowMouseEnter(idx)}
-                        onDoubleClick={() => { setRendered(false); setScrub(seg.start); }}
+                        onDoubleClick={() => onSeek(seg.start)}
                         className={`flex items-center gap-2 px-2.5 py-1 text-[11px] cursor-pointer transition-colors ${
                           isSelected
                             ? "bg-[var(--color-accent)]/20 text-[var(--color-text)] ring-1 ring-inset ring-[var(--color-accent)]/50"
@@ -5851,7 +6166,7 @@ function Editor() {
                         donorDisplayNum={donorDisplayNum}
                         fmtT={fmtT}
                         activeRef={on ? activeRef : undefined}
-                        onScrub={(start) => { setRendered(false); setScrub(start); }}
+                        onScrub={(start) => onSeek(start)}
                         onMoveUp={() => moveSeg(seg.id, "up")}
                         onMoveDown={() => moveSeg(seg.id, "down")}
                         onToggleSelect={() => setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; })}
@@ -5939,7 +6254,7 @@ function Editor() {
                     {(p.captions.blur_boxes || []).map((b, i) => ({ b, i }))
                       .filter(({ b }) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4))
                       .map(({ b, i }) => (
-                        <div key={i} onClick={() => { setSelBlur(i); setRendered(false); setScrub(Math.max(b.t0, 0)); }}
+                        <div key={i} onClick={() => { setSelBlur(i); onSeek(Math.max(b.t0, 0)); }}
                           className={`flex items-center gap-2 mono text-[10px] rounded px-2 py-1 cursor-pointer transition-colors ${selBlur === i ? "bg-[color-mix(in_oklab,var(--color-accent)_18%,transparent)] text-[var(--color-text)] ring-1 ring-[var(--color-accent)]" : "text-[var(--color-muted)] bg-[var(--color-surface-2)]/40 hover:text-[var(--color-text)]"} ${b.hidden ? "opacity-50" : ""} ${selBlurs.has(i) ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
                           <button onClick={(e) => { e.stopPropagation(); setSelBlurs((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; }); }}
                             className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selBlurs.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selBlurs.has(i) && <Check size={9} />}</button>
@@ -5987,7 +6302,7 @@ function Editor() {
                   </div>
                 )}
                 {(p.captions.titles || []).map((ti, i) => (
-                  <div key={`${ti.start}_${ti.end}_${i}`} onClick={() => { setSelTitle(i); setRendered(false); setScrub(Math.max(ti.start, 0)); }}
+                  <div key={`${ti.start}_${ti.end}_${i}`} onClick={() => { setSelTitle(i); onSeek(Math.max(ti.start, 0)); }}
                     className={`rounded-xl p-2.5 bg-[var(--color-surface-2)]/50 cursor-pointer transition-shadow ${selTitle === i ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
                     <div className="flex items-center gap-2 mono text-[10px] text-[var(--color-muted)] mb-1.5">
                       <button onClick={() => setSelTitles((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
@@ -8418,19 +8733,32 @@ function TranscriptView() {
   const [scrub, setScrub] = useState(() => initialScrub() || 0);      // ?t=SEC — deep-link на кадр транскрипта
   const [play, setPlay] = useState(false);
   const [showHelp, setShowHelp] = useState(false);                  // оверлей-шпаргалка хоткеев (?)
-  const videoRef = useRef<HTMLVideoElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);                  // контейнер <video> -> фулскрин по F + Ctrl-колесо
   const scrubRef = useRef(0);                                       // свежий scrub без stale-замыкания в хоткеях
-  // Плей: <video> тянет /dub — для транскрипта (nodub) это ОРИГИНАЛ (видео+аудио). Скраб следует за
-  // currentTime -> активная строка + караоке-подсветка слова. Один элемент = и картинка, и звук.
-  useEffect(() => {
-    const v = videoRef.current; if (!v) return;
-    if (!play) { v.pause(); return; }
-    v.play().catch(() => setPlay(false));
-    const id = window.setInterval(() => setScrub(v.currentTime), 80);
-    return () => window.clearInterval(id);
-  }, [play]);
-  const seek = (tt: number) => { setScrub(tt); if (videoRef.current) videoRef.current.currentTime = tt; };
+  const [seekReq, setSeekReq] = useState<SeekRequest | null>(null);
+
+  const seek = (tt: number) => {
+    const clamped = clampTime(tt, p.meta.duration || tt);
+    setScrub(clamped);
+    setSeekReq({ id: Date.now(), time: clamped });
+  };
+
+  const {
+    videoRef,
+    mediaReady: transcriptMediaReady,
+    error: transcriptMediaError,
+    retry: retryTranscriptMedia,
+  } = useVideoLifecycle({
+    src: api.sourceVideoUrl(pid),
+    playing: play,
+    requestedTime: scrub,
+    seekRequest: seekReq,
+    muted: false,
+    volume: 1,
+    onClock: setScrub,
+    onEnded: () => setPlay(false),
+    onError: () => setPlay(false),
+  });
   useEffect(() => { scrubRef.current = scrub; }, [scrub]);          // свежий scrub для хоткеев
   useMediaHotkeys({                                                 // громкости нет -> ↑/↓ пропущены (setVol не задан)
     enabled: true, duration: p.meta.duration || 0, scrubRef, seek,
@@ -8531,11 +8859,19 @@ function TranscriptView() {
         </div>
         <div className="px-3 pt-2 space-y-2">
           <div ref={previewRef} className="fs-preview relative rounded-lg overflow-hidden bg-black/50 border border-[var(--color-border)] grid place-items-center max-h-[34vh]">
-            <video ref={videoRef} src={api.dubUrl(pid)} playsInline preload="auto"
-              onEnded={() => setPlay(false)} onClick={() => setPlay((x) => !x)}
+            <video ref={videoRef} playsInline preload="auto"
+              onClick={() => setPlay((x) => !x)}
               className="max-h-[34vh] max-w-full cursor-pointer" />
+            {!transcriptMediaReady && (
+              <div className="absolute inset-0 grid place-items-center bg-black/70 pointer-events-none z-10">
+                <span className="text-xs text-white/70">{transcriptMediaError ? "Видео не загрузилось" : "Загрузка видео..."}</span>
+              </div>
+            )}
+            {transcriptMediaError && (
+              <button type="button" onClick={retryTranscriptMedia} className="absolute bottom-2 right-2 px-2 py-1 rounded bg-white/10 text-xs text-white z-20">Повторить</button>
+            )}
             <button onClick={() => setPlay((x) => !x)} title={play ? t("common.pause") : t("common.play")}
-              className="absolute bottom-2 left-2 grid place-items-center w-10 h-10 rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-lg hover:brightness-110 transition">
+              className="absolute bottom-2 left-2 grid place-items-center w-10 h-10 rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-lg hover:brightness-110 transition z-20">
               {play ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
             </button>
           </div>

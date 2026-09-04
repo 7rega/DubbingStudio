@@ -1359,17 +1359,6 @@ async fn create_project(
         }
         filename = fname;
 
-        // Фоновый ремукс с +faststart для моментального старта воспроизведения в плеере
-        let src_fast = dst.clone();
-        let fast_out = d.join("source_fast.mp4");
-        let fast_tmp = d.join("source_fast.tmp.mp4");
-        tokio::task::spawn_blocking(move || {
-            if media::remux_faststart(&src_fast, &fast_tmp).is_ok() {
-                let _ = std::fs::rename(&fast_tmp, &fast_out);
-            } else {
-                let _ = std::fs::remove_file(&fast_tmp);
-            }
-        });
     }
 
     // Создаём начальный project.json, чтобы проект сразу мог быть открыт в редакторе без вызова analyze
@@ -2604,30 +2593,7 @@ async fn source_video(
         return (StatusCode::NOT_FOUND, "no source video found").into_response();
     }
 
-    // Если есть оптимизированный для стриминга файл с moov-атомом в начале (+faststart) — отдаём его
-    let fast_mp4 = dir.join("source_fast.mp4");
-    if fast_mp4.is_file() {
-        return serve_file_range(&fast_mp4, req, None).await;
-    }
-
-    // Фоновая генерация source_fast.mp4 для существующих проектов, у которых его ещё нет
-    let lock_file = dir.join("source_fast.lock");
-    if !lock_file.exists() {
-        let src = f.clone();
-        let out = fast_mp4.clone();
-        let tmp = dir.join("source_fast.tmp.mp4");
-        let lock = lock_file.clone();
-        tokio::task::spawn_blocking(move || {
-            let _ = std::fs::write(&lock, b"1");
-            if media::remux_faststart(&src, &tmp).is_ok() {
-                let _ = std::fs::rename(&tmp, &out);
-            } else {
-                let _ = std::fs::remove_file(&tmp);
-            }
-            let _ = std::fs::remove_file(&lock);
-        });
-    }
-
+    // Всегда отдаём исходный файл: поддержка Range нужна аппаратному плееру.
     serve_file_range(&f, req, None).await
 }
 

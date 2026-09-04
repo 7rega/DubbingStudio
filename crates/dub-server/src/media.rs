@@ -949,18 +949,6 @@ pub fn remux_playable_mp4(mkv: &Path, out_mp4: &Path) -> Result<(), String> {
     ])
 }
 
-/// Ремукс исходного видео в лёгкий для стриминга MP4 с moov-атомом в начале (+faststart).
-/// Потоковое копирование (-c copy) без перекодирования (занимает доли секунды).
-pub fn remux_faststart(src: &Path, dst: &Path) -> Result<(), String> {
-    run_ff(&[
-        OsStr::new("-y"), OsStr::new("-i"), src.as_os_str(),
-        OsStr::new("-map"), OsStr::new("0:v:0?"), OsStr::new("-map"), OsStr::new("0:a:0?"),
-        OsStr::new("-c"), OsStr::new("copy"),
-        OsStr::new("-movflags"), OsStr::new("+faststart"),
-        dst.as_os_str(),
-    ])
-}
-
 /// Есть ли в файле аудиопоток (ffprobe). Для мультитрек-mux: нет аудио в источнике -> вторую дорожку
 /// не добавляем (иначе -disposition:a:1 по несуществующему потоку валит ffmpeg). Ошибка probe -> false.
 pub fn has_audio(input: &Path) -> bool {
