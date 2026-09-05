@@ -2326,8 +2326,8 @@ function CanvasWaveform({
   peaks,
   duration,
   height,
-  color = "#3a414c",
-  playedColor,
+  color = "rgba(198, 242, 78, 0.45)",
+  playedColor = "#c6f24e",
   segments = [],
   gain = 1,
   scrub = 0,
@@ -2375,7 +2375,7 @@ function CanvasWaveform({
     if (n) {
       const bar = drawWidth / n;
       ctx.fillStyle = drawColor;
-      ctx.globalAlpha = 0.88;
+      ctx.globalAlpha = 0.95;
       peaks.forEach((pk, i) => {
         const x = i * bar;
         const bh = Math.max(2, Math.min(height - 2, Math.pow(Math.max(0, pk), 0.72) * gain * (height - 4)));
@@ -2383,19 +2383,21 @@ function CanvasWaveform({
       });
     }
     if (drawSegments && segments.length > 0) {
-      ctx.globalAlpha = 1;
       for (const s of segments) {
         const x = Math.max(0, Math.min(drawWidth, (s.start / safeDuration) * drawWidth));
         const ex = Math.max(x, Math.min(drawWidth, (s.end / safeDuration) * drawWidth));
-        ctx.fillStyle = "#06b6d4";
-        ctx.globalAlpha = 0.08;
+        // Мягкая подсветка интервала фразы
+        ctx.fillStyle = "#c6f24e";
+        ctx.globalAlpha = 0.05;
         ctx.fillRect(x, 0, Math.max(1, ex - x), height);
-        ctx.globalAlpha = 0.7;
+        // Тонкие аккуратные разделители границ
+        ctx.fillStyle = "rgba(255, 255, 255, 0.22)";
+        ctx.globalAlpha = 1;
         ctx.fillRect(x, 0, 1, height);
         ctx.fillRect(ex, 0, 1, height);
       }
+      ctx.globalAlpha = 1;
     }
-    ctx.globalAlpha = 1;
   };
 
   useEffect(() => {
@@ -2423,7 +2425,7 @@ function CanvasWaveform({
       )}
       {showPlayhead && (
         <div
-          className="absolute top-0 bottom-0 w-px pointer-events-none bg-[var(--color-accent)] shadow-[0_0_6px_var(--color-accent)]"
+          className="absolute top-0 bottom-0 w-[2px] pointer-events-none bg-[#c6f24e] shadow-[0_0_8px_#c6f24e]"
           style={{ transform: `translate3d(${playheadLeft}px, 0, 0)` }}
         />
       )}
@@ -2562,7 +2564,7 @@ function WaveformTimeline({
   return (
     <div
       ref={wrap}
-      className="relative w-full overflow-hidden cursor-pointer select-none touch-none"
+      className="relative w-full overflow-hidden cursor-pointer select-none touch-none rounded-lg bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/50"
       style={{ height: h }}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
@@ -2596,8 +2598,8 @@ function WaveformTimeline({
         peaks={displayPeaks}
         duration={dur}
         height={h}
-        color="#3a414c"
-        playedColor="var(--color-accent)"
+        color="rgba(198, 242, 78, 0.45)"
+        playedColor="#c6f24e"
         segments={segments}
         gain={gainLin}
         scrub={scrub}
