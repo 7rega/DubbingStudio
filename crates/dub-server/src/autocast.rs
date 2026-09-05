@@ -17,8 +17,8 @@ use crate::wavio;
 
 /// Порог основного тона для разделения полов (Гц).
 pub const GENDER_F0_THRESHOLD_HZ: f32 = 165.0;
-/// Порог основного тона для детских голосов (Гц).
-pub const CHILD_F0_THRESHOLD_HZ: f32 = 255.0;
+/// Порог основного тона для детских голосов в паках доноров без маркеров (Гц).
+pub const CHILD_F0_THRESHOLD_HZ: f32 = 300.0;
 
 /// Профиль одного голоса из библиотеки voices/.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -53,53 +53,10 @@ impl VoiceCache {
     }
 }
 
-/// Расчёт медианы F0 через автокорреляцию во временной области (диапазон речи 75–450 Гц).
+/// Расчёт медианы F0 через проверенный детектор crate::f0::median_f0 с нормированной
+/// кросс-корреляцией и защитой от октавных ошибок (halving/doubling).
 pub fn estimate_f0_median(samples: &[f32], sr: u32) -> Option<f32> {
-    if samples.len() < (sr as usize / 10) {
-        return None;
-    }
-    let frame_len = (sr as f32 * 0.040) as usize; // 40ms окно
-    let hop = (sr as f32 * 0.015) as usize;       // 15ms шаг
-    let min_lag = (sr as f32 / 450.0) as usize;   // 450 Hz
-    let max_lag = (sr as f32 / 75.0) as usize;    // 75 Hz
-
-    let mut pitches = Vec::new();
-    let mut offset = 0;
-
-    while offset + frame_len <= samples.len() {
-        let frame = &samples[offset..offset + frame_len];
-        let mut best_corr = 0.0f32;
-        let mut best_lag = 0usize;
-
-        let energy: f32 = frame.iter().map(|&x| x * x).sum();
-        if energy > 0.001 {
-            let limit = max_lag.min(frame_len / 2);
-            for lag in min_lag..=limit {
-                let mut corr = 0.0f32;
-                for j in 0..(frame_len - lag) {
-                    corr += frame[j] * frame[j + lag];
-                }
-                let norm = corr / energy;
-                if norm > best_corr {
-                    best_corr = norm;
-                    best_lag = lag;
-                }
-            }
-            if best_corr > 0.40 && best_lag > 0 {
-                let f0 = sr as f32 / best_lag as f32;
-                if (75.0..=450.0).contains(&f0) {
-                    pitches.push(f0);
-                }
-            }
-        }
-        offset += hop;
-    }
-
-    if pitches.is_empty() {
-        return None;
-    }
-    pitches.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    Some(pitches[pitches.len() / 2])
+    crate::f0::median_f0(samples, sr).map(|f| f as f32)
 }
 
 /// Скалярное произведение L2-нормированных векторов (косинусное сходство).
@@ -140,8 +97,8 @@ fn matches_voice_marker(lower: &str, exact_tokens: &[&str], substrings: &[&str])
     false
 }
 
-/// Определение категории голоса/спикера (male, female, boy, girl, child).
-/// Анализирует маркеры в имени файла/роли или опирается на основной тон F0.
+/// Определение категории донорского голоса из пака voices/ (male, female, boy, girl, child).
+/// Анализирует маркеры в имени файла или опирается на основной тон F0.
 pub fn detect_voice_gender(name: &str, f0: f32) -> String {
     let lower = name.to_lowercase();
 
@@ -190,13 +147,136 @@ pub fn detect_voice_gender(name: &str, f0: f32) -> String {
         return "male".to_string();
     }
 
-    // 6. Акустическое разделение по F0 (если маркеров в имени нет)
+    // 6. Акустическое разделение по F0 (если маркеров в имени файла нет)
     if f0 >= CHILD_F0_THRESHOLD_HZ {
         "child".to_string()
     } else if f0 < GENDER_F0_THRESHOLD_HZ {
         "male".to_string()
     } else {
         "female".to_string()
+    }
+}
+
+/// Определение категории спикера/персонажа из видео (male, female, boy, girl, child).
+/// В отличие от доноров, персонаж видео может быть признан ребёнком ТОЛЬКО при наличии
+/// детских маркеров в имени/роли («Мальчик», «Девочка», «Сын», «Kid»).
+/// Обычные взрослые роли («Врач», «Игрок», «Спикер 0») всегда классифицируются как взрослые
+/// (male/female), даже при эмоциональных выкриках с высокой частотой.
+pub fn detect_speaker_gender(
+    name: &str,
+    f0: f32,
+    casting_gender: Option<&str>,
+    tract_gender: Option<&str>,
+) -> String {
+    let lower = name.to_lowercase();
+
+    // 1. Проверяем явные детские маркеры в имени персонажа
+    if matches_voice_marker(
+        &lower,
+        &["boy", "мальчик", "пацан", "паренёк", "паренек", "сынок", "сын", "внук", "школьник"],
+        &["_boy_", "_boy", "boy_", "ru_boy", "en_boy", "kid_m", "child_m"],
+    ) {
+        return "boy".to_string();
+    }
+    if matches_voice_marker(
+        &lower,
+        &["girl", "девочка", "дочка", "дочь", "внучка", "школьница"],
+        &["_girl_", "_girl", "girl_", "ru_girl", "en_girl", "kid_f", "child_f"],
+    ) {
+        return "girl".to_string();
+    }
+    if matches_voice_marker(
+        &lower,
+        &["child", "kid", "kids", "ребенок", "ребёнок", "дитя", "детский", "детск"],
+        &["_child_", "_child", "child_", "ru_child", "en_child", "_kid_", "_kid", "kid_"],
+    ) {
+        return "child".to_string();
+    }
+
+    // 2. Если в casting.json задан пол персонажа (из распознавания лиц или кастинга)
+    if let Some(cg) = casting_gender {
+        let cg_lower = cg.trim().to_lowercase();
+        if cg_lower == "female" || cg_lower == "жен" || cg_lower == "женский" {
+            return "female".to_string();
+        }
+        if cg_lower == "male" || cg_lower == "муж" || cg_lower == "мужской" {
+            return "male".to_string();
+        }
+    }
+
+    // 3. Маркеры пола в имени персонажа
+    if matches_voice_marker(
+        &lower,
+        &["female", "famale", "жен", "женщина", "девушка", "мать", "мама", "woman", "lady"],
+        &["_fem_", "_fem", "fem_", "ru_fem", "en_fem", "female", "famale"],
+    ) {
+        return "female".to_string();
+    }
+    if matches_voice_marker(
+        &lower,
+        &["male", "муж", "мужчина", "парень", "отец", "папа", "man", "guy"],
+        &["_male_", "_male", "male_", "_m_", "ru_male", "en_male"],
+    ) {
+        return "male".to_string();
+    }
+
+    // 4. Если WeSpeaker эмбеддинг уверенно определил акустический тракт (форманты)
+    if let Some(tg) = tract_gender {
+        return tg.to_string();
+    }
+
+    // 5. Без маркеров и эмбеддингов — по частоте основного тона: <165 Гц — мужчина, >=165 Гц — женщина
+    if f0 < GENDER_F0_THRESHOLD_HZ {
+        "male".to_string()
+    } else {
+        "female".to_string()
+    }
+}
+
+/// Определение пола по голосовому тракту WeSpeaker (форманты и тембр)
+/// по отношению к профилям доноров пака.
+/// Сравниваем топ-3 ближайших женских и топ-3 ближайших мужских доноров.
+/// Возвращает Some("female"), Some("male") или None если профилей мало / нет перевеса.
+fn detect_tract_gender(emb: &[f32], pack: &[PackVoiceProfile]) -> Option<&'static str> {
+    if emb.is_empty() {
+        return None;
+    }
+    let mut fem_sims: Vec<f32> = Vec::new();
+    let mut male_sims: Vec<f32> = Vec::new();
+
+    for p in pack {
+        if p.embedding.is_empty() {
+            continue;
+        }
+        let sim = cosine_similarity(emb, &p.embedding);
+        if p.gender == "female" || p.gender == "girl" {
+            fem_sims.push(sim);
+        } else if p.gender == "male" || p.gender == "boy" {
+            male_sims.push(sim);
+        }
+    }
+
+    if fem_sims.is_empty() || male_sims.is_empty() {
+        return None;
+    }
+
+    fem_sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    male_sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+
+    let k = 3;
+    let fem_top_k = &fem_sims[..fem_sims.len().min(k)];
+    let male_top_k = &male_sims[..male_sims.len().min(k)];
+
+    let fem_avg: f32 = fem_top_k.iter().sum::<f32>() / fem_top_k.len() as f32;
+    let male_avg: f32 = male_top_k.iter().sum::<f32>() / male_top_k.len() as f32;
+
+    let margin = fem_avg - male_avg;
+    if margin > 0.02 {
+        Some("female")
+    } else if margin < -0.02 {
+        Some("male")
+    } else {
+        None
     }
 }
 
@@ -400,6 +480,8 @@ impl SpeakerCandidate {
 fn extract_speaker_candidate(
     spk_id: &str,
     actor_name: String,
+    casting_gender: Option<&str>,
+    pack_profiles: &[PackVoiceProfile],
     proj: &Project,
     vocals_samples: &[f32],
     sr: u32,
@@ -428,10 +510,6 @@ fn extract_speaker_candidate(
         }
     }
 
-    let f0 = estimate_f0_median(&collected, sr).unwrap_or(150.0);
-    // Проверяем имя персонажа на гендерные маркеры (например «Элис», «Женщина»), если нет — по F0
-    let gender = detect_voice_gender(&actor_name, f0);
-
     let embedding = if let Some(ref mut emb) = embedder {
         let samples_16k = if sr == 16_000 {
             collected.clone()
@@ -446,6 +524,30 @@ fn extract_speaker_candidate(
     } else {
         Vec::new()
     };
+
+    let tract_gender = detect_tract_gender(&embedding, pack_profiles);
+
+    let f0_measured = estimate_f0_median(&collected, sr);
+    let mut f0 = match f0_measured {
+        Some(val) => val,
+        None => {
+            if tract_gender == Some("female") {
+                210.0
+            } else {
+                135.0
+            }
+        }
+    };
+
+    // Если F0 занижен (шум, шепот), но WeSpeaker тракт женский — корректируем F0
+    if f0 < GENDER_F0_THRESHOLD_HZ && tract_gender == Some("female") {
+        f0 = 210.0;
+    } else if f0 >= GENDER_F0_THRESHOLD_HZ && tract_gender == Some("male") && f0 < 220.0 {
+        // Если мужчина говорит эмоционально (F0 в зоне перекрытия 165-220), но WeSpeaker уверенно мужской
+        f0 = 135.0;
+    }
+
+    let gender = detect_speaker_gender(&actor_name, f0, casting_gender, tract_gender);
 
     SpeakerCandidate {
         spk_id: spk_id.to_string(),
@@ -516,7 +618,12 @@ pub fn auto_assign_pack_voices_direct(
 
     // 4. Подгружаем имена персонажей из casting.json (если кастинг проводился)
     let project_dir = vocals16.parent().unwrap_or_else(|| Path::new("."));
-    let casting_opt = dub_faces::load_casting(project_dir);
+    let casting_path = if project_dir.is_file() {
+        project_dir.to_path_buf()
+    } else {
+        project_dir.join("casting.json")
+    };
+    let casting_opt = dub_faces::load_casting(&casting_path);
 
     // 5. Инициализируем WeSpeaker для вокала проекта
     let onnx_path = std::env::var("DUB_FACES_WESPEAKER")
@@ -531,20 +638,27 @@ pub fn auto_assign_pack_voices_direct(
     // 6. Извлекаем профили спикеров/актёров
     let mut candidates: Vec<SpeakerCandidate> = Vec::new();
     for spk_id in &sorted_spks {
-        let actor_name = casting_opt
-            .as_ref()
-            .and_then(|c| {
-                c.characters
-                    .iter()
-                    .find(|ch| ch.speaker_ids.iter().any(|s| s == spk_id))
-                    .map(|ch| ch.name.clone())
-            })
-            .filter(|n| !n.trim().is_empty())
+        let char_match = casting_opt.as_ref().and_then(|c| {
+            c.characters
+                .iter()
+                .find(|ch| ch.speaker_ids.iter().any(|s| s == spk_id))
+        });
+
+        let actor_name = char_match
+            .map(|ch| ch.name.trim())
+            .filter(|n| !n.is_empty())
+            .map(|n| n.to_string())
             .unwrap_or_else(|| format!("Спикер {spk_id}"));
+
+        let casting_gender = char_match
+            .map(|ch| ch.gender.as_str())
+            .filter(|g| !g.trim().is_empty());
 
         candidates.push(extract_speaker_candidate(
             spk_id,
             actor_name,
+            casting_gender,
+            &pack_profiles,
             proj,
             &vocals_samples,
             sr,
@@ -696,6 +810,24 @@ pub fn auto_assign_pack_voices_direct(
         }
     }
 
+    // Если casting.json существовал, синхронизируем dub_voice у персонажей кастинга
+    if let Some(mut casting) = casting_opt {
+        let mut casting_changed = false;
+        for ch in &mut casting.characters {
+            for spk_id in &ch.speaker_ids {
+                if let Some(assigned) = assigned_voices.get(spk_id) {
+                    if ch.dub_voice != *assigned {
+                        ch.dub_voice = assigned.clone();
+                        casting_changed = true;
+                    }
+                }
+            }
+        }
+        if casting_changed {
+            let _ = dub_faces::save_casting(&casting_path, &casting);
+        }
+    }
+
     // 9. Формируем позиционный CSV для proj.audio.voice.name в лексикографическом порядке спикеров
     let voice_names: Vec<String> = sorted_spks
         .iter()
@@ -746,4 +878,34 @@ pub fn auto_assign_pack_voices_direct(
         .collect();
 
     Ok(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_speaker_gender_rules() {
+        // Обычные взрослые роли («Врач», «Игрок») никогда не должны становиться детьми:
+        assert_eq!(detect_speaker_gender("Врач", 210.0, None, None), "female");
+        assert_eq!(detect_speaker_gender("Врач", 150.0, Some("female"), None), "female");
+        assert_eq!(detect_speaker_gender("Игрок", 130.0, None, None), "male");
+        // Даже при эмоциональном крике на 260 Гц взрослый персонаж без детских маркеров не становится child:
+        assert_eq!(detect_speaker_gender("Игрок", 260.0, None, Some("male")), "male");
+
+        // Детские маркеры:
+        assert_eq!(detect_speaker_gender("Мальчик", 240.0, None, None), "boy");
+        assert_eq!(detect_speaker_gender("Девочка", 250.0, None, None), "girl");
+        assert_eq!(detect_speaker_gender("Ребёнок", 280.0, None, None), "child");
+        assert_eq!(detect_speaker_gender("Сын", 220.0, None, None), "boy");
+        assert_eq!(detect_speaker_gender("Дочь", 220.0, None, None), "girl");
+    }
+
+    #[test]
+    fn test_detect_voice_gender_library() {
+        assert_eq!(detect_voice_gender("RU_Male_Dmitry", 120.0), "male");
+        assert_eq!(detect_voice_gender("RU_Female_Anna", 220.0), "female");
+        assert_eq!(detect_voice_gender("RU_Boy_Anton", 270.0), "boy");
+        assert_eq!(detect_voice_gender("RU_Girl_Alisa", 280.0), "girl");
+    }
 }

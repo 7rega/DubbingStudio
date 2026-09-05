@@ -1181,7 +1181,10 @@ function VoiceSlotList({ title, voices, slots, onChange }: {
         {slots.map((name, i) => (
           <div key={i} className="flex items-center gap-1">
             <Combobox value={name} onChange={(v) => setAt(i, v)} options={opts}
-              placeholder={t("voice.search")} noResults={t("voice.noMatch")} size="sm" className="flex-1 min-w-0" />
+              placeholder={t("voice.search")} noResults={t("voice.noMatch")} size="sm" className="flex-1 min-w-0"
+              onPreview={(v) => toggle(i, v)}
+              previewingValue={playing === i ? name : null}
+            />
             <button onClick={() => toggle(i, name)} title={t("voice.preview")}
               className="shrink-0 p-1 rounded-md text-[var(--color-muted)] hover:text-[var(--color-accent)]">{playing === i ? <Pause size={13} /> : <Play size={13} />}</button>
             <button onClick={() => removeAt(i)} title={t("voiceSlots.remove")}
@@ -6798,7 +6801,10 @@ function Editor() {
                       <Combobox value={cur} onChange={on}
                         options={voiceList.map((v) => ({ value: v, label: v }))}
                         placeholder={voiceList.length ? t("voice.search") : "(пак не найден)"}
-                        noResults={t("voice.noMatch")} allowClear className="flex-1 min-w-0" />
+                        noResults={t("voice.noMatch")} allowClear className="flex-1 min-w-0"
+                        onPreview={toggleVoicePreview}
+                        previewingValue={voicePreview}
+                      />
                       <button type="button" disabled={!cur} onClick={() => toggleVoicePreview(cur)} title={t("voice.preview")}
                         className="shrink-0 w-8 h-8 inline-flex items-center justify-center rounded-lg border border-[var(--color-border)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
                         {voicePreview === cur && cur ? <Pause size={14} className="text-[var(--color-accent)]" /> : <Play size={14} />}
@@ -7900,7 +7906,7 @@ function langOptions(langs: { code: string; name: string }[], uiLang: string, ex
 }
 
 // Фильтруемый комбобокс: печатаешь кусок имени -> список сужается. Для больших списков (голоса/языки/шрифты).
-function Combobox({ value, options, onChange, placeholder, noResults, allowClear, className, size = "md" }: {
+function Combobox({ value, options, onChange, placeholder, noResults, allowClear, className, size = "md", onPreview, previewingValue }: {
   value: string;
   options: { value: string; label: string; search?: string }[];
   onChange: (v: string) => void;
@@ -7909,6 +7915,8 @@ function Combobox({ value, options, onChange, placeholder, noResults, allowClear
   allowClear?: boolean;               // пункт «—» для сброса в ""
   className?: string;
   size?: "sm" | "md";
+  onPreview?: (v: string) => void;
+  previewingValue?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -7937,18 +7945,48 @@ function Combobox({ value, options, onChange, placeholder, noResults, allowClear
         }}
         className={`w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg ${pad} text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none transition-colors`} />
       {open && (
-        <div className="absolute z-40 mt-1 w-full min-w-[180px] max-h-64 overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-xl">
+        <div className="absolute z-40 mt-1 w-full min-w-[200px] max-h-64 overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-xl">
           {allowClear && (
             <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => commit("")}
               className="block w-full text-left px-2.5 py-1.5 text-[12px] text-[var(--color-muted)] hover:bg-[var(--color-overlay)]">—</button>
           )}
           {filtered.length === 0 && <div className="px-2.5 py-2 text-[12px] text-[var(--color-muted)]">{noResults ?? "∅"}</div>}
-          {filtered.map((o) => (
-            <button key={o.value} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => commit(o.value)}
-              title={o.label}
-              className={`block w-full text-left px-2.5 py-1.5 text-[12px] truncate hover:bg-[var(--color-overlay)] ${o.value === value ? "text-[var(--color-accent)]" : "text-[var(--color-text)]"}`}>
-              {o.label}</button>
-          ))}
+          {filtered.map((o) => {
+            const isPlaying = previewingValue === o.value;
+            return (
+              <div
+                key={o.value}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => commit(o.value)}
+                className={`flex items-center justify-between gap-1.5 px-2.5 py-1.5 text-[12px] hover:bg-[var(--color-overlay)] cursor-pointer transition-colors group ${
+                  o.value === value ? "text-[var(--color-accent)] font-medium" : "text-[var(--color-text)]"
+                }`}
+              >
+                <span className="truncate flex-1" title={o.label}>{o.label}</span>
+                {onPreview && o.value && (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPreview(o.value);
+                    }}
+                    title="Прослушать сэмпл голоса"
+                    className={`shrink-0 p-1 rounded hover:bg-white/15 transition-colors ${
+                      isPlaying
+                        ? "text-[var(--color-accent)]"
+                        : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                    }`}
+                  >
+                    {isPlaying ? <Pause size={12} /> : <Play size={12} fill="currentColor" />}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
