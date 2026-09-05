@@ -1315,9 +1315,12 @@ function DropZone() {
   const setDuckSaved = (v: boolean) => { setDuckOn(v); api.setSelection("duck_on", v ? "1" : "0").catch(() => {}); };
   const [autoCastAuto, setAutoCastAuto] = useState<boolean>(() => localStorage.getItem("dub-autocast-auto") === "1");
   const setAutoCastAutoSaved = (v: boolean) => { setAutoCastAuto(v); localStorage.setItem("dub-autocast-auto", v ? "1" : "0"); };
-  // Блюр-подложка под сожжёнными субтитрами — опция (не всем нужна), дефолт ВКЛ; патчится в проект после analyze.
-  const [subBlur, setSubBlur] = useState<boolean>(() => localStorage.getItem("dub-sub-blur") !== "0");
+  // Блюр-подложка под сожжёнными субтитрами — опция (не всем нужна), дефолт ВЫКЛ; патчится в проект после analyze.
+  const [subBlur, setSubBlur] = useState<boolean>(() => localStorage.getItem("dub-sub-blur") === "1");
   const setSubBlurSaved = (v: boolean) => { setSubBlur(v); localStorage.setItem("dub-sub-blur", v ? "1" : "0"); };
+  // Автовыравнивание по вокалу — опция (устраняет опережение речи Whisper'ом), дефолт ВКЛ.
+  const [autoAlign, setAutoAlign] = useState<boolean>(() => localStorage.getItem("dub-auto-align") !== "0");
+  const setAutoAlignSaved = (v: boolean) => { setAutoAlign(v); localStorage.setItem("dub-auto-align", v ? "1" : "0"); };
   const [keepOrig, setKeepOrig] = useState<boolean>(() => localStorage.getItem("dub-keep-orig") === "1");
   const [container, setContainer] = useState<"mp4" | "mkv">(() => (localStorage.getItem("dub-container") === "mkv" ? "mkv" : "mp4"));
   const setKeepOrigSaved = (v: boolean) => { setKeepOrig(v); localStorage.setItem("dub-keep-orig", v ? "1" : "0"); };
@@ -1503,6 +1506,16 @@ function DropZone() {
       const effNumSpeakers = audio === "transcribe" ? mainTranscribeSpeakers : 0;
       const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers, audioOnly ? false : visionOn);
       await api.watchJob(job_id, (e) => { if (e.type === "progress") s.setProgress(e.stage || "", e.msg || "", e.pct ?? null); });
+      // Автовыравнивание по вокалу: привязка старта фраз к звуку речи перед кастингом и рендером
+      if (autoAlign) {
+        try {
+          s.setProgress("aligning", "Автовыравнивание по вокалу...", null);
+          const rAlign = await api.alignProject(project_id);
+          if (rAlign.ok && rAlign.count > 0) {
+            useStore.getState().pushActivity(`Автовыравнивание: ${rAlign.count} фраз`, "done");
+          }
+        } catch { /* fail-safe */ }
+      }
       if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain, mode: voDuckMode });   // громкость и режим дакинга со старта -> рендер ниже подхватит
       if (audio === "dub") await api.patch(project_id, { op: "dub_mix_mode", mode: dubMixMode });                             // режим сведения дубляжа (классический vs с эффектами)
       // Блюр-подложка под субтитрами — опция дубляжа/субтитров (дефолт вкл). Патчим, когда сабы вжигаются.
@@ -1914,6 +1927,12 @@ function DropZone() {
                         <span title="Размытая подложка под субтитрами. Выкл — без подложки." onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
                       </label>
                     )}
+                    {/* АВТОВЫРАВНИВАНИЕ ПО ВОКАЛУ — устраняет опережение речи Whisper'ом, дефолт ВКЛ. */}
+                    <label className="mt-1.5 flex items-center gap-2 text-[12px] cursor-pointer select-none w-fit" title="Привязка старта фраз к реальному звуку вокала. Устраняет опережение речи Whisper'ом.">
+                      <input type="checkbox" checked={autoAlign} onChange={(e) => setAutoAlignSaved(e.target.checked)} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
+                      Автовыравнивание по вокалу
+                      <span title="Акустическое выравнивание: устраняет пустоту и вдохи перед фразой, подтягивая старт к реальной речи." onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
+                    </label>
                     {/* КАСТИНГ ПЕРСОНАЖЕЙ (#115): доп. проход по кадрам -> база персонажей (аватар/голос). Опц., дефолт ВЫКЛ. */}
                     {showCasting && (
                       <label className="mt-1.5 flex items-center gap-2 text-[12px] cursor-pointer select-none w-fit">
@@ -2088,7 +2107,7 @@ function DropZone() {
       <input ref={inputRef} type="file" accept={MEDIA_ACCEPT} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); }} />
       <input ref={batchRef} type="file" multiple accept={MEDIA_ACCEPT} className="hidden"
-        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.voDuckMode = voDuckMode; batchState.dubMixMode = dubMixMode; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; s.setStage("batch"); } }} />
+        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.autoAlign = autoAlign; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.voDuckMode = voDuckMode; batchState.dubMixMode = dubMixMode; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; s.setStage("batch"); } }} />
 
       {/* Модальное окно "Все проекты" со скроллом и поиском */}
       {allProjectsModal && (
@@ -8399,8 +8418,8 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
 }
 
 // Пакетная обработка: DropZone кладёт выбранные файлы + настройки сюда, BatchView читает (без раздувания стора).
-const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; funnyOn: boolean; funny: string; voGain: number; voDuckMode: string; dubMixMode: string; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
-  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") !== "0" : true, funnyOn: false, funny: "", voGain: -12, voDuckMode: "dynamic", dubMixMode: "separated", trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
+const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; autoAlign: boolean; funnyOn: boolean; funny: string; voGain: number; voDuckMode: string; dubMixMode: string; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
+  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") === "1" : false, autoAlign: typeof window !== "undefined" ? localStorage.getItem("dub-auto-align") !== "0" : true, funnyOn: false, funny: "", voGain: -12, voDuckMode: "dynamic", dubMixMode: "separated", trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
 
 type BatchItem = {
   name: string;
@@ -8419,10 +8438,11 @@ function BatchView() {
   const { t } = useTranslation();
   const setStage = useStore((s) => s.setStage);
   const filesRef = useRef<File[]>(batchState.files);
-  const { tgt, src, audio, subs, burn, detectText, subBlur, funnyOn, funny, voGain, voDuckMode, dubMixMode, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
+  const { tgt, src, audio, subs, burn, detectText, subBlur, autoAlign, funnyOn, funny, voGain, voDuckMode, dubMixMode, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
   const visionOn = useStore((s) => s.visionOn);
   const setVisionOn = useStore((s) => s.setVisionOn);
   const [batchSubBlur, setBatchSubBlur] = useState(subBlur);
+  const [batchAutoAlign, setBatchAutoAlign] = useState(autoAlign);
   const [items, setItems] = useState<BatchItem[]>(() => filesRef.current.map((f) => ({ name: f.name, status: "queued", pid: null, pct: 0, subsFile: null })));
   const [running, setRunning] = useState(false);
   const [doneN, setDoneN] = useState(0);
@@ -8471,6 +8491,12 @@ function BatchView() {
             upd({ pct: e.pct ?? null, stage: e.stage, detail: e.msg || stepText || undefined });
           }
         });
+        // Автовыравнивание по вокалу: привязка старта фраз к звуку речи перед рендером
+        if (batchAutoAlign) {
+          try {
+            await api.alignProject(project_id);
+          } catch { /* fail-safe */ }
+        }
         if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain, mode: voDuckMode });   // громкость и режим дакинга со старта -> общий для всех проектов батча
         if (audio === "dub") await api.patch(project_id, { op: "dub_mix_mode", mode: dubMixMode });
         // Блюр-подложка под субтитрами: патчим в проект перед рендером
@@ -8533,6 +8559,14 @@ function BatchView() {
             <span className="text-[15px] font-semibold flex items-center gap-2 whitespace-nowrap"><FolderDown size={16} className="text-[var(--color-accent)]" />{t("batch.title")}</span>
           </div>
           <div className="flex items-center gap-3 shrink-0">
+            {/* Тумблер автовыравнивания по вокалу */}
+            <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title="Автовыравнивание по вокалу: привязка старта фраз к звуку речи.">
+              <input type="checkbox" checked={batchAutoAlign} disabled={running} onChange={(e) => { setBatchAutoAlign(e.target.checked); batchState.autoAlign = e.target.checked; }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
+              <span>Выравнивание</span>
+              <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${batchAutoAlign ? "bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]" : "bg-[var(--color-surface-2)] text-[var(--color-muted)]"}`}>
+                {batchAutoAlign ? "ВКЛ" : "ВЫКЛ"}
+              </span>
+            </label>
             {/* Тумблер блюр-подложки */}
             <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title="Размытая подложка под субтитрами. Выкл = чистый текст без блюра видеоряда.">
               <input type="checkbox" checked={batchSubBlur} disabled={running} onChange={(e) => { setBatchSubBlur(e.target.checked); batchState.subBlur = e.target.checked; }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />

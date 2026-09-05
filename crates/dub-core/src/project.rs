@@ -455,7 +455,7 @@ impl Default for Render {
         Render {
             burn_cq: cq24(),
             blur_sigma: sigma60(),
-            blur: true,
+            blur: false,
             codec: hevc(),
             extra: Extra::new(),
         }
