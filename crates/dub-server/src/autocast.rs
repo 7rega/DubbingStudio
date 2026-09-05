@@ -16,7 +16,7 @@ use dub_core::Project;
 use crate::wavio;
 
 /// Порог основного тона для разделения полов (Гц).
-pub const GENDER_F0_THRESHOLD_HZ: f32 = 165.0;
+pub const GENDER_F0_THRESHOLD_HZ: f32 = 160.0;
 /// Порог основного тона для детских голосов в паках доноров без маркеров (Гц).
 pub const CHILD_F0_THRESHOLD_HZ: f32 = 300.0;
 
@@ -204,39 +204,44 @@ pub fn detect_speaker_gender(
         }
     }
 
-    // 3. Маркеры пола в имени персонажа
+    // 3. Маркеры пола в имени/роли персонажа
     if matches_voice_marker(
         &lower,
-        &["female", "famale", "жен", "женщина", "девушка", "мать", "мама", "woman", "lady"],
+        &["female", "famale", "жен", "женщина", "девушка", "мать", "мама", "woman", "lady", "дочь", "дочка", "сестра", "бабушка"],
         &["_fem_", "_fem", "fem_", "ru_fem", "en_fem", "female", "famale"],
     ) {
         return "female".to_string();
     }
     if matches_voice_marker(
         &lower,
-        &["male", "муж", "мужчина", "парень", "отец", "папа", "man", "guy"],
+        &["male", "муж", "мужчина", "парень", "отец", "папа", "man", "guy", "player", "игрок", "coach", "тренер", "дедушка", "брат", "боец", "солдат"],
         &["_male_", "_male", "male_", "_m_", "ru_male", "en_male"],
     ) {
         return "male".to_string();
     }
 
-    // 4. Если WeSpeaker эмбеддинг уверенно определил акустический тракт (форманты)
-    if let Some(tg) = tract_gender {
-        return tg.to_string();
+    // 4. Физическая частота связок F0:
+    // Мужской диапазон в нормальной речи: до 160 Гц.
+    // Физика вибрации мужских связок первична — спокойный голос <= 160 Гц не может принадлежать женщине!
+    if f0 <= GENDER_F0_THRESHOLD_HZ {
+        return "male".to_string();
     }
 
-    // 5. Без маркеров и эмбеддингов — по частоте основного тона: <165 Гц — мужчина, >=165 Гц — женщина
-    if f0 < GENDER_F0_THRESHOLD_HZ {
-        "male".to_string()
-    } else {
-        "female".to_string()
+    // 5. Если частота выше 160 Гц:
+    // Это либо взрослая женщина (норма 165-255 Гц), либо эмоционально кричащий взрослый мужчина (220-350 Гц).
+    // Если WeSpeaker уверенно подтверждает мужской голосовой тракт — защищаем кричащего мужчину:
+    if tract_gender == Some("male") {
+        return "male".to_string();
     }
+
+    // По умолчанию выше 160 Гц — взрослая женщина
+    "female".to_string()
 }
 
 /// Определение пола по голосовому тракту WeSpeaker (форманты и тембр)
 /// по отношению к профилям доноров пака.
-/// Сравниваем топ-3 ближайших женских и топ-3 ближайших мужских доноров.
-/// Возвращает Some("female"), Some("male") или None если профилей мало / нет перевеса.
+/// Сравниваем топ-3 ближайших мужских и топ-3 ближайших женских доноров.
+/// Возвращает Some("male") только при заметном перевесе мужского сходства над женским.
 fn detect_tract_gender(emb: &[f32], pack: &[PackVoiceProfile]) -> Option<&'static str> {
     if emb.is_empty() {
         return None;
@@ -270,11 +275,11 @@ fn detect_tract_gender(emb: &[f32], pack: &[PackVoiceProfile]) -> Option<&'stati
     let fem_avg: f32 = fem_top_k.iter().sum::<f32>() / fem_top_k.len() as f32;
     let male_avg: f32 = male_top_k.iter().sum::<f32>() / male_top_k.len() as f32;
 
-    let margin = fem_avg - male_avg;
-    if margin > 0.02 {
-        Some("female")
-    } else if margin < -0.02 {
+    let margin = male_avg - fem_avg;
+    if margin > 0.03 {
         Some("male")
+    } else if (fem_avg - male_avg) > 0.05 {
+        Some("female")
     } else {
         None
     }
@@ -528,9 +533,10 @@ fn extract_speaker_candidate(
     let tract_gender = detect_tract_gender(&embedding, pack_profiles);
 
     let f0_measured = estimate_f0_median(&collected, sr);
-    let mut f0 = match f0_measured {
+    let f0 = match f0_measured {
         Some(val) => val,
         None => {
+            // Если F0 не удалось замерить физически (тишина/шепот):
             if tract_gender == Some("female") {
                 210.0
             } else {
@@ -538,14 +544,6 @@ fn extract_speaker_candidate(
             }
         }
     };
-
-    // Если F0 занижен (шум, шепот), но WeSpeaker тракт женский — корректируем F0
-    if f0 < GENDER_F0_THRESHOLD_HZ && tract_gender == Some("female") {
-        f0 = 210.0;
-    } else if f0 >= GENDER_F0_THRESHOLD_HZ && tract_gender == Some("male") && f0 < 220.0 {
-        // Если мужчина говорит эмоционально (F0 в зоне перекрытия 165-220), но WeSpeaker уверенно мужской
-        f0 = 135.0;
-    }
 
     let gender = detect_speaker_gender(&actor_name, f0, casting_gender, tract_gender);
 
@@ -886,11 +884,19 @@ mod tests {
 
     #[test]
     fn test_detect_speaker_gender_rules() {
-        // Обычные взрослые роли («Врач», «Игрок») никогда не должны становиться детьми:
+        // Парни (Elliot, Kane, Coach, Opponent) с глубокими мужскими голосами:
+        assert_eq!(detect_speaker_gender("Elliot", 114.3, None, None), "male");
+        assert_eq!(detect_speaker_gender("Kane", 116.8, None, None), "male");
+        assert_eq!(detect_speaker_gender("Coach", 94.1, None, None), "male");
+        assert_eq!(detect_speaker_gender("Opponent", 111.1, None, None), "male");
+
+        // Женщины («Doctor», «Врач» ~163-220 Гц):
+        assert_eq!(detect_speaker_gender("Doctor", 163.3, None, None), "female");
         assert_eq!(detect_speaker_gender("Врач", 210.0, None, None), "female");
         assert_eq!(detect_speaker_gender("Врач", 150.0, Some("female"), None), "female");
-        assert_eq!(detect_speaker_gender("Игрок", 130.0, None, None), "male");
-        // Даже при эмоциональном крике на 260 Гц взрослый персонаж без детских маркеров не становится child:
+
+        // Кричащий взрослый мужчина (Player на 291 Гц):
+        assert_eq!(detect_speaker_gender("Player", 290.9, None, Some("male")), "male");
         assert_eq!(detect_speaker_gender("Игрок", 260.0, None, Some("male")), "male");
 
         // Детские маркеры:

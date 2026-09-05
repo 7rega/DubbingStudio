@@ -2268,6 +2268,19 @@ fn pick_ref_window(
     })
 }
 
+/// Безопасный ASCII-тег для имени спикера в именах файлов референсов.
+/// Защищает C++ движок (Higgs/audiocpp_engine.dll) под Windows от падений при кириллице в путях.
+fn safe_spk_tag(spk: &str) -> String {
+    if spk.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') && !spk.is_empty() {
+        spk.to_string()
+    } else {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        spk.hash(&mut hasher);
+        format!("u{:012x}", hasher.finish())
+    }
+}
+
 fn build_speaker_refs(
     segs: &[(usize, &dub_core::Segment)],
     vocals16: &Path,
@@ -2288,7 +2301,8 @@ fn build_speaker_refs(
         // НОВЫЙ выбор (#81): окно 7-12с, ±1с обрезка, дроп первой реплики. ТОЛЬКО под флагом.
         for spk in speakers {
             let Some(pick) = pick_ref_window(&spk, segs, ref_secs) else { continue };
-            let ref_wav = wd.join(format!("ref_spk{spk}.wav"));
+            let stag = safe_spk_tag(&spk);
+            let ref_wav = wd.join(format!("ref_spk{stag}.wav"));
             media::trim(vocals16, &ref_wav, pick.start, pick.end.max(pick.start + 0.05), 16_000)?;
             refs.insert(spk.clone(), ref_wav);
             if pick.exact_cover && !pick.src_text.is_empty() {
@@ -2354,8 +2368,9 @@ fn build_speaker_refs(
             }
         }
         batch_pos.insert(spk.clone(), batch.len());
+        let stag = safe_spk_tag(spk);
         for (i, c) in good.iter().enumerate() {
-            let p = wd.join(format!("ref_cand_spk{spk}_{i}.wav"));
+            let p = wd.join(format!("ref_cand_spk{stag}_{i}.wav"));
             media::trim(vocals16, &p, c.start, c.end.min(c.start + ref_secs), 16_000)?;
             batch.push(p);
         }
@@ -2398,8 +2413,9 @@ fn build_speaker_refs(
             }
         };
         let main_seg = cands[main_i];
-        let ref_wav = wd.join(format!("ref_spk{spk}.wav"));
-        std::fs::rename(wd.join(format!("ref_cand_spk{spk}_{main_i}.wav")), &ref_wav)
+        let stag = safe_spk_tag(spk);
+        let ref_wav = wd.join(format!("ref_spk{stag}.wav"));
+        std::fs::rename(wd.join(format!("ref_cand_spk{stag}_{main_i}.wav")), &ref_wav)
             .map_err(|e| format!("реф спикера {spk}: {e}"))?;
         refs.insert(spk.clone(), ref_wav);
         // ref_text: прошёл сверку -> УСЛЫШАННОЕ (точно соответствует звуку клипа); иначе src_text.
@@ -2418,8 +2434,8 @@ fn build_speaker_refs(
             .map(|(i, h, _)| (*i, *h))
             .or_else(|| verdict.iter().find(|(i, _, _)| *i != main_i).map(|(i, h, _)| (*i, *h)));
         if let Some((ai, ah)) = alt {
-            let alt_wav = wd.join(format!("ref_alt_spk{spk}.wav"));
-            if std::fs::rename(wd.join(format!("ref_cand_spk{spk}_{ai}.wav")), &alt_wav).is_ok() {
+            let alt_wav = wd.join(format!("ref_alt_spk{stag}.wav"));
+            if std::fs::rename(wd.join(format!("ref_cand_spk{stag}_{ai}.wav")), &alt_wav).is_ok() {
                 let at = ah
                     .filter(|h| !h.trim().is_empty())
                     .map(str::to_string)
@@ -2429,7 +2445,7 @@ fn build_speaker_refs(
         }
         // Прибрать невостребованных кандидатов.
         for (i, _) in cands.iter().enumerate() {
-            let _ = std::fs::remove_file(wd.join(format!("ref_cand_spk{spk}_{i}.wav")));
+            let _ = std::fs::remove_file(wd.join(format!("ref_cand_spk{stag}_{i}.wav")));
         }
         emit(
             progress,
