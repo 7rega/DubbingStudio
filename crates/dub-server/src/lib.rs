@@ -2894,6 +2894,7 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
     }
 
     let audio_file = [
+        "vocals16_clean.wav",
         "stems/vocals.wav",
         "vocals16.wav",
         "ref_vocals16.wav",
@@ -2917,41 +2918,18 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         let mut count = 0usize;
         let mut wav_path = audio_file;
         let voc16 = d.join("vocals16_align.wav");
-        if wav_path.is_file() && media::to_16k_mono(&wav_path, &voc16).is_ok() {
-            wav_path = voc16;
+        let is_already_16k = wav_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|n| n.starts_with("vocals16"));
+        if !is_already_16k && wav_path.is_file() && media::to_16k_mono(&wav_path, &voc16).is_ok() {
+            wav_path = voc16.clone();
         }
 
         let n_segs = proj.segments.len();
-        let mut aligned_by_words = vec![false; n_segs];
+        let mut acoustically_aligned = vec![false; n_segs];
 
-        // 1. Пословное выравнивание Whisper/ASR (100% защита от вздохов, кашля и шумов)
-        for i in 0..n_segs {
-            if let Some(serde_json::Value::Array(words)) = proj.segments[i].extra.get("words") {
-                if !words.is_empty() {
-                    let first_start = words.first().and_then(|w| w.get("start")).and_then(serde_json::Value::as_f64);
-                    let last_end = words.last().and_then(|w| w.get("end")).and_then(serde_json::Value::as_f64);
-                    if let (Some(ws), Some(we)) = (first_start, last_end) {
-                        if we > ws && ws >= 0.0 {
-                            let prev_bound = if i > 0 { proj.segments[i - 1].end + dub_asr::MIN_SUBTITLE_GAP } else { 0.0 };
-                            let next_bound = if i + 1 < n_segs { proj.segments[i + 1].start - dub_asr::MIN_SUBTITLE_GAP } else { f64::INFINITY };
-                            let target_start = (ws - dub_asr::SPEECH_LEAD_IN).max(prev_bound).max(0.0);
-                            let target_end = (we + dub_asr::SPEECH_TAIL).min(next_bound).max(target_start + 0.100);
-                            let r_start = (target_start * 100.0).round() / 100.0;
-                            let r_end = (target_end * 100.0).round() / 100.0;
-                            if (r_start - proj.segments[i].start).abs() > 0.015 || (r_end - proj.segments[i].end).abs() > 0.015 {
-                                proj.segments[i].start = r_start;
-                                proj.segments[i].end = r_end;
-                                proj.segments[i].dirty = true;
-                                count += 1;
-                            }
-                            aligned_by_words[i] = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Для сегментов без сохранённых слов (новые/отредактированные) — строгий гармонический VAD
+        // 1. Приоритетное акустическое выравнивание по чистому вокалу (Harmonic VAD + Onset)
         if let Ok((samples, sr)) = wavio::read_mono_f32(&wav_path) {
             let mut bounds: Vec<dub_asr::SegmentBound> = proj
                 .segments
@@ -2964,14 +2942,70 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
 
             let changes = dub_asr::align_bounds(&mut bounds, &samples, sr);
             for (i, changed) in changes.into_iter().enumerate() {
-                if !aligned_by_words[i] && changed {
-                    proj.segments[i].start = bounds[i].start;
-                    proj.segments[i].end = bounds[i].end;
-                    proj.segments[i].dirty = true;
-                    count += 1;
+                if changed {
+                    let r_start = (bounds[i].start * 100.0).round() / 100.0;
+                    let r_end = (bounds[i].end * 100.0).round() / 100.0;
+                    if (r_start - proj.segments[i].start).abs() > 0.015 || (r_end - proj.segments[i].end).abs() > 0.015 {
+                        proj.segments[i].start = r_start;
+                        proj.segments[i].end = r_end;
+                        proj.segments[i].dirty = true;
+                        count += 1;
+
+                        // Если есть пословный тайминг, подтягиваем слова к обновлённым границам фразы
+                        if let Some(serde_json::Value::Array(words)) = proj.segments[i].extra.get_mut("words") {
+                            for w in words.iter_mut() {
+                                if let Some(obj) = w.as_object_mut() {
+                                    if let Some(ws) = obj.get("start").and_then(|v| v.as_f64()) {
+                                        if ws < r_start {
+                                            obj.insert("start".into(), serde_json::json!(r_start));
+                                        }
+                                    }
+                                    if let Some(we) = obj.get("end").and_then(|v| v.as_f64()) {
+                                        if we > r_end {
+                                            obj.insert("end".into(), serde_json::json!(r_end));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    acoustically_aligned[i] = true;
                 }
             }
         }
+
+        // 2. Фолбэк по пословным границам только для тех сегментов, где акустический VAD не нашёл звук
+        for i in 0..n_segs {
+            if !acoustically_aligned[i] {
+                if let Some(serde_json::Value::Array(words)) = proj.segments[i].extra.get("words") {
+                    if !words.is_empty() {
+                        let first_start = words.first().and_then(|w| w.get("start")).and_then(serde_json::Value::as_f64);
+                        let last_end = words.last().and_then(|w| w.get("end")).and_then(serde_json::Value::as_f64);
+                        if let (Some(ws), Some(we)) = (first_start, last_end) {
+                            if we > ws && ws >= 0.0 {
+                                let prev_bound = if i > 0 { proj.segments[i - 1].end + dub_asr::MIN_SUBTITLE_GAP } else { 0.0 };
+                                let next_bound = if i + 1 < n_segs { proj.segments[i + 1].start - dub_asr::MIN_SUBTITLE_GAP } else { f64::INFINITY };
+                                let target_start = ws.max(prev_bound).max(0.0);
+                                let target_end = (we + dub_asr::SPEECH_TAIL).min(next_bound).max(target_start + 0.100);
+                                let r_start = (target_start * 100.0).round() / 100.0;
+                                let r_end = (target_end * 100.0).round() / 100.0;
+                                if (r_start - proj.segments[i].start).abs() > 0.015 || (r_end - proj.segments[i].end).abs() > 0.015 {
+                                    proj.segments[i].start = r_start;
+                                    proj.segments[i].end = r_end;
+                                    proj.segments[i].dirty = true;
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if voc16.is_file() {
+            let _ = std::fs::remove_file(&voc16);
+        }
+
         let _ = save_project_atomic(&d, &proj);
         (count, proj)
     }).await;
