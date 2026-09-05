@@ -100,6 +100,8 @@ pub fn is_selection_key(key: &str) -> bool {
             | "dub_reverb_match" // "1" -> легкое акустическое согласование пространства (Early Reflections); "0" -> сухой звук
             | "voice_manual_ctrl" // "1" -> ручной контроль температуры/стабильности голоса; "0" -> дефолт
             | "voice_temp"      // температура голоса: "0.10".."0.36" (дефолт "0.20")
+            | "auto_cast_on"    // "1" -> доступность автоподбора голосов (Auto-Cast) из пака voices/; "0" -> выкл
+            | "auto_cast_pack"  // выбранная подпапка пака (пусто = весь каталог voices/)
             // Облачные модели (OpenRouter) — опциональная замена тяжёлого локального LLM/TTS. Всё ВЫКЛ по умолчанию.
             | "or_key"          // API-ключ OpenRouter (хранится локально в active.json, не логируется)
             | "or_llm_on"       // "1" -> перевод через OpenRouter chat вместо локальной Gemma
@@ -254,6 +256,11 @@ pub fn bench_enabled(mroot: &Path) -> bool {
 /// без него фон в дубляже звучит на полной громкости под голосом. Настройка "duck_on"="1".
 pub fn duck_enabled(mroot: &Path) -> bool {
     pick(&load_selection(mroot), "duck_on") == Some("1")
+}
+
+/// Включён ли автоподбор голосов (Auto-Cast) из пака voices/. Дефолт true ("1"); выкл "0".
+pub fn auto_cast_enabled(mroot: &Path) -> bool {
+    pick(&load_selection(mroot), "auto_cast_on") != Some("0")
 }
 
 /// Включён ли мультимодальный анализ видеокадров (Vision): "0" -> выкл (Fast Text Mode), иначе вкл (дефолт true).

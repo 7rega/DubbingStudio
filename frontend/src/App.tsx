@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -668,6 +668,8 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [emoRefClean, setEmoRefClean] = useState(false);
   const [voLeadIn, setVoLeadIn] = useState(true);
   const [dubReverbMatch, setDubReverbMatch] = useState(true);
+  const autoCastOn = useStore((s) => s.autoCastOn);
+  const setAutoCastOn = useStore((s) => s.setAutoCastOn);
   useEffect(() => {
     api.capabilities().then((c) => {
       setBench(c.selection?.bench === "1");
@@ -680,8 +682,9 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       setEmoRefClean(c.selection?.emo_ref_clean === "1");
       setVoLeadIn(c.selection?.vo_lead_in !== "0");
       setDubReverbMatch(c.selection?.dub_reverb_match !== "0");
+      if (c.selection?.auto_cast_on !== undefined) setAutoCastOn(c.selection.auto_cast_on !== "0");
     }).catch(() => {});
-  }, []);
+  }, [setAutoCastOn]);
   return (
     <div className="fixed inset-0 z-50 grid place-items-center glass-scrim anim-fade" onClick={onClose}>
       <div className="w-[min(92vw,720px)] max-h-[88vh] flex flex-col rounded-xl glass-panel anim-pop p-5" onClick={(e) => e.stopPropagation()}>
@@ -748,6 +751,20 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               <button onClick={() => { const v = !qcDur; setQcDur(v); api.setSelection("qc_duration", v ? "1" : "0").catch(() => {}); }} title="Контроль длительности фраз"
                 className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${qcDur ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${qcDur ? "left-[18px]" : "left-0.5"}`} />
+              </button>
+            </label>
+            {/* Автоподбор голосов (Auto-Cast) */}
+            <label className="flex items-center justify-between gap-3 mb-2.5" title="Автоматический подбор и распределение голосов из voices/ по тембру и полу персонажей">
+              <div className="min-w-0 flex-1">
+                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
+                  <Wand2 size={14} className="text-[var(--color-accent-2)]" />
+                  Автоподбор голосов (Auto-Cast)
+                </span>
+                <span className="block text-[10px] text-[var(--color-muted)]">автоматический подбор голосов из voices/ по тембру и полу персонажей</span>
+              </div>
+              <button onClick={() => { const v = !autoCastOn; setAutoCastOn(v); api.setSelection("auto_cast_on", v ? "1" : "0").catch(() => {}); }} title="Автоподбор голосов"
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${autoCastOn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${autoCastOn ? "left-[18px]" : "left-0.5"}`} />
               </button>
             </label>
             {/* Multi-take отбор (3 дубля) */}
@@ -1283,8 +1300,18 @@ function DropZone() {
   // Сохранить оригинальную дорожку (#113): 2-я аудиодорожка + контейнер вывода (mp4|mkv). Персист.
   // Дакинг фона под дубляжом — опция дубляжа (active.json duck_on), ВЫКЛ по умолчанию (не всем нужен).
   const [duckOn, setDuckOn] = useState(false);
-  useEffect(() => { api.capabilities().then((c) => setDuckOn(c.selection?.duck_on === "1")).catch(() => {}); }, []);
+  const autoCastOn = useStore((s) => s.autoCastOn);
+  const [voiceSubfolders, setVoiceSubfolders] = useState<string[]>([]);
+  const [autoCastPack, setAutoCastPack] = useState<string>(() => localStorage.getItem("dub-autocast-pack") ?? "");
+  const setAutoCastPackSaved = (v: string) => { setAutoCastPack(v); localStorage.setItem("dub-autocast-pack", v); };
+  useEffect(() => {
+    api.capabilities().then((c) => {
+      setDuckOn(c.selection?.duck_on === "1");
+    }).catch(() => {});
+  }, []);
   const setDuckSaved = (v: boolean) => { setDuckOn(v); api.setSelection("duck_on", v ? "1" : "0").catch(() => {}); };
+  const [autoCastAuto, setAutoCastAuto] = useState<boolean>(() => localStorage.getItem("dub-autocast-auto") === "1");
+  const setAutoCastAutoSaved = (v: boolean) => { setAutoCastAuto(v); localStorage.setItem("dub-autocast-auto", v ? "1" : "0"); };
   // Блюр-подложка под сожжёнными субтитрами — опция (не всем нужна), дефолт ВКЛ; патчится в проект после analyze.
   const [subBlur, setSubBlur] = useState<boolean>(() => localStorage.getItem("dub-sub-blur") !== "0");
   const setSubBlurSaved = (v: boolean) => { setSubBlur(v); localStorage.setItem("dub-sub-blur", v ? "1" : "0"); };
@@ -1303,7 +1330,12 @@ function DropZone() {
   const [voiceLib, setVoiceLib] = useState<string[]>([]);                        // имена голосов из GET /voices (для селектов слотов)
   const [mainTranscribeSpeakers, setMainTranscribeSpeakers] = useState<number>(0); // выбор спикеров для режима транскрипции на главном экране
   const visionOn = useStore((s) => s.visionOn);
-  useEffect(() => { api.voices().then((r) => setVoiceLib(r.voices)).catch(() => {}); }, []);
+  useEffect(() => {
+    api.voices().then((r) => {
+      setVoiceLib(r.voices);
+      if (r.subfolders) setVoiceSubfolders(r.subfolders);
+    }).catch(() => {});
+  }, []);
   const [preview, setPreview] = useState<string | null>(null);                  // objectURL превью выбранного видео (первый кадр)
   const audioOnly = !!file && isAudioFile(file);                                // вход без видео -> режим «только аудио»
   useEffect(() => {                                                             // создаём/освобождаем objectURL под выбранный файл
@@ -1484,6 +1516,17 @@ function DropZone() {
           const nAssigned = Object.values(r.speakers || {}).filter((s) => s && s.voice).length;
           useStore.getState().pushActivity(t("voiceSlots.assigned", { n: nAssigned }), "done");
         } catch (e) { useStore.getState().pushActivity(String(e), "error"); }
+      }
+      // Автоподбор голосов из пака voices/ (#autocast): если включен авторежим на старте
+      if (autoCastOn && autoCastAuto && (audio === "dub" || audio === "voiceover")) {
+        try {
+          const r = await api.autoCast(project_id, autoCastPack || undefined);
+          if (r.ok && r.summary && r.summary.length) {
+            useStore.getState().pushActivity(`Автоподбор: ${r.summary.join(" | ")}`, "done");
+          }
+        } catch (e) {
+          useStore.getState().pushActivity(String(e), "error");
+        }
       }
       s.setProject(await api.getProject(project_id));
       // Озвучку готовим ЗДЕСЬ, на экране загрузки (не собирая видео — кадры даёт per-frame preview),
@@ -1722,6 +1765,38 @@ function DropZone() {
                         <p className="text-[10px] text-[var(--color-muted)] leading-tight">{t("voiceSlots.priorityHint")}</p>
                         <VoiceSlotList title={t("voiceSlots.male")} voices={voiceLib} slots={slotsM} onChange={setSlotsMSaved} />
                         <VoiceSlotList title={t("voiceSlots.female")} voices={voiceLib} slots={slotsF} onChange={setSlotsFSaved} />
+                      </div>
+                    )}
+                    {autoCastOn && (
+                      <div className="mt-2.5 flex items-center justify-between gap-2 flex-wrap">
+                        <label className="flex items-center gap-2 text-[12px] text-[var(--color-text)] cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={autoCastAuto}
+                            onChange={(e) => setAutoCastAutoSaved(e.target.checked)}
+                            className="accent-[var(--color-accent)] w-3.5 h-3.5"
+                          />
+                          <span>{t("voice.autoCastOnImport", "Автоподбор голосов после анализа (Auto-Cast)")}</span>
+                          <span title="Автоматически подобрать голоса из папки voices/ по тембру и полу спикеров сразу после анализа видео" className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition">
+                            <HelpCircle size={12} />
+                          </span>
+                        </label>
+                        {autoCastAuto && voiceSubfolders.length > 0 && (
+                          <div className="flex items-center gap-1.5 text-[11px] ml-auto">
+                            <span className="text-[var(--color-muted)]">📁</span>
+                            <select
+                              value={autoCastPack}
+                              onChange={(e) => setAutoCastPackSaved(e.target.value)}
+                              className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none"
+                            >
+                              <option value="">{t("voice.rootPack", "Корень (voices/)")}</option>
+                              {voiceSubfolders.map((sf) => (
+                                <option key={sf} value={sf}>{sf}</option>
+                              ))}
+                              <option value="all">{t("voice.allPacks", "Все папки (voices/ + подкаталоги)")}</option>
+                            </select>
+                          </div>
+                        )}
                       </div>
                     )}
                   </Accordion>
@@ -4501,6 +4576,8 @@ function Editor() {
   const [selTitles, setSelTitles] = useState<Set<number>>(new Set()); // multi-select: titles
   const [fonts, setFonts] = useState<Record<string, string>>({});
   const [voiceList, setVoiceList] = useState<string[]>([]);
+  const [voiceSubfolders, setVoiceSubfolders] = useState<string[]>([]);
+  const [selectedSubfolder, setSelectedSubfolder] = useState<string>(() => (p.audio as any).auto_cast_pack ?? localStorage.getItem("dub-autocast-pack") ?? "");
   const [castVoices, setCastVoices] = useState<string[]>([]);
   const refreshCastVoices = async () => {
     try {
@@ -4524,8 +4601,17 @@ function Editor() {
     cur?.pause();
     const a = new Audio(api.voiceSampleUrl(name));
     voicePreviewAudio.current = a;
-    a.onended = () => setVoicePreview(null);
-    a.play().then(() => { if (voicePreviewAudio.current === a) setVoicePreview(name); }).catch(() => { if (voicePreviewAudio.current === a) setVoicePreview(null); });
+    a.onended = () => { if (voicePreviewAudio.current === a) setVoicePreview(null); };
+    a.onerror = (e) => {
+      console.warn("Failed to play voice sample:", name, e);
+      if (voicePreviewAudio.current === a) setVoicePreview(null);
+    };
+    a.play().then(() => {
+      if (voicePreviewAudio.current === a) setVoicePreview(name);
+    }).catch((err) => {
+      console.warn("Voice preview error:", err);
+      if (voicePreviewAudio.current === a) setVoicePreview(null);
+    });
   };
   const [gainDraft, setGainDraft] = useState<number | null>(null);
   const [voiceGainDraft, setVoiceGainDraft] = useState<number | null>(null); // черновик громкости голоса (TTS)
@@ -4558,6 +4644,8 @@ function Editor() {
   const [voiceManualCtrl, setVoiceManualCtrl] = useState(false);
   const [voiceTemp, setVoiceTemp] = useState(0.20);
   const [voiceTempDraft, setVoiceTempDraft] = useState<number | null>(null);
+  const [autoCastBusy, setAutoCastBusy] = useState(false);
+  const autoCastOn = useStore((s) => s.autoCastOn);
   useEffect(() => {
     api.capabilities().then((c) => {
       setDuckOn(c.selection?.duck_on === "1");
@@ -4573,18 +4661,21 @@ function Editor() {
   useEffect(() => { api.fonts().then((r) => setFonts(r.fonts)).catch(() => {}); }, []);   // bundled caption fonts
   // голоса из каталога; если пусто и ещё не пробовали — тихо тянем дефолтный пак (VibeVoice, ~100МБ) в фоне
   useEffect(() => {
-    api.voices().then(async (r) => {
+    api.voices(selectedSubfolder || undefined).then(async (r) => {
       setVoiceList(r.voices);
+      if (r.subfolders) setVoiceSubfolders(r.subfolders);
       if (r.voices.length === 0 && !localStorage.getItem("voicepack-auto")) {
         localStorage.setItem("voicepack-auto", "1");
         try {
           const { job_id } = await api.voicesDownloadPack();
           await api.watchJob(job_id, () => {});
-          const v = await api.voices(); setVoiceList(v.voices);
+          const v = await api.voices(selectedSubfolder || undefined);
+          setVoiceList(v.voices);
+          if (v.subfolders) setVoiceSubfolders(v.subfolders);
         } catch { /* тихо: пак опционален */ }
       }
     }).catch(() => {});
-  }, []);
+  }, [selectedSubfolder]);
   useEffect(() => { api.presets().then((r) => setPresets(r.presets)).catch(() => {}); }, []);   // caption look presets
   const [sizeDraft, setSizeDraft] = useState<number | null>(null);   // live size while dragging (commit on release)
   const [lane, setLane] = useState<"subs" | "blur" | "titles">("subs"); // left lane: which object type to edit
@@ -5311,6 +5402,7 @@ function Editor() {
 
   // единый seek: скраб вейформы/слайдера + позиция dub-аудио (используется хоткеями, слайдером и вейформой)
   function onSeek(tt: number) {
+    userScrolledAtRef.current = 0;
     pendingPlayOnSeekedRef.current = false;
     const clamped = clampTime(tt, p.meta.duration || tt);
     setRendered(false);
@@ -5442,43 +5534,53 @@ function Editor() {
   const subsContainerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLDivElement>(null);
   const prevActiveIdRef = useRef<string | null>(null);
+  const prevViewModeRef = useRef<string | null>(null);
   const userScrolledAtRef = useRef<number>(0);
   useEffect(() => {
-    if (!activeId || activeId === prevActiveIdRef.current) return;
+    const viewModeChanged = prevViewModeRef.current !== subsViewMode;
+    prevViewModeRef.current = subsViewMode;
+
+    if (!activeId) return;
+    if (activeId === prevActiveIdRef.current && !viewModeChanged) return;
     prevActiveIdRef.current = activeId;
 
     // Пауза автоскролла: если пользователь недавно скроллил список вручную, не перебиваем его действия во время воспроизведения
-    if (play && Date.now() - userScrolledAtRef.current < 4000) {
+    if (play && Date.now() - userScrolledAtRef.current < 4000 && !viewModeChanged) {
       return;
     }
 
     const container = subsContainerRef.current;
     if (!container) return;
 
-    // Липкая панель инструментов внутри контейнера занимает ~52px (или ~98px при активном множественном выборе)
-    const STICKY_HEADER_H = selSegs.size > 0 ? 98 : 52;
+    // Липкая панель инструментов внутри контейнера занимает ~52px (или ~98px в режиме карточек при активном множественном выборе)
+    const STICKY_HEADER_H = subsViewMode === "cards" && selSegs.size > 0 ? 98 : 52;
 
     if (activeRef.current) {
       const containerRect = container.getBoundingClientRect();
       const elRect = activeRef.current.getBoundingClientRect();
 
-      const elRelativeTop = elRect.top - containerRect.top;
-      const elRelativeBottom = elRect.bottom - containerRect.top;
-
-      // Зона видимости (Deadzone): если карточка уже комфортно видна между шапкой и низом контейнера — не скроллим
-      if (elRelativeTop >= STICKY_HEADER_H + 10 && elRelativeBottom <= container.clientHeight - 10) {
+      // Защита: если элемент скрыт или имеет нулевой размер, не используем некорректный rect
+      if (elRect.height === 0 && elRect.width === 0) {
         return;
       }
 
-      // При выходе за пределы видимости — позиционируем карточку с отступом под липкой шапкой
+      const elRelativeTop = elRect.top - containerRect.top;
+      const elRelativeBottom = elRect.bottom - containerRect.top;
+
+      // Зона видимости (Deadzone): если карточка/строка уже комфортно видна между шапкой и низом контейнера — не скроллим
+      if (!viewModeChanged && elRelativeTop >= STICKY_HEADER_H + 10 && elRelativeBottom <= container.clientHeight - 10) {
+        return;
+      }
+
+      // При выходе за пределы видимости — позиционируем карточку/строку с отступом под липкой шапкой
       const delta = elRelativeTop - (STICKY_HEADER_H + 16);
       const targetTop = Math.max(0, container.scrollTop + delta);
       container.scrollTo({ top: targetTop, behavior: play ? "auto" : "smooth" });
     } else {
-      // Карточка вне текущего диапазона DOM — скроллим контейнер к её оценочной позиции
+      // Карточка/строка вне текущего диапазона DOM — скроллим контейнер к её оценочной позиции
       const activeIdx = p.segments.findIndex((s) => s.id === activeId);
       if (activeIdx >= 0) {
-        const ROW_ESTIMATE = subsViewMode === "table" ? 28 : 135;
+        const ROW_ESTIMATE = subsViewMode === "table" ? 32 : 135;
         const targetTop = Math.max(0, activeIdx * ROW_ESTIMATE - STICKY_HEADER_H - 16);
         container.scrollTo({ top: targetTop, behavior: play ? "auto" : "smooth" });
       }
@@ -6077,126 +6179,137 @@ function Editor() {
                     </div>
                   );
                 })()}
-                <div className={subsViewMode === "table" ? "rounded-lg border border-[var(--color-border)] overflow-hidden divide-y divide-[var(--color-border)]/40 bg-[var(--color-surface)] select-none" : "hidden"}>
-                  {p.segments.map((seg, idx) => {
-                    const isSelected = selSegs.has(seg.id);
-                    const isCurrent = scrub >= seg.start && scrub < seg.end;
-                    const actorName = seg.speaker && seg.speaker !== "0" ? seg.speaker : "";
-                    return (
-                      <div
-                        key={seg.id}
-                        ref={isCurrent ? activeRef : undefined}
-                        onMouseDown={(e) => handleRowMouseDown(idx, seg.id, e)}
-                        onMouseEnter={() => handleRowMouseEnter(idx)}
-                        onDoubleClick={() => onSeek(seg.start)}
-                        className={`flex items-center gap-2 px-2.5 py-1 text-[11px] cursor-pointer transition-colors ${
-                          isSelected
-                            ? "bg-[var(--color-accent)]/20 text-[var(--color-text)] ring-1 ring-inset ring-[var(--color-accent)]/50"
-                            : isCurrent
-                            ? "bg-[var(--color-surface-2)] text-[var(--color-text)]"
-                            : "hover:bg-[var(--color-surface-2)]/60 text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                        }`}
-                      >
-                        <span className="mono text-[10px] w-6 shrink-0 opacity-50 font-bold">#{idx + 1}</span>
-                        <span className="mono text-[9.5px] shrink-0 opacity-60 w-11 tabnum">{fmtT(seg.start)}</span>
-                        <input
-                          type="text"
-                          value={seg.tgt_text ?? seg.src_text ?? ""}
-                          onChange={(e) => patchSeg(seg.id, e.target.value)}
-                          onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              (e.target as HTMLInputElement).blur();
-                            }
+                {subsViewMode === "table" ? (
+                  <div className="rounded-lg border border-[var(--color-border)] overflow-hidden divide-y divide-[var(--color-border)]/40 bg-[var(--color-surface)] select-none">
+                    {p.segments.map((seg, idx) => {
+                      const isSelected = selSegs.has(seg.id);
+                      const isCurrent = seg.id === activeId;
+                      const actorName = seg.speaker && seg.speaker !== "0" ? seg.speaker : "";
+                      return (
+                        <div
+                          key={seg.id}
+                          ref={isCurrent ? activeRef : undefined}
+                          onMouseDown={(e) => handleRowMouseDown(idx, seg.id, e)}
+                          onMouseEnter={() => handleRowMouseEnter(idx)}
+                          onDoubleClick={() => {
+                            userScrolledAtRef.current = 0;
+                            prevActiveIdRef.current = null;
+                            onSeek(seg.start);
                           }}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          title={`${seg.tgt_text || seg.src_text || ""}\n\n(Двойной клик по строке — перейти к видео)`}
-                          placeholder="Текст перевода…"
-                          className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-surface)] rounded px-1.5 py-0.5 text-[11.5px] text-[var(--color-text)] focus:outline-none transition-colors truncate"
-                        />
-                        <div className="shrink-0" onMouseDown={(e) => e.stopPropagation()}>
-                          <button
-                            type="button"
-                            onMouseDown={(e) => e.stopPropagation()}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const rect = e.currentTarget.getBoundingClientRect();
-                              const targetIds = (selSegs.has(seg.id) || selSegs.size > 1) && selSegs.size > 0 ? [...selSegs] : [seg.id];
-                              setActorPickerState({ targetIds, x: rect.left, y: rect.bottom + 4 });
+                          className={`flex items-center gap-2 px-2.5 py-1 text-[11px] cursor-pointer transition-colors ${
+                            isSelected
+                              ? "bg-[var(--color-accent)]/20 text-[var(--color-text)] ring-1 ring-inset ring-[var(--color-accent)]/50"
+                              : isCurrent
+                              ? "bg-[var(--color-surface-2)] text-[var(--color-text)]"
+                              : "hover:bg-[var(--color-surface-2)]/60 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                          }`}
+                        >
+                          <span className="mono text-[10px] w-6 shrink-0 opacity-50 font-bold">#{idx + 1}</span>
+                          <span className="mono text-[9.5px] shrink-0 opacity-60 w-11 tabnum">{fmtT(seg.start)}</span>
+                          <input
+                            type="text"
+                            value={seg.tgt_text ?? seg.src_text ?? ""}
+                            onChange={(e) => patchSeg(seg.id, e.target.value)}
+                            onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                (e.target as HTMLInputElement).blur();
+                              }
                             }}
-                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors max-w-[110px] truncate ${
-                              actorName
-                                ? "bg-[var(--color-surface-2)] text-emerald-400 border-emerald-500/30 hover:border-emerald-500/60 font-semibold"
-                                : "bg-transparent text-[var(--color-muted)] border-dashed border-[var(--color-border)] hover:border-[var(--color-muted)] hover:text-[var(--color-text)]"
-                            }`}
-                            title={actorName ? `Актёр: ${actorName}` : "Назначить актёра"}
-                          >
-                            <span className="truncate">{actorName || t("voice.noActor", "+ Актёр")}</span>
-                            <ChevronDown size={10} className="opacity-50 shrink-0" />
-                          </button>
+                            onMouseDown={(e) => e.stopPropagation()}
+                            title={`${seg.tgt_text || seg.src_text || ""}\n\n(Двойной клик по строке — перейти к видео)`}
+                            placeholder="Текст перевода…"
+                            className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-surface)] rounded px-1.5 py-0.5 text-[11.5px] text-[var(--color-text)] focus:outline-none transition-colors truncate"
+                          />
+                          <div className="shrink-0" onMouseDown={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const targetIds = (selSegs.has(seg.id) || selSegs.size > 1) && selSegs.size > 0 ? [...selSegs] : [seg.id];
+                                setActorPickerState({ targetIds, x: rect.left, y: rect.bottom + 4 });
+                              }}
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors max-w-[110px] truncate ${
+                                actorName
+                                  ? "bg-[var(--color-surface-2)] text-emerald-400 border-emerald-500/30 hover:border-emerald-500/60 font-semibold"
+                                  : "bg-transparent text-[var(--color-muted)] border-dashed border-[var(--color-border)] hover:border-[var(--color-muted)] hover:text-[var(--color-text)]"
+                              }`}
+                              title={actorName ? `Актёр: ${actorName}` : "Назначить актёра"}
+                            >
+                              <span className="truncate">{actorName || t("voice.noActor", "+ Актёр")}</span>
+                              <ChevronDown size={10} className="opacity-50 shrink-0" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className={subsViewMode === "cards" ? "space-y-2" : "hidden"}>
-                  {p.segments.map((seg, idx) => {
-                    const on = isActive(seg);
-                    const isRegen = Boolean(seg.extra?.regenerated);
-                    let donorDisplayNum: string | number | null = null;
-                    if (seg.voice && (seg.voice.startsWith("donor:") || seg.voice.startsWith("clone:"))) {
-                      const donorKey = seg.voice.replace(/^(donor|clone):/, "");
-                      const donorIdx = p.segments.findIndex((s) => s.id === donorKey);
-                      donorDisplayNum = donorIdx !== -1 ? donorIdx + 1 : donorKey;
-                    }
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {p.segments.map((seg, idx) => {
+                      const on = seg.id === activeId;
+                      const isRegen = Boolean(seg.extra?.regenerated);
+                      let donorDisplayNum: string | number | null = null;
+                      if (seg.voice && (seg.voice.startsWith("donor:") || seg.voice.startsWith("clone:"))) {
+                        const donorKey = seg.voice.replace(/^(donor|clone):/, "");
+                        const donorIdx = p.segments.findIndex((s) => s.id === donorKey);
+                        donorDisplayNum = donorIdx !== -1 ? donorIdx + 1 : donorKey;
+                      }
 
-                    return (
-                      <SubtitleCard
-                        key={seg.id}
-                        seg={seg}
-                        idx={idx}
-                        totalSegs={p.segments.length}
-                        on={on}
-                        isRegen={isRegen}
-                        isSelected={selSegs.has(seg.id)}
-                        isRegenerating={regenId === seg.id}
-                        isSolo={soloPlayingId === seg.id}
-                        isAnyRegen={regenId !== null}
-                        speakers={speakers}
-                        donorDisplayNum={donorDisplayNum}
-                        fmtT={fmtT}
-                        activeRef={on ? activeRef : undefined}
-                        onScrub={(start) => onSeek(start)}
-                        onMoveUp={() => moveSeg(seg.id, "up")}
-                        onMoveDown={() => moveSeg(seg.id, "down")}
-                        onToggleSelect={() => setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; })}
-                        onVoiceMenu={(rect) => setVoiceMenuSeg(voiceMenuSeg?.id === seg.id ? null : { id: seg.id, x: rect.left, y: rect.bottom + 4 })}
-                        onPlay={() => playSeg(seg)}
-                        onPlaySolo={() => playSoloSeg(seg.id)}
-                        onRegen={() => doRegen(seg.id)}
-                        onKeep={() => doKeepSeg(seg.id)}
-                        onHide={() => doHideSeg(seg.id)}
-                        onDel={() => doDelSeg(seg.id)}
-                        onPatchText={(val) => patchSeg(seg.id, val)}
-                        onPersistText={(val) => { burstRef.current = null; persistSeg(seg.id, val); }}
-                        onSplitAtTextCursor={(textarea) => handleSplitAtTextCursor(seg, textarea)}
-                        onTimingBlur={async (field, val) => {
-                          setRendered(false);
-                          try { setProject(await api.patch(pid, { op: "segment", id: seg.id, [field]: val })); bump(); } catch (err) { await surfaceErr(err); }
-                        }}
-                        onSpeakerChange={async (rawVal) => {
-                          let val = rawVal;
-                          if (val === "__new__") {
-                            const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
-                            val = String(nums.length ? Math.max(...nums) + 1 : 1);
-                          }
-                          setRendered(false);
-                          try { setProject(await api.patch(pid, { op: "segment", id: seg.id, speaker: val })); bump(); } catch (err) { await surfaceErr(err); }
-                        }}
-                      />
-                    );
-                  })}
-                </div>
+                      return (
+                        <SubtitleCard
+                          key={seg.id}
+                          seg={seg}
+                          idx={idx}
+                          totalSegs={p.segments.length}
+                          on={on}
+                          isRegen={isRegen}
+                          isSelected={selSegs.has(seg.id)}
+                          isRegenerating={regenId === seg.id}
+                          isSolo={soloPlayingId === seg.id}
+                          isAnyRegen={regenId !== null}
+                          speakers={speakers}
+                          donorDisplayNum={donorDisplayNum}
+                          fmtT={fmtT}
+                          activeRef={on ? activeRef : undefined}
+                          onScrub={(start) => {
+                            userScrolledAtRef.current = 0;
+                            prevActiveIdRef.current = null;
+                            onSeek(start);
+                          }}
+                          onMoveUp={() => moveSeg(seg.id, "up")}
+                          onMoveDown={() => moveSeg(seg.id, "down")}
+                          onToggleSelect={() => setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; })}
+                          onVoiceMenu={(rect) => setVoiceMenuSeg(voiceMenuSeg?.id === seg.id ? null : { id: seg.id, x: rect.left, y: rect.bottom + 4 })}
+                          onPlay={() => playSeg(seg)}
+                          onPlaySolo={() => playSoloSeg(seg.id)}
+                          onRegen={() => doRegen(seg.id)}
+                          onKeep={() => doKeepSeg(seg.id)}
+                          onHide={() => doHideSeg(seg.id)}
+                          onDel={() => doDelSeg(seg.id)}
+                          onPatchText={(val) => patchSeg(seg.id, val)}
+                          onPersistText={(val) => { burstRef.current = null; persistSeg(seg.id, val); }}
+                          onSplitAtTextCursor={(textarea) => handleSplitAtTextCursor(seg, textarea)}
+                          onTimingBlur={async (field, val) => {
+                            setRendered(false);
+                            try { setProject(await api.patch(pid, { op: "segment", id: seg.id, [field]: val })); bump(); } catch (err) { await surfaceErr(err); }
+                          }}
+                          onSpeakerChange={async (rawVal) => {
+                            let val = rawVal;
+                            if (val === "__new__") {
+                              const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
+                              val = String(nums.length ? Math.max(...nums) + 1 : 1);
+                            }
+                            setRendered(false);
+                            try { setProject(await api.patch(pid, { op: "segment", id: seg.id, speaker: val })); bump(); } catch (err) { await surfaceErr(err); }
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
                 <button onClick={addSeg} disabled={regenId !== null} title={t("seg.addHint")}
                   className="w-full mt-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
                   <Plus size={14} />{t("seg.add")}
@@ -6692,19 +6805,91 @@ function Editor() {
                       </button>
                     </div>
                   );
-                  if (spks.length <= 1)
-                    return <div className="mt-2 flex w-full min-w-0">{pick(names[0] || "", (v) => branch("recast", { voice_mode: "voice", voice_name: v }))}</div>;
                   return (
-                    <div className="mt-2 space-y-1.5 w-full min-w-0">
-                      {spks.map((spk, i) => (
-                        <div key={spk} className="flex items-center gap-2 w-full min-w-0">
-                          <span className="mono text-[10px] text-[var(--color-muted)] w-12 shrink-0">SPK {spk}</span>
-                          {pick(names[i] || "", (v) => branch("recast", {
-                            voice_mode: "voice",
-                            voice_name: spks.map((_, j) => (j === i ? v : names[j] || "")).join(","),
-                          }))}
+                    <div className="mt-2 space-y-2 w-full min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-medium text-[var(--color-muted)]">
+                          {t("voice.speakerVoices", "Голоса по спикерам:")}
+                        </span>
+                        {autoCastOn && (
+                          <button
+                            type="button"
+                            disabled={autoCastBusy}
+                            onClick={async () => {
+                              if (!pid) return;
+                              setAutoCastBusy(true);
+                              try {
+                                const res = await api.autoCast(pid, selectedSubfolder || undefined);
+                                if (res.ok && res.project) {
+                                  setProject(res.project);
+                                  bump();
+                                  const msg = res.summary && res.summary.length
+                                    ? `Автоподбор: ${res.summary.join(" | ")}`
+                                    : "Автоподбор: голоса успешно назначены спикерам!";
+                                  pushActivity(msg, "done");
+                                  playSfx("notify");
+                                }
+                              } catch (err) {
+                                await surfaceErr(err);
+                              } finally {
+                                setAutoCastBusy(false);
+                              }
+                            }}
+                            title="Автоматически подобрать и распределить голоса из пака voices/ по текущим спикерам и актёрам"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] text-[11px] font-medium text-[var(--color-text)] transition-colors shadow-sm disabled:opacity-50"
+                          >
+                            {autoCastBusy ? (
+                              <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
+                            ) : (
+                              <Sparkles size={12} className="text-[var(--color-accent)]" />
+                            )}
+                            <span>{t("voice.autoCastBtn", "Автоподбор")}</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {voiceSubfolders.length > 0 && (
+                        <div className="flex items-center gap-1.5 p-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+                          <Folder size={12} className="text-[var(--color-accent)] shrink-0" />
+                          <span className="text-[11px] text-[var(--color-muted)] shrink-0">{t("voice.packSelect", "Пак / Папка:")}</span>
+                          <select
+                            value={selectedSubfolder}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setSelectedSubfolder(v);
+                              localStorage.setItem("dub-autocast-pack", v);
+                              if (pid) {
+                                api.patch(pid, { op: "audio", auto_cast_pack: v }).catch(() => {});
+                              }
+                            }}
+                            className="flex-1 min-w-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none cursor-pointer"
+                          >
+                            <option value="">{t("voice.rootPack", "Корень (voices/)")}</option>
+                            {voiceSubfolders.map((sf) => (
+                              <option key={sf} value={sf}>{sf}</option>
+                            ))}
+                            <option value="all">{t("voice.allPacks", "Все папки (voices/ + подкаталоги)")}</option>
+                          </select>
                         </div>
-                      ))}
+                      )}
+
+                      {spks.length <= 1 ? (
+                        <div className="flex w-full min-w-0">{pick(names[0] || "", (v) => branch("recast", { voice_mode: "voice", voice_name: v }))}</div>
+                      ) : (
+                        <div className="space-y-1.5 w-full min-w-0">
+                          {spks.map((spk, i) => (
+                            <div key={spk} className="flex items-center gap-2 w-full min-w-0">
+                              <span className="mono text-[10px] text-[var(--color-muted)] w-12 shrink-0 truncate" title={`Спикер ${spk}`}>
+                                SPK {spk}
+                              </span>
+                              {pick(names[i] || "", (v) => branch("recast", {
+                                voice_mode: "voice",
+                                voice_name: spks.map((_, j) => (j === i ? v : names[j] || "")).join(","),
+                              }))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -9012,6 +9197,9 @@ export default function App() {
     const sel = (c as { selection?: Record<string, string> }).selection ?? {};
     if (sel.vision_on !== undefined) {
       useStore.getState().setVisionOn(sel.vision_on !== "0");
+    }
+    if (sel.auto_cast_on !== undefined) {
+      useStore.getState().setAutoCastOn(sel.auto_cast_on !== "0");
     }
     const asrLabel = sel.asr_engine === "whisper" ? `whisper ${sel.whisper_model || "auto"}` : c.asr_model;
     const parts = [c.device, `ASR ${asrLabel}`];

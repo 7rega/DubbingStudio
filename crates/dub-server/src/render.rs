@@ -807,7 +807,7 @@ fn build_dub(
                     clone_slot_spks.insert(spk.clone()); // спикер на клоне — identity-реф ниже
                     continue;
                 }
-                let src = ["wav", "mp3"].iter().map(|e| paths.voices_dir.join(format!("{nm}.{e}"))).find(|p| p.is_file());
+                let src = crate::voice_library::find_voice_file(&paths.voices_dir, nm);
                 if let Some(src) = src {
                     let out = wd.join(format!("ref_pack_{i}.wav"));
                     // реф КАПИТСЯ до paths.ref_secs (дефолт 12с; на слабой RAM юзер уменьшает в настройках —
@@ -1195,6 +1195,7 @@ fn build_dub(
     let dirty_total = dirty_count;
     let mut synth_counter = 0usize;
     let mut engine_dead = false; // движок завис в DLL (ENGINE_STUCK) — больше не трогаем, остаток на оригинале
+    let mut custom_ref_cache: std::collections::HashMap<String, (PathBuf, Option<String>)> = std::collections::HashMap::new();
     for &(fi, s) in segs.iter() {
         // Кэш-файл сегмента — ПО ЕГО ID, не по индексу fi. Кэш переиспользуется между рендерами (не-dirty
         // сегменты не ре-синтезируются). При индекс-имени удаление/перестановка сегмента сдвигает индексы —
@@ -1229,7 +1230,9 @@ fn build_dub(
 
         // Референс голоса для сегмента: custom_ref (голос из пака или донор) -> emo_ref -> identity-реф
         let custom_ref: Option<(PathBuf, Option<String>)> = if let Some(v) = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-            if let Some(donor_spec) = v.strip_prefix("donor:").or_else(|| v.strip_prefix("clone:")) {
+            if let Some(cached) = custom_ref_cache.get(v) {
+                Some(cached.clone())
+            } else if let Some(donor_spec) = v.strip_prefix("donor:").or_else(|| v.strip_prefix("clone:")) {
                 // Донорский клон из конкретного сегмента (по ID или по индексу #N)
                 let donor_seg = proj.segments.iter().find(|ds| ds.id == donor_spec).or_else(|| {
                     donor_spec.parse::<usize>().ok().and_then(|idx| if idx > 0 { proj.segments.get(idx - 1) } else { proj.segments.get(0) })
@@ -1240,7 +1243,9 @@ fn build_dub(
                     let end = ds.end.min(ds.start + cap);
                     if media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok() {
                         let t = ds.src_text.trim();
-                        Some((out, if t.is_empty() { None } else { Some(t.to_string()) }))
+                        let res = (out, if t.is_empty() { None } else { Some(t.to_string()) });
+                        custom_ref_cache.insert(v.to_string(), res.clone());
+                        Some(res)
                     } else {
                         None
                     }
@@ -1248,17 +1253,8 @@ fn build_dub(
                     None
                 }
             } else {
-                // Кастомный голос из библиотеки (voices/<name>.wav/mp3 или voices/cast/<name>.wav/mp3)
-                let voice_file = ["wav", "mp3"]
-                    .iter()
-                    .map(|e| paths.voices_dir.join("cast").join(format!("{v}.{e}")))
-                    .find(|p| p.is_file())
-                    .or_else(|| {
-                        ["wav", "mp3"]
-                            .iter()
-                            .map(|e| paths.voices_dir.join(format!("{v}.{e}")))
-                            .find(|p| p.is_file())
-                    });
+                // Кастомный голос из библиотеки (voices/<name>.wav/mp3, voices/cast/, или подкаталоги)
+                let voice_file = crate::voice_library::find_voice_file(&paths.voices_dir, v);
                 if let Some(vf) = voice_file {
                     let out = wd.join(format!("ref_voice_{sid}.wav"));
                     // Копируем во временный ASCII-файл, чтобы MinGW FFmpeg под Windows гарантированно открыл путь без сбоев кодировки
@@ -1270,13 +1266,13 @@ fn build_dub(
                     let _ = std::fs::remove_file(&temp_in);
                     if trim_ok && out.is_file() {
                         // Подтягиваем текст расшифровки сэмпла .txt, если он есть в каталоге (Higgs клонирует чище)
-                        let txt_file = if paths.voices_dir.join("cast").join(format!("{v}.txt")).is_file() {
-                            paths.voices_dir.join("cast").join(format!("{v}.txt"))
-                        } else {
-                            paths.voices_dir.join(format!("{v}.txt"))
-                        };
-                        let txt_content = std::fs::read_to_string(&txt_file).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-                        Some((out, txt_content))
+                        let txt_content = crate::voice_library::find_voice_txt(&paths.voices_dir, v)
+                            .and_then(|tf| std::fs::read_to_string(&tf).ok())
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty());
+                        let res = (out, txt_content);
+                        custom_ref_cache.insert(v.to_string(), res.clone());
+                        Some(res)
                     } else {
                         None
                     }

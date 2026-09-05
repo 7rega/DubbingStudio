@@ -7,8 +7,43 @@ use std::io::Read;
 use std::path::Path;
 use std::process::Stdio;
 
-/// Прочитать WAV -> (mono f32 сэмплы, sample_rate).
+/// Декодирование аудио через ffmpeg (pipe) в mono f32 @16k.
+/// Универсально читает MP3, нестандартные WAV (tag 85 MP3-in-WAV, raw MP3 с расширением .wav,
+/// ADPCM, 24/32-bit extensible), OGG, FLAC, M4A и любые другие форматы без записи на диск.
+pub fn decode_audio_mono_ffmpeg(path: &Path) -> Result<(Vec<f32>, u32), String> {
+    let mut child = crate::media::cmd_silent(FFMPEG)
+        .args(["-v", "quiet", "-i"])
+        .arg(path)
+        .args(["-ac", "1", "-ar", "16000", "-f", "s16le", "-"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn ffmpeg for {}: {e}", path.display()))?;
+
+    let mut stdout = child.stdout.take().ok_or_else(|| "no stdout".to_string())?;
+    let mut raw = Vec::new();
+    stdout.read_to_end(&mut raw).map_err(|e| format!("read ffmpeg: {e}"))?;
+    let _ = child.wait();
+    if raw.is_empty() {
+        return Err(format!("ffmpeg returned empty audio for {}", path.display()));
+    }
+    let max = 32768.0f32;
+    let samples: Vec<f32> = raw
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / max)
+        .collect();
+    Ok((samples, 16_000))
+}
+
+/// Прочитать аудио/WAV -> (mono f32 сэмплы, sample_rate).
+/// Сначала пробует быстрый разбор через hound в памяти.
+/// Если hound не может прочитать файл (tag 85 mp3-in-wav, raw mp3 c расширением .wav,
+/// нестандартные заголовки) — прозрачно переключается на потоковый ffmpeg-декодер.
 pub fn read_mono_f32(path: &Path) -> Result<(Vec<f32>, u32), String> {
+    read_mono_f32_hound(path).or_else(|_| decode_audio_mono_ffmpeg(path))
+}
+
+fn read_mono_f32_hound(path: &Path) -> Result<(Vec<f32>, u32), String> {
     let mut r = WavReader::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let spec = r.spec();
     let ch = spec.channels.max(1) as usize;
@@ -18,6 +53,9 @@ pub fn read_mono_f32(path: &Path) -> Result<(Vec<f32>, u32), String> {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("read f32: {e}"))?,
         SampleFormat::Int => {
+            if spec.bits_per_sample == 0 || spec.bits_per_sample > 32 {
+                return Err("invalid bits_per_sample".to_string());
+            }
             let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
             r.samples::<i32>()
                 .map(|s| s.map(|v| v as f32 / max))

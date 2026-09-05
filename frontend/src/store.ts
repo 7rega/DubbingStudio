@@ -27,6 +27,8 @@ type State = {
   setJobSteps: (s: string[] | null) => void;
   visionOn: boolean;                 // мультимодальный анализ кадров (Gemma Vision); синхронизируется между Settings, DropZone и Batch
   setVisionOn: (b: boolean) => void;
+  autoCastOn: boolean;               // глобальная доступность автоподбора голосов (Auto-Cast); синхронизируется между Settings, DropZone и Editor
+  setAutoCastOn: (b: boolean) => void;
   recent: ProjectSummary[];
   setRecent: (recent: ProjectSummary[] | ((prev: ProjectSummary[]) => ProjectSummary[])) => void;
   activeName: string | null;         // исходное имя видеофайла открытого проекта для отображения в шапке/заголовке
@@ -80,6 +82,13 @@ export const useStore = create<State>((set, get) => ({
       try { localStorage.setItem("dub-vision", visionOn ? "1" : "0"); } catch {}
     }
     set({ visionOn });
+  },
+  autoCastOn: typeof window !== "undefined" ? localStorage.getItem("dub-autocast-on") !== "0" : true,
+  setAutoCastOn: (autoCastOn) => {
+    if (typeof window !== "undefined") {
+      try { localStorage.setItem("dub-autocast-on", autoCastOn ? "1" : "0"); } catch {}
+    }
+    set({ autoCastOn });
   },
   setStage: (stage) => set({ stage }),
   setPid: (pid) => set({ pid }),

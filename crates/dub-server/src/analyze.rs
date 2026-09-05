@@ -1022,7 +1022,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                 let mut missing: Vec<String> = Vec::new();
                 for v in vmap.values_mut() {
                     if let Some(nm) = v.clone() {
-                        let exists = ["wav", "mp3"].iter().any(|e| voices_dir.join(format!("{nm}.{e}")).is_file());
+                        let exists = crate::voice_library::find_voice_file(&voices_dir, &nm).is_some();
                         if !exists {
                             missing.push(nm);
                             *v = None;

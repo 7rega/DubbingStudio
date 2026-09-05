@@ -33,7 +33,9 @@ mod setup;
 mod spa;
 mod subimport;
 mod translate;
+mod autocast;
 mod voice_slots;
+pub mod voice_library;
 mod wavio;
 
 use axum::extract::{Multipart, Path as AxPath, Query, State};
@@ -396,6 +398,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/record/stop", post(record_stop))
         .route("/voices/download-pack", post(voices_download_pack))
         .route("/voices/catalog", get(voices_catalog))
+        .route("/voices/subfolders", get(voices_subfolders_list))
         .route("/voices/cast", get(voices_cast_list))
         .route("/voices/open-cast", post(voices_open_cast))
         .route("/voices/sample", get(voice_sample))
@@ -404,6 +407,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/voices/delete", post(voices_delete))
         .route("/projects/{pid}/speaker-voice", post(speaker_voice))
         .route("/projects/{pid}/voice-slots", post(voice_slots_assign))
+        .route("/projects/{pid}/autocast", post(project_autocast))
         .route("/projects/{pid}/casting", get(casting_get).post(casting_save))
         .route("/projects/{pid}/casting/avatar", get(casting_avatar))
         .route("/projects/{pid}/casting/voice", get(casting_voice))
@@ -625,26 +629,28 @@ fn sanitize_voice_name(s: &str) -> String {
     if n.is_empty() { "Мой голос".to_string() } else { n }
 }
 
-/// Имена голосов в каталоге: стемы .wav/.mp3 (запись с микрофона = .wav; пак = .mp3).
+/// Имена голосов в каталоге: стемы .wav/.mp3.
 fn list_voice_names(dir: &Path) -> Vec<String> {
-    let mut names = std::collections::BTreeSet::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-            if ext == "wav" || ext == "mp3" {
-                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                    names.insert(stem.to_string());
-                }
-            }
-        }
-    }
-    names.into_iter().collect()
+    voice_library::list_voice_names(dir, None)
 }
 
-/// GET /voices — список голосов из каталога (пак + записи с микрофона).
-async fn voices_list(State(st): State<AppState>) -> Json<Value> {
-    Json(json!({ "voices": list_voice_names(&st.voices_dir) }))
+/// GET /voices?subfolder=<subfolder> — список голосов из каталога (пак + записи с микрофона + подпапки).
+async fn voices_list(
+    State(st): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let subfolder = q.get("subfolder").map(|s| s.trim()).filter(|s| !s.is_empty());
+    let (voices, detailed, subfolders) = voice_library::list_voices_detailed(&st.voices_dir, subfolder);
+    Json(json!({
+        "voices": voices,
+        "detailed": detailed,
+        "subfolders": subfolders,
+    }))
+}
+
+/// GET /voices/subfolders — список подкаталогов (паков) в каталоге voices/.
+async fn voices_subfolders_list(State(st): State<AppState>) -> Json<Value> {
+    Json(json!({ "subfolders": voice_library::list_voice_subfolders(&st.voices_dir) }))
 }
 
 /// GET /voices/cast — список голосов из каталога voices/cast/.
@@ -662,26 +668,19 @@ async fn voices_open_cast(State(st): State<AppState>) -> Json<Value> {
     Json(json!({ "ok": true }))
 }
 
-/// GET /voices/sample?name=<name> — отдать аудио-сэмпл голоса (voices/<name>.wav|.mp3 или voices/cast/<name>.wav|.mp3) с Range для <audio>
-/// (прослушка выбранного голоса в UI). sanitize защищает от path-traversal.
+/// GET /voices/sample?name=<name> — отдать аудио-сэмпл голоса с Range для <audio>.
+/// Ищет файл в voices/cast/, корне voices/ и рекурсивно в любых подкаталогах-паках.
 async fn voice_sample(
     State(st): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Response {
-    let name = sanitize_voice_name(q.get("name").map(|s| s.as_str()).unwrap_or(""));
-    if name.is_empty() {
+    let raw_name = q.get("name").map(|s| s.as_str()).unwrap_or("").trim();
+    if raw_name.is_empty() {
         return (StatusCode::BAD_REQUEST, "no name").into_response();
     }
-    for ext in ["wav", "mp3"] {
-        let cast_p = st.voices_dir.join("cast").join(format!("{name}.{ext}"));
-        if cast_p.is_file() {
-            return serve_file_range(&cast_p, req, None).await;
-        }
-        let p = st.voices_dir.join(format!("{name}.{ext}"));
-        if p.is_file() {
-            return serve_file_range(&p, req, None).await;
-        }
+    if let Some(p) = voice_library::find_voice_file(&st.voices_dir, raw_name) {
+        return serve_file_range(&p, req, None).await;
     }
     (StatusCode::NOT_FOUND, "voice not found").into_response()
 }
@@ -814,9 +813,8 @@ async fn voice_slots_assign(
     };
     let male = names_of("male");
     let female = names_of("female");
-    let available: std::collections::BTreeSet<String> = list_voice_names(&st.voices_dir).into_iter().collect();
     for n in male.iter().chain(female.iter()) {
-        if !available.contains(n) {
+        if voice_library::find_voice_file(&st.voices_dir, n).is_none() {
             return (StatusCode::BAD_REQUEST, format!("голос {n:?} не найден в voices/")).into_response();
         }
     }
@@ -871,6 +869,81 @@ async fn voice_slots_assign(
         }
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// POST /projects/{pid}/autocast {subfolder?} — автоподбор голосов из voices/ по спикерам и актёрам.
+async fn project_autocast(
+    State(st): State<AppState>,
+    axum::extract::Path(pid): axum::extract::Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let dir = match st.proj_dir(&pid) {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    let mut proj = match st.load_project(&pid) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+
+    let vocals = {
+        let clean = dir.join("vocals16_clean.wav");
+        let raw16 = dir.join("vocals16.wav");
+        let raw = dir.join("vocals.wav");
+        if clean.is_file() {
+            clean
+        } else if raw16.is_file() {
+            raw16
+        } else if raw.is_file() {
+            raw
+        } else {
+            return (
+                StatusCode::CONFLICT,
+                "нет вокала для автоподбора — сначала выполните анализ видео",
+            )
+                .into_response();
+        }
+    };
+
+    if !models::auto_cast_enabled(&st.models_root) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Автоподбор голосов (Auto-Cast) отключен в настройках программы",
+        )
+            .into_response();
+    }
+
+    let subfolder = body
+        .get("subfolder")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let voices_dir = st.voices_dir.clone();
+    let models_root = st.models_root.clone();
+    let dir_job = dir.clone();
+
+    let res = tokio::task::spawn_blocking(move || {
+        let summary = autocast::auto_assign_pack_voices_direct(
+            &mut proj,
+            &vocals,
+            &voices_dir,
+            &models_root,
+            &dir_job,
+            subfolder.as_deref(),
+        )?;
+        save_project_atomic(&dir_job, &proj)?;
+        Ok::<_, String>((summary, proj))
+    })
+    .await;
+
+    match res {
+        Ok(Ok((summary, proj))) => {
+            Json(json!({ "ok": true, "summary": summary, "project": proj })).into_response()
+        }
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("поток: {e}")).into_response(),
     }
 }
 
