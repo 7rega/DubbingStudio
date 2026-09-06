@@ -129,7 +129,13 @@ export const api = {
   // Пресеты железа: список + детект GPU/VRAM + рекомендация; применение пишет кванты/облако в active.json.
   hwPresets: () => getJson<{ presets: { id: string; title: string; subtitle: string }[]; hardware: { gpuName: string; totalVramGb: number; totalRamGb: number; hasGpu: boolean; recommended: string; reason: string } }>("/engine/presets"),
   applyPreset: (id: string) => postJson<{ ok: boolean; id: string; applied: { key: string; value: string }[] }>("/engine/preset", { id }),
-  voices: () => getJson<{ voices: string[] }>("/voices"),
+  voices: (subfolder?: string) =>
+    getJson<{
+      voices: string[];
+      subfolders?: string[];
+      detailed?: { name: string; subfolder: string | null; rel_path: string }[];
+    }>(subfolder ? `/voices?subfolder=${encodeURIComponent(subfolder)}` : "/voices"),
+  voiceSubfolders: () => getJson<{ subfolders: string[] }>("/voices/subfolders"),
   recordDevices: () => getJson<{ devices: string[] }>("/record/devices"),
   recordLevel: () => getJson<{ level: number }>("/record/level"),
   recordStart: (name: string, device?: string) => postJson<{ ok: boolean; name?: string; error?: string }>("/record/start", { name, device }),
@@ -146,6 +152,9 @@ export const api = {
   // Слоты голосов из библиотеки (#114): раздать голоса по спикерам по полу/приоритету. Пустые списки -> клон.
   voiceSlots: (pid: string, slots: { male: string[]; female: string[] }) =>
     postJson<{ ok: boolean; speakers: Record<string, { voice: string | null; gender: string | null; f0: number | null }> }>(`/projects/${pid}/voice-slots`, slots),
+  // Автоподбор голосов из пака voices/ по спикерам и актёрам (#autocast)
+  autoCast: (pid: string, subfolder?: string) =>
+    postJson<{ ok: boolean; summary?: string[]; project: Project }>(`/projects/${pid}/autocast`, { subfolder }),
   presets: () => getJson<{ presets: Record<string, Record<string, unknown>>; reveals: string[] }>("/presets"),
   createProject: (file: File, subs?: File | null) => {
     const fd = new FormData(); fd.append("file", file);

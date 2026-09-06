@@ -3,10 +3,47 @@
 //! стерео сводим в mono усреднением (как s.mean(axis=1) в питоне).
 
 use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
+use std::io::Read;
 use std::path::Path;
+use std::process::Stdio;
 
-/// Прочитать WAV -> (mono f32 сэмплы, sample_rate).
+/// Декодирование аудио через ffmpeg (pipe) в mono f32 @16k.
+/// Универсально читает MP3, нестандартные WAV (tag 85 MP3-in-WAV, raw MP3 с расширением .wav,
+/// ADPCM, 24/32-bit extensible), OGG, FLAC, M4A и любые другие форматы без записи на диск.
+pub fn decode_audio_mono_ffmpeg(path: &Path) -> Result<(Vec<f32>, u32), String> {
+    let mut child = crate::media::cmd_silent(FFMPEG)
+        .args(["-v", "quiet", "-i"])
+        .arg(path)
+        .args(["-ac", "1", "-ar", "16000", "-f", "s16le", "-"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn ffmpeg for {}: {e}", path.display()))?;
+
+    let mut stdout = child.stdout.take().ok_or_else(|| "no stdout".to_string())?;
+    let mut raw = Vec::new();
+    stdout.read_to_end(&mut raw).map_err(|e| format!("read ffmpeg: {e}"))?;
+    let _ = child.wait();
+    if raw.is_empty() {
+        return Err(format!("ffmpeg returned empty audio for {}", path.display()));
+    }
+    let max = 32768.0f32;
+    let samples: Vec<f32> = raw
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / max)
+        .collect();
+    Ok((samples, 16_000))
+}
+
+/// Прочитать аудио/WAV -> (mono f32 сэмплы, sample_rate).
+/// Сначала пробует быстрый разбор через hound в памяти.
+/// Если hound не может прочитать файл (tag 85 mp3-in-wav, raw mp3 c расширением .wav,
+/// нестандартные заголовки) — прозрачно переключается на потоковый ffmpeg-декодер.
 pub fn read_mono_f32(path: &Path) -> Result<(Vec<f32>, u32), String> {
+    read_mono_f32_hound(path).or_else(|_| decode_audio_mono_ffmpeg(path))
+}
+
+fn read_mono_f32_hound(path: &Path) -> Result<(Vec<f32>, u32), String> {
     let mut r = WavReader::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let spec = r.spec();
     let ch = spec.channels.max(1) as usize;
@@ -16,6 +53,9 @@ pub fn read_mono_f32(path: &Path) -> Result<(Vec<f32>, u32), String> {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("read f32: {e}"))?,
         SampleFormat::Int => {
+            if spec.bits_per_sample == 0 || spec.bits_per_sample > 32 {
+                return Err("invalid bits_per_sample".to_string());
+            }
             let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
             r.samples::<i32>()
                 .map(|s| s.map(|v| v as f32 / max))
@@ -34,46 +74,82 @@ pub fn read_mono_f32(path: &Path) -> Result<(Vec<f32>, u32), String> {
     Ok((mono, spec.sample_rate))
 }
 
-/// Даунсэмпл-пики аудио для WaveformTimeline. Порт app.py._compute_peaks: ffmpeg -> s16le 8kHz mono,
-/// N бакетов, в каждом max(|amp|)/max_amp, округление до 3 знаков. CPU, вне GPU-воркера. Сбой ffmpeg
-/// или тишина -> пустой список (как питон — не отравляем кэш).
-pub fn waveform_peaks(video: &Path, n: usize) -> Vec<f64> {
-    #[cfg(windows)]
-    const FFMPEG: &str = "ffmpeg.exe";
-    #[cfg(not(windows))]
-    const FFMPEG: &str = "ffmpeg";
-    let out = crate::media::cmd_silent(FFMPEG)
+#[cfg(windows)]
+const FFMPEG: &str = "ffmpeg.exe";
+#[cfg(not(windows))]
+const FFMPEG: &str = "ffmpeg";
+
+fn stream_pcm16le(video: &Path, mut visit: impl FnMut(i16)) -> Result<(), ()> {
+    let mut child = crate::media::cmd_silent(FFMPEG)
         .args(["-v", "quiet", "-i"])
         .arg(video)
         .args(["-ac", "1", "-ar", "8000", "-f", "s16le", "-"])
-        .output();
-    let bytes = match out {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return Vec::new(),
-    };
-    // s16le -> i16 сэмплы.
-    let samples: Vec<f32> = bytes
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32)
-        .collect();
-    if samples.is_empty() {
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| ())?;
+    let mut stdout = child.stdout.take().ok_or(())?;
+    let mut buf = [0u8; 32 * 1024];
+    let mut carry = None;
+    loop {
+        let read = stdout.read(&mut buf).map_err(|_| ())?;
+        if read == 0 {
+            break;
+        }
+        let mut bytes = &buf[..read];
+        if let Some(lo) = carry.take() {
+            let (&hi, rest) = bytes.split_first().ok_or(())?;
+            visit(i16::from_le_bytes([lo, hi]));
+            bytes = rest;
+        }
+        for sample in bytes.chunks_exact(2) {
+            visit(i16::from_le_bytes([sample[0], sample[1]]));
+        }
+        carry = bytes.chunks_exact(2).remainder().first().copied();
+    }
+    drop(stdout);
+    if child.wait().map_err(|_| ())?.success() {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+/// Даунсэмпл-пики аудио для WaveformTimeline. Декодирует PCM двумя потоковыми проходами: первый
+/// определяет амплитуду и длину, второй заполняет пики. В памяти остаётся только N бакетов.
+pub fn waveform_peaks(video: &Path, n: usize) -> Vec<f64> {
+    let mut sample_count = 0usize;
+    let mut max_amp = 1.0f32;
+    if stream_pcm16le(video, |sample| {
+        sample_count += 1;
+        max_amp = max_amp.max((sample as f32).abs());
+    })
+    .is_err()
+        || sample_count == 0
+    {
         return Vec::new();
     }
-    let max_amp = samples.iter().fold(1.0f32, |m, &s| m.max(s.abs()));
-    let nb = n.min(samples.len()).max(1);
-    // np.array_split: первые (len % nb) бакетов на 1 длиннее.
-    let base = samples.len() / nb;
-    let rem = samples.len() % nb;
-    let mut peaks = Vec::with_capacity(nb);
-    let mut i = 0;
-    for b in 0..nb {
-        let len = base + if b < rem { 1 } else { 0 };
-        let slice = &samples[i..i + len];
-        i += len;
-        let mx = slice.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
-        peaks.push(((mx / max_amp) as f64 * 1000.0).round() / 1000.0);
+
+    let buckets = n.min(sample_count).max(1);
+    let mut maxima = vec![0.0f32; buckets];
+    let mut sample = 0usize;
+    if stream_pcm16le(video, |pcm| {
+        let bucket = sample * buckets / sample_count;
+        maxima[bucket] = maxima[bucket].max((pcm as f32).abs());
+        sample += 1;
+    })
+    .is_err()
+    {
+        return Vec::new();
     }
-    peaks
+    if sample != sample_count {
+        return Vec::new();
+    }
+
+    maxima
+        .into_iter()
+        .map(|peak| ((peak / max_amp) as f64 * 1000.0).round() / 1000.0)
+        .collect()
 }
 
 /// Записать mono f32 -> WAV IEEE-float32.

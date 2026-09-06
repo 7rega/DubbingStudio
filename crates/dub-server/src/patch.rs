@@ -322,6 +322,17 @@ fn op_recast(p: &mut Project, edit: &Value) -> PatchResult {
     p.audio.voice.mode = mode;
     p.audio.voice.name = s(edit, "voice_name");
     p.audio.mix_dirty = true;
+
+    // При смене общего голоса спикера сбрасываем s.voice у обычных фраз,
+    // чтобы они брали новый общий голос спикера, но сохраняем доноров (donor:...) и клонов (clone:...)
+    for s in &mut p.segments {
+        if let Some(v) = &s.voice {
+            if !v.starts_with("donor:") && !v.starts_with("clone:") {
+                s.voice = None;
+            }
+        }
+    }
+
     mark_all_dirty(p);
     Ok(())
 }

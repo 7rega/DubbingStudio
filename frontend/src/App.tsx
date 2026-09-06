@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, GripVertical, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -11,6 +11,8 @@ import PreviewCanvas from "./components/PreviewCanvas";
 import { playSfx, sfxEnabled, setSfxEnabled } from "./lib/sfx";
 import ResourceMonitor from "./components/ResourceMonitor";
 import { HiggsContextMenu, type HiggsContextMenuState, stripHiggsTags } from "./components/HiggsTagMenu";
+import { useVideoLifecycle, type SeekRequest } from "./hooks/useVideoLifecycle";
+import { decimatePeaks, clampTime, computeFallbackPeaks } from "./lib/timelineUtils";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -663,8 +665,11 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [pauseSqueezeOn, setPauseSqueezeOn] = useState(true);
   const [speechRateOn, setSpeechRateOn] = useState(true);
   const [emoRefOn, setEmoRefOn] = useState(true);
+  const [emoRefClean, setEmoRefClean] = useState(false);
   const [voLeadIn, setVoLeadIn] = useState(true);
   const [dubReverbMatch, setDubReverbMatch] = useState(true);
+  const autoCastOn = useStore((s) => s.autoCastOn);
+  const setAutoCastOn = useStore((s) => s.setAutoCastOn);
   useEffect(() => {
     api.capabilities().then((c) => {
       setBench(c.selection?.bench === "1");
@@ -674,10 +679,12 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
       setPauseSqueezeOn(c.selection?.pause_squeeze_on !== "0");
       setSpeechRateOn(c.selection?.speech_rate_on !== "0");
       setEmoRefOn(c.selection?.emo_ref_on !== "0");
+      setEmoRefClean(c.selection?.emo_ref_clean === "1");
       setVoLeadIn(c.selection?.vo_lead_in !== "0");
       setDubReverbMatch(c.selection?.dub_reverb_match !== "0");
+      if (c.selection?.auto_cast_on !== undefined) setAutoCastOn(c.selection.auto_cast_on !== "0");
     }).catch(() => {});
-  }, []);
+  }, [setAutoCastOn]);
   return (
     <div className="fixed inset-0 z-50 grid place-items-center glass-scrim anim-fade" onClick={onClose}>
       <div className="w-[min(92vw,720px)] max-h-[88vh] flex flex-col rounded-xl glass-panel anim-pop p-5" onClick={(e) => e.stopPropagation()}>
@@ -746,6 +753,20 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${qcDur ? "left-[18px]" : "left-0.5"}`} />
               </button>
             </label>
+            {/* Автоподбор голосов (Auto-Cast) */}
+            <label className="flex items-center justify-between gap-3 mb-2.5" title="Автоматический подбор и распределение голосов из voices/ по тембру и полу персонажей">
+              <div className="min-w-0 flex-1">
+                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
+                  <Wand2 size={14} className="text-[var(--color-accent-2)]" />
+                  Автоподбор голосов (Auto-Cast)
+                </span>
+                <span className="block text-[10px] text-[var(--color-muted)]">автоматический подбор голосов из voices/ по тембру и полу персонажей</span>
+              </div>
+              <button onClick={() => { const v = !autoCastOn; setAutoCastOn(v); api.setSelection("auto_cast_on", v ? "1" : "0").catch(() => {}); }} title="Автоподбор голосов"
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${autoCastOn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${autoCastOn ? "left-[18px]" : "left-0.5"}`} />
+              </button>
+            </label>
             {/* Multi-take отбор (3 дубля) */}
             <label className="flex items-center justify-between gap-3 mb-2.5" title="Генерировать 3 варианта озвучки каждой фразы и автоматически выбирать лучший по таймингу">
               <div className="min-w-0 flex-1">
@@ -788,6 +809,30 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${emoRefOn ? "left-[18px]" : "left-0.5"}`} />
               </button>
             </label>
+            {/* Зависимый тумблер: Умный Emo-Ref (Smart Word-Trim & Context) */}
+            {emoRefOn && (
+              <label className="flex items-center justify-between gap-3 mb-2.5 pl-6 border-l-2 border-[var(--color-accent-2)] ml-2 py-0.5"
+                     title="Отсекать предвдохи и фоновый шум по словам Whisper, синхронизировать текст референса при обрезке и сохранять экспрессию коротких восклицаний">
+                <div className="min-w-0 flex-1">
+                  <span className="text-[12px] text-[var(--color-text)] inline-flex items-center gap-1.5 font-medium">
+                    Умный Emo-Ref (Smart Word-Trim)
+                  </span>
+                  <span className="block text-[10px] text-[var(--color-muted)]">
+                    чистый срез без вздохов, синхронизация текста при капе и охват восклицаний
+                  </span>
+                </div>
+                <button 
+                  onClick={() => { 
+                    const v = !emoRefClean; 
+                    setEmoRefClean(v); 
+                    api.setSelection("emo_ref_clean", v ? "1" : "0").catch(() => {}); 
+                  }}
+                  title="Умная пословная зачистка Emo-Ref"
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${emoRefClean ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${emoRefClean ? "left-[18px]" : "left-0.5"}`} />
+                </button>
+              </label>
+            )}
             {/* Сжатие пауз речи */}
             <label className="flex items-center justify-between gap-3 mb-2.5" title={t("settings.pauseSqueezeHint")}>
               <div className="min-w-0 flex-1">
@@ -1136,7 +1181,10 @@ function VoiceSlotList({ title, voices, slots, onChange }: {
         {slots.map((name, i) => (
           <div key={i} className="flex items-center gap-1">
             <Combobox value={name} onChange={(v) => setAt(i, v)} options={opts}
-              placeholder={t("voice.search")} noResults={t("voice.noMatch")} size="sm" className="flex-1 min-w-0" />
+              placeholder={t("voice.search")} noResults={t("voice.noMatch")} size="sm" className="flex-1 min-w-0"
+              onPreview={(v) => toggle(i, v)}
+              previewingValue={playing === i ? name : null}
+            />
             <button onClick={() => toggle(i, name)} title={t("voice.preview")}
               className="shrink-0 p-1 rounded-md text-[var(--color-muted)] hover:text-[var(--color-accent)]">{playing === i ? <Pause size={13} /> : <Play size={13} />}</button>
             <button onClick={() => removeAt(i)} title={t("voiceSlots.remove")}
@@ -1255,11 +1303,24 @@ function DropZone() {
   // Сохранить оригинальную дорожку (#113): 2-я аудиодорожка + контейнер вывода (mp4|mkv). Персист.
   // Дакинг фона под дубляжом — опция дубляжа (active.json duck_on), ВЫКЛ по умолчанию (не всем нужен).
   const [duckOn, setDuckOn] = useState(false);
-  useEffect(() => { api.capabilities().then((c) => setDuckOn(c.selection?.duck_on === "1")).catch(() => {}); }, []);
+  const autoCastOn = useStore((s) => s.autoCastOn);
+  const [voiceSubfolders, setVoiceSubfolders] = useState<string[]>([]);
+  const [autoCastPack, setAutoCastPack] = useState<string>(() => localStorage.getItem("dub-autocast-pack") ?? "");
+  const setAutoCastPackSaved = (v: string) => { setAutoCastPack(v); localStorage.setItem("dub-autocast-pack", v); };
+  useEffect(() => {
+    api.capabilities().then((c) => {
+      setDuckOn(c.selection?.duck_on === "1");
+    }).catch(() => {});
+  }, []);
   const setDuckSaved = (v: boolean) => { setDuckOn(v); api.setSelection("duck_on", v ? "1" : "0").catch(() => {}); };
-  // Блюр-подложка под сожжёнными субтитрами — опция (не всем нужна), дефолт ВКЛ; патчится в проект после analyze.
-  const [subBlur, setSubBlur] = useState<boolean>(() => localStorage.getItem("dub-sub-blur") !== "0");
+  const [autoCastAuto, setAutoCastAuto] = useState<boolean>(() => localStorage.getItem("dub-autocast-auto") === "1");
+  const setAutoCastAutoSaved = (v: boolean) => { setAutoCastAuto(v); localStorage.setItem("dub-autocast-auto", v ? "1" : "0"); };
+  // Блюр-подложка под сожжёнными субтитрами — опция (не всем нужна), дефолт ВЫКЛ; патчится в проект после analyze.
+  const [subBlur, setSubBlur] = useState<boolean>(() => localStorage.getItem("dub-sub-blur") === "1");
   const setSubBlurSaved = (v: boolean) => { setSubBlur(v); localStorage.setItem("dub-sub-blur", v ? "1" : "0"); };
+  // Автовыравнивание по вокалу — опция (устраняет опережение речи Whisper'ом), дефолт ВЫКЛ.
+  const [autoAlign, setAutoAlign] = useState<boolean>(() => localStorage.getItem("dub-auto-align") === "1");
+  const setAutoAlignSaved = (v: boolean) => { setAutoAlign(v); localStorage.setItem("dub-auto-align", v ? "1" : "0"); };
   const [keepOrig, setKeepOrig] = useState<boolean>(() => localStorage.getItem("dub-keep-orig") === "1");
   const [container, setContainer] = useState<"mp4" | "mkv">(() => (localStorage.getItem("dub-container") === "mkv" ? "mkv" : "mp4"));
   const setKeepOrigSaved = (v: boolean) => { setKeepOrig(v); localStorage.setItem("dub-keep-orig", v ? "1" : "0"); };
@@ -1275,7 +1336,12 @@ function DropZone() {
   const [voiceLib, setVoiceLib] = useState<string[]>([]);                        // имена голосов из GET /voices (для селектов слотов)
   const [mainTranscribeSpeakers, setMainTranscribeSpeakers] = useState<number>(0); // выбор спикеров для режима транскрипции на главном экране
   const visionOn = useStore((s) => s.visionOn);
-  useEffect(() => { api.voices().then((r) => setVoiceLib(r.voices)).catch(() => {}); }, []);
+  useEffect(() => {
+    api.voices().then((r) => {
+      setVoiceLib(r.voices);
+      if (r.subfolders) setVoiceSubfolders(r.subfolders);
+    }).catch(() => {});
+  }, []);
   const [preview, setPreview] = useState<string | null>(null);                  // objectURL превью выбранного видео (первый кадр)
   const audioOnly = !!file && isAudioFile(file);                                // вход без видео -> режим «только аудио»
   useEffect(() => {                                                             // создаём/освобождаем objectURL под выбранный файл
@@ -1440,6 +1506,16 @@ function DropZone() {
       const effNumSpeakers = audio === "transcribe" ? mainTranscribeSpeakers : 0;
       const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers, audioOnly ? false : visionOn);
       await api.watchJob(job_id, (e) => { if (e.type === "progress") s.setProgress(e.stage || "", e.msg || "", e.pct ?? null); });
+      // Автовыравнивание по вокалу: привязка старта фраз к звуку речи перед кастингом и рендером (не для транскрипта)
+      if (autoAlign && audio !== "transcribe") {
+        try {
+          s.setProgress("aligning", "Автовыравнивание по вокалу...", null);
+          const rAlign = await api.alignProject(project_id);
+          if (rAlign.ok && rAlign.count > 0) {
+            useStore.getState().pushActivity(`Автовыравнивание: ${rAlign.count} фраз`, "done");
+          }
+        } catch { /* fail-safe */ }
+      }
       if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain, mode: voDuckMode });   // громкость и режим дакинга со старта -> рендер ниже подхватит
       if (audio === "dub") await api.patch(project_id, { op: "dub_mix_mode", mode: dubMixMode });                             // режим сведения дубляжа (классический vs с эффектами)
       // Блюр-подложка под субтитрами — опция дубляжа/субтитров (дефолт вкл). Патчим, когда сабы вжигаются.
@@ -1456,6 +1532,17 @@ function DropZone() {
           const nAssigned = Object.values(r.speakers || {}).filter((s) => s && s.voice).length;
           useStore.getState().pushActivity(t("voiceSlots.assigned", { n: nAssigned }), "done");
         } catch (e) { useStore.getState().pushActivity(String(e), "error"); }
+      }
+      // Автоподбор голосов из пака voices/ (#autocast): если включен авторежим на старте
+      if (autoCastOn && autoCastAuto && (audio === "dub" || audio === "voiceover")) {
+        try {
+          const r = await api.autoCast(project_id, autoCastPack || undefined);
+          if (r.ok && r.summary && r.summary.length) {
+            useStore.getState().pushActivity(`Автоподбор: ${r.summary.join(" | ")}`, "done");
+          }
+        } catch (e) {
+          useStore.getState().pushActivity(String(e), "error");
+        }
       }
       s.setProject(await api.getProject(project_id));
       // Озвучку готовим ЗДЕСЬ, на экране загрузки (не собирая видео — кадры даёт per-frame preview),
@@ -1696,6 +1783,38 @@ function DropZone() {
                         <VoiceSlotList title={t("voiceSlots.female")} voices={voiceLib} slots={slotsF} onChange={setSlotsFSaved} />
                       </div>
                     )}
+                    {autoCastOn && (
+                      <div className="mt-2.5 flex items-center justify-between gap-2 flex-wrap">
+                        <label className="flex items-center gap-2 text-[12px] text-[var(--color-text)] cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={autoCastAuto}
+                            onChange={(e) => setAutoCastAutoSaved(e.target.checked)}
+                            className="accent-[var(--color-accent)] w-3.5 h-3.5"
+                          />
+                          <span>{t("voice.autoCastOnImport", "Автоподбор голосов после анализа (Auto-Cast)")}</span>
+                          <span title="Автоматически подобрать голоса из папки voices/ по тембру и полу спикеров сразу после анализа видео" className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition">
+                            <HelpCircle size={12} />
+                          </span>
+                        </label>
+                        {autoCastAuto && voiceSubfolders.length > 0 && (
+                          <div className="flex items-center gap-1.5 text-[11px] ml-auto">
+                            <span className="text-[var(--color-muted)]">📁</span>
+                            <select
+                              value={autoCastPack}
+                              onChange={(e) => setAutoCastPackSaved(e.target.value)}
+                              className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none"
+                            >
+                              <option value="">{t("voice.rootPack", "Корень (voices/)")}</option>
+                              {voiceSubfolders.map((sf) => (
+                                <option key={sf} value={sf}>{sf}</option>
+                              ))}
+                              <option value="all">{t("voice.allPacks", "Все папки (voices/ + подкаталоги)")}</option>
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </Accordion>
                 )}
                 {/* СУБТИТРЫ (независимо от аудио) */}
@@ -1808,6 +1927,12 @@ function DropZone() {
                         <span title="Размытая подложка под субтитрами. Выкл — без подложки." onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
                       </label>
                     )}
+                    {/* АВТОВЫРАВНИВАНИЕ ПО ВОКАЛУ — устраняет опережение речи Whisper'ом, дефолт ВКЛ. */}
+                    <label className="mt-1.5 flex items-center gap-2 text-[12px] cursor-pointer select-none w-fit" title="Привязка старта фраз к реальному звуку вокала. Устраняет опережение речи Whisper'ом.">
+                      <input type="checkbox" checked={autoAlign} onChange={(e) => setAutoAlignSaved(e.target.checked)} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
+                      Автовыравнивание по вокалу
+                      <span title="Акустическое выравнивание: устраняет пустоту и вдохи перед фразой, подтягивая старт к реальной речи." onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
+                    </label>
                     {/* КАСТИНГ ПЕРСОНАЖЕЙ (#115): доп. проход по кадрам -> база персонажей (аватар/голос). Опц., дефолт ВЫКЛ. */}
                     {showCasting && (
                       <label className="mt-1.5 flex items-center gap-2 text-[12px] cursor-pointer select-none w-fit">
@@ -1982,7 +2107,7 @@ function DropZone() {
       <input ref={inputRef} type="file" accept={MEDIA_ACCEPT} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); }} />
       <input ref={batchRef} type="file" multiple accept={MEDIA_ACCEPT} className="hidden"
-        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.voDuckMode = voDuckMode; batchState.dubMixMode = dubMixMode; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; s.setStage("batch"); } }} />
+        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.autoAlign = autoAlign; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.voDuckMode = voDuckMode; batchState.dubMixMode = dubMixMode; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; s.setStage("batch"); } }} />
 
       {/* Модальное окно "Все проекты" со скроллом и поиском */}
       {allProjectsModal && (
@@ -2183,31 +2308,263 @@ function Toggle({ label, on, onClick }: { label: string; on: boolean; onClick: (
 }
 
 
-function WaveformTimeline({ pid, duration, scrub, segments, onSeek, gainDb = 0 }: {
-  pid: string; duration: number; scrub: number; segments: Project["segments"]; onSeek: (t: number) => void; gainDb?: number;
+type CanvasWaveformProps = {
+  peaks: number[];
+  duration: number;
+  height: number;
+  color?: string;
+  playedColor?: string;
+  segments?: Array<{ start: number; end: number }>;
+  gain?: number;
+  scrub?: number;
+  showPlayhead?: boolean;
+  className?: string;
+  width?: number;
+};
+
+function CanvasWaveform({
+  peaks,
+  duration,
+  height,
+  color = "rgba(198, 242, 78, 0.45)",
+  playedColor = "#c6f24e",
+  segments = [],
+  gain = 1,
+  scrub = 0,
+  showPlayhead = true,
+  className = "",
+  width,
+}: CanvasWaveformProps) {
+  const wrap = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const playedCanvas = useRef<HTMLCanvasElement>(null);
+  const [measuredWidth, setMeasuredWidth] = useState(800);
+  const safeDuration = Math.max(0.001, duration || 1);
+  const drawWidth = width && width > 1 ? width : measuredWidth;
+  const hasPlayedColor = Boolean(playedColor && playedColor !== color);
+
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const resize = () => {
+      const cw = el.clientWidth;
+      if (cw > 1) setMeasuredWidth(cw);
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const drawWaveformOnCtx = (
+    c: HTMLCanvasElement | null,
+    drawColor: string,
+    drawSegments: boolean
+  ) => {
+    if (!c) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    c.width = Math.max(1, Math.round(drawWidth * dpr));
+    c.height = Math.max(1, Math.round(height * dpr));
+    c.style.width = `${drawWidth}px`;
+    c.style.height = `${height}px`;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, drawWidth, height);
+    const n = peaks.length;
+    if (n) {
+      const bar = drawWidth / n;
+      ctx.fillStyle = drawColor;
+      ctx.globalAlpha = 0.95;
+      peaks.forEach((pk, i) => {
+        const x = i * bar;
+        const bh = Math.max(2, Math.min(height - 2, Math.pow(Math.max(0, pk), 0.72) * gain * (height - 4)));
+        ctx.fillRect(x, (height - bh) / 2, Math.max(1, bar - 0.7), bh);
+      });
+    }
+    if (drawSegments && segments.length > 0) {
+      for (const s of segments) {
+        const x = Math.max(0, Math.min(drawWidth, (s.start / safeDuration) * drawWidth));
+        const ex = Math.max(x, Math.min(drawWidth, (s.end / safeDuration) * drawWidth));
+        // Мягкая подсветка интервала фразы
+        ctx.fillStyle = "#c6f24e";
+        ctx.globalAlpha = 0.05;
+        ctx.fillRect(x, 0, Math.max(1, ex - x), height);
+        // Тонкие аккуратные разделители границ
+        ctx.fillStyle = "rgba(255, 255, 255, 0.22)";
+        ctx.globalAlpha = 1;
+        ctx.fillRect(x, 0, 1, height);
+        ctx.fillRect(ex, 0, 1, height);
+      }
+      ctx.globalAlpha = 1;
+    }
+  };
+
+  useEffect(() => {
+    drawWaveformOnCtx(canvas.current, color, true);
+    if (hasPlayedColor && playedColor) {
+      drawWaveformOnCtx(playedCanvas.current, playedColor, false);
+    }
+  }, [peaks, drawWidth, height, color, playedColor, hasPlayedColor, safeDuration, segments, gain]);
+
+  const playheadLeft = Math.max(0, Math.min(drawWidth, (scrub / safeDuration) * drawWidth));
+
+  return (
+    <div
+      ref={wrap}
+      className={`absolute inset-0 w-full h-full overflow-hidden ${className}`}
+    >
+      <canvas ref={canvas} className="absolute inset-0 pointer-events-none" />
+      {hasPlayedColor && (
+        <div
+          className="absolute inset-0 overflow-hidden pointer-events-none"
+          style={{ width: `${playheadLeft}px` }}
+        >
+          <canvas ref={playedCanvas} className="absolute left-0 top-0 pointer-events-none" />
+        </div>
+      )}
+      {showPlayhead && (
+        <div
+          className="absolute top-0 bottom-0 w-[2px] pointer-events-none bg-[#c6f24e] shadow-[0_0_8px_#c6f24e]"
+          style={{ transform: `translate3d(${playheadLeft}px, 0, 0)` }}
+        />
+      )}
+    </div>
+  );
+}
+
+type SvgWaveformProps = {
+  peaks: number[];
+  totalPx: number;
+  height: number;
+  color: string;
+  gain?: number;
+  className?: string;
+};
+
+const SvgWaveformTrack = memo(function SvgWaveformTrack({
+  peaks,
+  totalPx,
+  height,
+  color,
+  gain = 1,
+  className = "",
+}: SvgWaveformProps) {
+  const pathData = useMemo(() => {
+    const n = peaks.length;
+    if (!n || totalPx <= 0) return "";
+    const bw = totalPx / n;
+    // Step decimation for long tracks zoomed out (prevents redundant subpixel path vertices)
+    const step = bw < 1.5 ? Math.max(1, Math.round(1.5 / bw)) : 1;
+    const effectiveBw = bw * step;
+    const barW = Math.max(1.0, effectiveBw > 2 ? effectiveBw - 0.7 : effectiveBw);
+
+    let d = "";
+    for (let i = 0; i < n; i += step) {
+      const pk = peaks[i];
+      if (pk < 0.005) continue;
+      const boosted = Math.pow(Math.max(0, pk), 0.72) * gain;
+      const bh = Math.max(2, Math.min(height - 2, boosted * (height - 4)));
+      const x = (i / n) * totalPx;
+      const y = (height - bh) / 2;
+      d += `M${x.toFixed(1)},${y.toFixed(1)}h${barW.toFixed(1)}v${bh.toFixed(1)}h-${barW.toFixed(1)}Z `;
+    }
+    return d;
+  }, [peaks, totalPx, height, gain]);
+
+  if (!peaks.length || totalPx <= 0) return null;
+
+  return (
+    <svg
+      width={totalPx}
+      height={height}
+      className={`block pointer-events-none w-full h-full ${className}`}
+    >
+      <path d={pathData} fill={color} opacity={0.88} />
+    </svg>
+  );
+});
+
+
+
+function WaveformTimeline({
+  pid,
+  duration,
+  scrub,
+  segments,
+  onSeek,
+  gainDb = 0,
+}: {
+  pid: string;
+  duration: number;
+  scrub: number;
+  segments: Project["segments"];
+  onSeek: (t: number) => void;
+  gainDb?: number;
 }) {
   const [peaks, setPeaks] = useState<number[]>([]);
   const wrap = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(800);
   const isDragging = useRef(false);
+  const pendingX = useRef<number | null>(null);
+  const seekFrame = useRef<number | null>(null);
 
-  useEffect(() => { api.waveform(pid).then((r) => setPeaks(r.peaks)).catch(() => {}); }, [pid]);
-  useEffect(() => { const el = wrap.current; if (!el) return; const ro = new ResizeObserver(() => setW(el.clientWidth)); ro.observe(el); return () => ro.disconnect(); }, []);
-  const h = 40, dur = duration || 1, bw = peaks.length ? w / peaks.length : 1;
-  const gainLin = Math.pow(10, gainDb / 20);   // dB -> линейный коэффициент амплитуды (гейн дорожки визуально)
+  useEffect(() => {
+    let active = true;
+    api
+      .waveform(pid)
+      .then((r) => {
+        if (active) setPeaks(r.peaks || []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [pid]);
+
+  useEffect(
+    () => () => {
+      if (seekFrame.current != null) {
+        cancelAnimationFrame(seekFrame.current);
+        seekFrame.current = null;
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setW(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const h = 40;
+  const dur = Math.max(0.001, duration || 1);
+  const displayPeaks = useMemo(
+    () => decimatePeaks(peaks, Math.min(2000, Math.max(200, Math.ceil(w * 2)))),
+    [peaks, w]
+  );
+  const gainLin = Math.pow(10, gainDb / 20);
 
   const seekFromEvent = (clientX: number) => {
     const el = wrap.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const t = Math.max(0, Math.min(dur, ((clientX - r.left) / r.width) * dur));
-    onSeek(t);
+    const clamped = clampTime(((clientX - r.left) / (r.width || 1)) * dur, dur);
+    pendingX.current = clamped;
+    if (seekFrame.current != null) return;
+    seekFrame.current = requestAnimationFrame(() => {
+      seekFrame.current = null;
+      if (pendingX.current != null) onSeek(pendingX.current);
+    });
   };
 
   return (
     <div
       ref={wrap}
-      className="relative w-full overflow-hidden cursor-pointer select-none touch-none"
+      className="relative w-full overflow-hidden cursor-pointer select-none touch-none rounded-lg bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/50"
       style={{ height: h }}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
@@ -2223,30 +2580,31 @@ function WaveformTimeline({ pid, duration, scrub, segments, onSeek, gainDb = 0 }
       onPointerUp={(e) => {
         if (isDragging.current) {
           isDragging.current = false;
-          try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+          try {
+            (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+          } catch {}
+          if (seekFrame.current != null) {
+            cancelAnimationFrame(seekFrame.current);
+            seekFrame.current = null;
+          }
+          if (pendingX.current != null) {
+            onSeek(pendingX.current);
+            pendingX.current = null;
+          }
         }
       }}
     >
-      <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="block pointer-events-none">
-        {peaks.map((pk, i) => {
-          const bh = Math.max(2, Math.min(h - 2, pk * gainLin * (h - 6))), played = (i / peaks.length) * dur <= scrub;
-          return <rect key={i} x={(i / peaks.length) * w} y={(h - bh) / 2} width={Math.max(1, bw - 0.5)} height={bh}
-                       fill={played ? "var(--color-accent)" : "#3a414c"} opacity={played ? 0.9 : 0.55} />;
-        })}
-        {segments.map((s, i) => {
-          const sx = (s.start / dur) * w;
-          const ex = (s.end / dur) * w;
-          const sw = Math.max(1, ex - sx);
-          return (
-            <g key={"s" + i}>
-              <rect x={sx} y={0} width={sw} height={h} fill="var(--color-accent)" opacity={0.06} />
-              <rect x={sx} y={0} width={1} height={h} fill="var(--color-muted)" opacity={0.45} />
-              <rect x={ex} y={0} width={1} height={h} fill="var(--color-muted)" opacity={0.3} />
-            </g>
-          );
-        })}
-      </svg>
-      <div className="absolute top-0 bottom-0 w-px bg-[var(--color-accent)] shadow-[0_0_6px_var(--color-accent)] pointer-events-none" style={{ left: `${(scrub / dur) * 100}%` }} />
+      <CanvasWaveform
+        peaks={displayPeaks}
+        duration={dur}
+        height={h}
+        color="rgba(198, 242, 78, 0.45)"
+        playedColor="#c6f24e"
+        segments={segments}
+        gain={gainLin}
+        scrub={scrub}
+        width={w}
+      />
     </div>
   );
 }
@@ -2420,11 +2778,14 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   );
 }
 
+const HAS_FIELD_SIZING = typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("field-sizing", "content");
+
 function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { onSplit?: (el: HTMLTextAreaElement) => void }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [menuState, setMenuState] = useState<HiggsContextMenuState | null>(null);
 
   useLayoutEffect(() => {
+    if (HAS_FIELD_SIZING) return;
     const el = ref.current;
     if (!el) return;
     el.style.height = "auto";                       // сброс, чтобы уметь и уменьшаться
@@ -2452,10 +2813,15 @@ function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElemen
           } else {
             el.value = newText;
           }
-          el.dispatchEvent(new Event("input", { bubbles: true }));
+          const event = new Event("input", { bubbles: true });
+          el.dispatchEvent(event);
         }
       },
-      onSplit: props.onSplit ? () => props.onSplit!(el) : undefined,
+      onSplit: () => {
+        if (props.onSplit) {
+          props.onSplit(el);
+        }
+      },
     });
   };
 
@@ -2467,6 +2833,7 @@ function AutoGrowTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElemen
         ref={ref}
         rows={1}
         {...textareaProps}
+        style={{ ...(HAS_FIELD_SIZING ? { fieldSizing: "content" as any } : {}), ...textareaProps.style }}
         onContextMenu={(e) => {
           handleContextMenu(e);
           if (props.onContextMenu) props.onContextMenu(e);
@@ -2728,6 +3095,17 @@ function MultiTrackTimeline({
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const isTimelineDragging = useRef(false);
+  const pendingTimelineSeek = useRef<number | null>(null);
+  const timelineSeekFrame = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timelineSeekFrame.current != null) {
+        cancelAnimationFrame(timelineSeekFrame.current);
+        timelineSeekFrame.current = null;
+      }
+    },
+    []
+  );
   const [zoom, setZoom] = useState(60); // pixels per second
   const [draggingSeg, setDraggingSeg] = useState<{
     id: string;
@@ -2814,7 +3192,19 @@ function MultiTrackTimeline({
     if (!trackRef.current) return 0;
     const rect = trackRef.current.getBoundingClientRect();
     const x = clientX - rect.left;
-    return Math.max(0, Math.min(total, (x / totalPx) * total));
+    return clampTime((x / totalPx) * total, total);
+  };
+
+  const requestTimelineSeek = (clientX: number) => {
+    const t = getT(clientX);
+    pendingTimelineSeek.current = t;
+    if (timelineSeekFrame.current != null) return;
+    timelineSeekFrame.current = requestAnimationFrame(() => {
+      timelineSeekFrame.current = null;
+      if (pendingTimelineSeek.current != null) {
+        onSeek(pendingTimelineSeek.current);
+      }
+    });
   };
 
   const handlePointerDown = (
@@ -2867,10 +3257,34 @@ function MultiTrackTimeline({
   }, [segments, timelineScrollLeft, timelineClientWidth, zoom, total, draggingSeg?.id, loopSegId, scrub]);
 
   useEffect(() => {
-    api.waveform(pid).then((r) => setRawPeaksMaster(r.peaks || [])).catch(() => {});
-    api.waveformTrack(pid, "vocals").then((r) => setRawPeaksVocals(r.peaks || [])).catch(() => {});
-    api.waveformTrack(pid, "bgm").then((r) => setRawPeaksBgm(r.peaks || [])).catch(() => {});
-    api.waveformTrack(pid, "dub").then((r) => setRawPeaksDub(r.peaks || [])).catch(() => {});
+    let active = true;
+    api
+      .waveform(pid)
+      .then((r) => {
+        if (active) setRawPeaksMaster(r.peaks || []);
+      })
+      .catch(() => {});
+    api
+      .waveformTrack(pid, "vocals")
+      .then((r) => {
+        if (active) setRawPeaksVocals(r.peaks || []);
+      })
+      .catch(() => {});
+    api
+      .waveformTrack(pid, "bgm")
+      .then((r) => {
+        if (active) setRawPeaksBgm(r.peaks || []);
+      })
+      .catch(() => {});
+    api
+      .waveformTrack(pid, "dub")
+      .then((r) => {
+        if (active) setRawPeaksDub(r.peaks || []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, [pid, dubRev]);
 
   // 1. Vocals: rawPeaksVocals or rawPeaksMaster
@@ -2878,32 +3292,16 @@ function MultiTrackTimeline({
 
   // 2. Dub: clean synthesized dub speech strictly inside segments, flat silence outside
   const peaksDub = useMemo(() => {
-    if (rawPeaksDub.length > 0) {
-      return rawPeaksDub;
-    }
+    if (rawPeaksDub.length > 0) return rawPeaksDub;
     const base = peaksVocals.length ? peaksVocals : Array(400).fill(0.2);
-    const n = base.length;
-    const step = total / n;
-    return base.map((val, i) => {
-      const t = i * step;
-      const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
-      return insideSeg ? Math.min(1.0, val * 1.15 + 0.06) : 0.015;
-    });
+    return computeFallbackPeaks(base, segments, total, "dub");
   }, [rawPeaksDub, peaksVocals, segments, total]);
 
   // 3. BGM (Instrumental): background music and ambience
   const peaksBgm = useMemo(() => {
-    if (rawPeaksBgm.length > 0) {
-      return rawPeaksBgm;
-    }
+    if (rawPeaksBgm.length > 0) return rawPeaksBgm;
     const base = rawPeaksMaster.length ? rawPeaksMaster : Array(400).fill(0.15);
-    const n = base.length;
-    const step = total / n;
-    return base.map((val, i) => {
-      const t = i * step;
-      const insideSeg = segments.some((s) => t >= s.start && t <= s.end);
-      return insideSeg ? Math.max(0.04, val * 0.4) : Math.min(1.0, val * 0.95 + 0.08);
-    });
+    return computeFallbackPeaks(base, segments, total, "bgm");
   }, [rawPeaksBgm, rawPeaksMaster, segments, total]);
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -3221,52 +3619,11 @@ function MultiTrackTimeline({
     });
   };
 
-  // Ultra-fast single-path SVG waveform renderer (0 DOM overhead, hardware 60fps)
-  const renderWaveform = (peaks: number[], color: string, h: number, isVocalsTrack = false) => {
-    if (!peaks.length) return null;
-    const n = peaks.length;
-    const bw = totalPx / n;
-    const barW = Math.max(1.0, bw > 2 ? bw - 0.7 : bw);
-
-    // Сплошной контур path объединяет все столбики волны в 1 единый GPU-вектор
-    let d = "";
-    for (let i = 0; i < n; i++) {
-      const pk = peaks[i];
-      if (pk < 0.005) continue; // тишину пропускаем — экономит вес SVG
-      // Мягкий логарифмический подъем (Power curve 0.72) — приподнимает тихие согласные и начала слов
-      const boosted = Math.pow(pk, 0.72);
-      const bh = Math.max(2, Math.min(h - 2, boosted * (h - 4)));
-      const x = (i / n) * totalPx;
-      const y = (h - bh) / 2;
-      d += `M${x.toFixed(1)},${y.toFixed(1)}h${barW.toFixed(1)}v${bh.toFixed(1)}h-${barW.toFixed(1)}Z `;
-    }
-
-    return (
-      <svg width={totalPx} height={h} className="block pointer-events-none w-full h-full">
-        {/* Render phrase delimiters & background highlights on Vocals track */}
-        {isVocalsTrack &&
-          segments.map((s, idx) => {
-            const sx = s.start * zoom;
-            const ex = s.end * zoom;
-            const sw = Math.max(2, ex - sx);
-            const isAct = scrub >= s.start && scrub <= s.end;
-            return (
-              <g key={"vseg-" + idx}>
-                <rect x={sx} y={0} width={sw} height={h} fill="#06b6d4" opacity={isAct ? 0.22 : 0.08} />
-                <line x1={sx} y1={0} x2={sx} y2={h} stroke="#06b6d4" strokeWidth={1.5} opacity={0.7} strokeDasharray="3 2" />
-                <rect x={sx - 1} y={0} width={3} height={5} fill="#06b6d4" opacity={0.95} />
-                <line x1={ex} y1={0} x2={ex} y2={h} stroke="#06b6d4" strokeWidth={1.5} opacity={0.7} strokeDasharray="3 2" />
-                <rect x={ex - 2} y={h - 5} width={3} height={5} fill="#06b6d4" opacity={0.95} />
-              </g>
-            );
-          })}
-
-        {/* Сплошной вектор звуковой волны */}
-        <path d={d} fill={color} opacity={0.88} />
-      </svg>
-    );
+  // Pure hardware-accelerated single-path SVG waveform (memoized, 0ms latency, zero redraws on playback)
+  const renderWaveform = (peaks: number[], color: string, h: number) => {
+    if (!peaks.length || totalPx <= 0) return null;
+    return <SvgWaveformTrack peaks={peaks} totalPx={totalPx} height={h} color={color} />;
   };
-
   return (
     <div className="flex flex-col gap-1.5 w-full select-none">
       {/* Zoom & Track Legend Header */}
@@ -3375,17 +3732,27 @@ function MultiTrackTimeline({
             if (e.button !== 0 || (e.target as HTMLElement).closest("[data-seg-block]")) return;
             isTimelineDragging.current = true;
             (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-            onSeek(getT(e.clientX));
+            requestTimelineSeek(e.clientX);
           }}
           onPointerMove={(e) => {
             if (isTimelineDragging.current) {
-              onSeek(getT(e.clientX));
+              requestTimelineSeek(e.clientX);
             }
           }}
           onPointerUp={(e) => {
             if (isTimelineDragging.current) {
               isTimelineDragging.current = false;
-              try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+              try {
+                (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+              } catch {}
+              if (timelineSeekFrame.current != null) {
+                cancelAnimationFrame(timelineSeekFrame.current);
+                timelineSeekFrame.current = null;
+              }
+              if (pendingTimelineSeek.current != null) {
+                onSeek(pendingTimelineSeek.current);
+                pendingTimelineSeek.current = null;
+              }
             }
           }}
           onContextMenu={(e) => {
@@ -3427,9 +3794,39 @@ function MultiTrackTimeline({
               {renderWaveform(peaksBgm, "#a855f7", 48)}
             </div>
 
-            {/* Track 3: 🗣️ Вокал оригинала Canvas (48px) with Phrase Delimiters */}
+            {/* Track 3: 🗣️ Вокал оригинала (48px) with Phrase Delimiters */}
             <div className="h-[48px] border-b border-[var(--color-border)]/40 relative bg-cyan-950/10">
-              {renderWaveform(peaksVocals, "#06b6d4", 48, true)}
+              {renderWaveform(peaksVocals, "#06b6d4", 48)}
+              {/* Phrase delimiters and segment highlights overlay */}
+              <div className="absolute inset-0 pointer-events-none">
+                {visibleSegments.map((s) => {
+                  const sx = s.start * zoom;
+                  const ex = s.end * zoom;
+                  const sw = Math.max(2, ex - sx);
+                  const isAct = scrub >= s.start && scrub <= s.end;
+                  return (
+                    <div
+                      key={"vseg-" + s.id}
+                      className="absolute top-0 bottom-0 pointer-events-none"
+                      style={{ left: `${sx}px`, width: `${sw}px` }}
+                    >
+                      <div
+                        className="absolute inset-0 transition-opacity"
+                        style={{
+                          backgroundColor: "#06b6d4",
+                          opacity: isAct ? 0.22 : 0.08,
+                        }}
+                      />
+                      <div className="absolute left-0 top-0 bottom-0 border-l border-dashed border-cyan-400/70">
+                        <div className="w-[3px] h-[5px] -ml-[1px] bg-cyan-400/95" />
+                      </div>
+                      <div className="absolute right-0 top-0 bottom-0 border-r border-dashed border-cyan-400/70">
+                        <div className="w-[3px] h-[5px] -mr-[1px] absolute bottom-0 bg-cyan-400/95" />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Track 4: 💬 Двухдорожечные субтитры (88px, Lane 0: top 4px, Lane 1: top 48px) */}
@@ -3545,7 +3942,7 @@ function MultiTrackTimeline({
             {/* Vertical Golden Playhead Line across all 4 tracks */}
             <div
               className="absolute top-0 bottom-0 w-0.5 bg-amber-300 z-30 pointer-events-none shadow-[0_0_10px_rgba(251,191,36,0.9)]"
-              style={{ left: `${scrub * zoom}px` }}
+              style={{ transform: `translate3d(${scrub * zoom}px, 0, 0)` }}
             >
               <div className="w-3 h-3 -ml-1.25 -top-0 bg-amber-400 rounded-b-sm shadow-md" />
             </div>
@@ -3891,6 +4288,286 @@ function parseSrtAssText(content: string): { start: number; end: number; speaker
   return results.sort((a, b) => a.start - b.start);
 }
 
+interface SubtitleCardProps {
+  seg: Project["segments"][number];
+  idx: number;
+  totalSegs: number;
+  on: boolean;
+  isRegen: boolean;
+  isSelected: boolean;
+  isRegenerating: boolean;
+  isSolo: boolean;
+  isAnyRegen: boolean;
+  speakers: string[];
+  donorDisplayNum: string | number | null;
+  fmtT: (s: number) => string;
+  activeRef?: Ref<HTMLDivElement>;
+  onScrub: (start: number) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onToggleSelect: () => void;
+  onVoiceMenu: (rect: DOMRect) => void;
+  onPlay: () => void;
+  onPlaySolo: () => void;
+  onRegen: () => void;
+  onKeep: () => void;
+  onHide: () => void;
+  onDel: () => void;
+  onPatchText: (val: string) => void;
+  onPersistText: (val: string) => void;
+  onSplitAtTextCursor: (textarea: HTMLTextAreaElement) => void;
+  onTimingBlur: (field: "start" | "end", val: number) => void;
+  onSpeakerChange: (val: string) => void;
+}
+
+const SubtitleCard = memo(function SubtitleCard({
+  seg,
+  idx,
+  totalSegs,
+  on,
+  isRegen,
+  isSelected,
+  isRegenerating,
+  isSolo,
+  isAnyRegen,
+  speakers,
+  donorDisplayNum,
+  fmtT,
+  activeRef,
+  onScrub,
+  onMoveUp,
+  onMoveDown,
+  onToggleSelect,
+  onVoiceMenu,
+  onPlay,
+  onPlaySolo,
+  onRegen,
+  onKeep,
+  onHide,
+  onDel,
+  onPatchText,
+  onPersistText,
+  onSplitAtTextCursor,
+  onTimingBlur,
+  onSpeakerChange,
+}: SubtitleCardProps) {
+  const { t } = useTranslation();
+  return (
+    <div
+      key={seg.id}
+      ref={on ? activeRef : undefined}
+      onClick={() => onScrub(seg.start)}
+      title={isRegen ? "Фраза перегенерирована вручную" : undefined}
+      className={`rounded-xl p-2 border-l-[3px] transition-all cursor-pointer ${seg.hidden ? "opacity-50" : ""} ${isSelected ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${
+        on
+          ? `bg-[var(--color-surface-2)] ${isRegen ? "border-emerald-400 ring-1 ring-emerald-400/40" : "border-[var(--color-accent)]"}`
+          : isRegen
+          ? "bg-emerald-500/10 border-emerald-400 hover:bg-emerald-500/15"
+          : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-1">
+        <div className="flex items-center gap-1 flex-1 min-w-0">
+          <span
+            className={`mono px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 transition-colors ${
+              isRegen
+                ? "bg-emerald-500/25 text-emerald-300 border-emerald-400 font-extrabold shadow-sm"
+                : "bg-[var(--color-surface)] text-[var(--color-muted)] border-[var(--color-border)] opacity-70"
+            }`}
+            title={`Фраза #${idx + 1}\nID: ${seg.id}\nКэш: seg_${seg.id}.wav${isRegen ? "\n✨ Перегенерирована вручную" : ""}`}
+          >
+            #{idx + 1}
+          </span>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
+            disabled={idx === 0}
+            title="Переместить вверх"
+            className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"
+          >
+            <ChevronUp size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
+            disabled={idx === totalSegs - 1}
+            title="Переместить вниз"
+            className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"
+          >
+            <ChevronDown size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
+            className={`grid place-items-center w-3.5 h-3.5 rounded shrink-0 border transition-colors ${
+              isSelected ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
+            }`}
+          >
+            {isSelected && <Check size={10} />}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onVoiceMenu(e.currentTarget.getBoundingClientRect());
+            }}
+            title="Сменить спикера или индивидуальный голос фразы"
+            className={`mono px-1.5 py-0.5 rounded text-[9px] font-semibold flex items-center gap-1 transition-all border shrink-0 ${
+              seg.voice
+                ? "bg-purple-500/20 text-purple-300 border-purple-500/50 shadow-sm"
+                : "bg-[var(--color-overlay)] text-[var(--color-muted)] hover:text-white border-transparent hover:border-[var(--color-border)]"
+            }`}
+          >
+            {seg.voice ? (
+              <>
+                <span>SPK {seg.speaker ?? "0"}</span>
+                <span className="opacity-50">·</span>
+                {donorDisplayNum != null ? (
+                  <span className="text-cyan-300 font-bold" title={`Донор: фраза #${donorDisplayNum}`}>
+                    🧬 #{donorDisplayNum}
+                  </span>
+                ) : (
+                  <span className="text-purple-300 font-bold">🎙️ {seg.voice}</span>
+                )}
+              </>
+            ) : (
+              <span>SPK {seg.speaker ?? "0"}</span>
+            )}
+          </button>
+          <span
+            className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${
+              on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"
+            }`}
+          >
+            {fmtT(seg.start)} → {fmtT(seg.end)}
+          </span>
+        </div>
+        <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
+          {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onPlay(); }}
+            title={t("seg.play")}
+            className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+          >
+            <Play size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onPlaySolo(); }}
+            title={t("voice.playSolo")}
+            className={`p-0.5 transition-colors ${isSolo ? "text-amber-400 font-bold" : "text-[var(--color-muted)] hover:text-amber-400"}`}
+          >
+            <Headphones size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onRegen(); }}
+            disabled={isAnyRegen}
+            title={t("seg.regen")}
+            className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"
+          >
+            {isRegenerating ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onKeep(); }}
+            disabled={isAnyRegen}
+            title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
+            className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}
+          >
+            <Music size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onHide(); }}
+            disabled={isAnyRegen}
+            title={seg.hidden ? t("seg.show") : t("seg.hide")}
+            className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"
+          >
+            {seg.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onDel(); }}
+            disabled={isAnyRegen}
+            title={t("seg.del")}
+            className="p-0.5 text-[var(--color-muted)] hover:text-[#ef4444] disabled:opacity-40 transition-colors"
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+      </div>
+      <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
+      <AutoGrowTextarea
+        id={`seg-txt-${seg.id}`}
+        value={seg.tgt_text}
+        onChange={(e) => onPatchText(e.target.value)}
+        onSplit={(textarea) => onSplitAtTextCursor(textarea)}
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            onSplitAtTextCursor(e.currentTarget);
+          }
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onBlur={(e) => onPersistText(e.target.value)}
+        title="ПКМ — теги эмоций и эффектов, Ctrl+Enter — разрезать фразу"
+        className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors"
+      />
+      {on && (
+        <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
+          <Clock size={11} className="text-[var(--color-muted)] shrink-0" />
+          <input
+            type="number"
+            step={0.1}
+            min={0}
+            defaultValue={seg.start.toFixed(2)}
+            key={`st${seg.id}-${seg.start}`}
+            onBlur={(e) => {
+              const v = parseFloat(e.target.value);
+              if (!isNaN(v) && Math.abs(v - seg.start) > 0.001) onTimingBlur("start", v);
+            }}
+            className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none"
+          />
+          <ArrowRight size={11} className="text-[var(--color-muted)] shrink-0" />
+          <input
+            type="number"
+            step={0.1}
+            min={0}
+            defaultValue={seg.end.toFixed(2)}
+            key={`en${seg.id}-${seg.end}`}
+            onBlur={(e) => {
+              const v = parseFloat(e.target.value);
+              if (!isNaN(v) && Math.abs(v - seg.end) > 0.001) onTimingBlur("end", v);
+            }}
+            className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none"
+          />
+          <span className="text-[10px] text-[var(--color-muted)]">{t("seg.seconds")}</span>
+        </div>
+      )}
+      {(on || isSelected) && !seg.keep_original && (
+        <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.speakerHint")}>
+          <Users size={11} className="text-[var(--color-muted)] shrink-0" />
+          <select
+            value={seg.speaker ?? ""}
+            onChange={(e) => onSpeakerChange(e.target.value)}
+            className="flex-1 min-w-0 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none transition-colors"
+          >
+            {seg.speaker == null && <option value="">—</option>}
+            {speakers.map((s) => (
+              <option key={s} value={s}>
+                SPK {s}
+              </option>
+            ))}
+            <option value="__new__">＋ {t("seg.newSpeaker")}</option>
+          </select>
+        </div>
+      )}
+    </div>
+  );
+});
+
 function Editor() {
   const { t, i18n } = useTranslation();
   const p = useStore((s) => s.project) as Project;
@@ -3922,11 +4599,14 @@ function Editor() {
   const canUndo = useStore((s) => s.past.length > 0);
   const canRedo = useStore((s) => s.future.length > 0);
   const [scrub, setScrub] = useState(initialScrub);                   // ?t=SEC — deep-link на кадр (для скринов/шаринга), иначе 1.0с
+  const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null);
   const [selSegs, setSelSegs] = useState<Set<string>>(new Set());     // multi-select for bulk hide/delete
   const [selBlurs, setSelBlurs] = useState<Set<number>>(new Set());   // multi-select: mask boxes
   const [selTitles, setSelTitles] = useState<Set<number>>(new Set()); // multi-select: titles
   const [fonts, setFonts] = useState<Record<string, string>>({});
   const [voiceList, setVoiceList] = useState<string[]>([]);
+  const [voiceSubfolders, setVoiceSubfolders] = useState<string[]>([]);
+  const [selectedSubfolder, setSelectedSubfolder] = useState<string>(() => (p.audio as any).auto_cast_pack ?? localStorage.getItem("dub-autocast-pack") ?? "");
   const [castVoices, setCastVoices] = useState<string[]>([]);
   const refreshCastVoices = async () => {
     try {
@@ -3950,8 +4630,17 @@ function Editor() {
     cur?.pause();
     const a = new Audio(api.voiceSampleUrl(name));
     voicePreviewAudio.current = a;
-    a.onended = () => setVoicePreview(null);
-    a.play().then(() => { if (voicePreviewAudio.current === a) setVoicePreview(name); }).catch(() => { if (voicePreviewAudio.current === a) setVoicePreview(null); });
+    a.onended = () => { if (voicePreviewAudio.current === a) setVoicePreview(null); };
+    a.onerror = (e) => {
+      console.warn("Failed to play voice sample:", name, e);
+      if (voicePreviewAudio.current === a) setVoicePreview(null);
+    };
+    a.play().then(() => {
+      if (voicePreviewAudio.current === a) setVoicePreview(name);
+    }).catch((err) => {
+      console.warn("Voice preview error:", err);
+      if (voicePreviewAudio.current === a) setVoicePreview(null);
+    });
   };
   const [gainDraft, setGainDraft] = useState<number | null>(null);
   const [voiceGainDraft, setVoiceGainDraft] = useState<number | null>(null); // черновик громкости голоса (TTS)
@@ -3984,6 +4673,8 @@ function Editor() {
   const [voiceManualCtrl, setVoiceManualCtrl] = useState(false);
   const [voiceTemp, setVoiceTemp] = useState(0.20);
   const [voiceTempDraft, setVoiceTempDraft] = useState<number | null>(null);
+  const [autoCastBusy, setAutoCastBusy] = useState(false);
+  const autoCastOn = useStore((s) => s.autoCastOn);
   useEffect(() => {
     api.capabilities().then((c) => {
       setDuckOn(c.selection?.duck_on === "1");
@@ -3999,18 +4690,21 @@ function Editor() {
   useEffect(() => { api.fonts().then((r) => setFonts(r.fonts)).catch(() => {}); }, []);   // bundled caption fonts
   // голоса из каталога; если пусто и ещё не пробовали — тихо тянем дефолтный пак (VibeVoice, ~100МБ) в фоне
   useEffect(() => {
-    api.voices().then(async (r) => {
+    api.voices(selectedSubfolder || undefined).then(async (r) => {
       setVoiceList(r.voices);
+      if (r.subfolders) setVoiceSubfolders(r.subfolders);
       if (r.voices.length === 0 && !localStorage.getItem("voicepack-auto")) {
         localStorage.setItem("voicepack-auto", "1");
         try {
           const { job_id } = await api.voicesDownloadPack();
           await api.watchJob(job_id, () => {});
-          const v = await api.voices(); setVoiceList(v.voices);
+          const v = await api.voices(selectedSubfolder || undefined);
+          setVoiceList(v.voices);
+          if (v.subfolders) setVoiceSubfolders(v.subfolders);
         } catch { /* тихо: пак опционален */ }
       }
     }).catch(() => {});
-  }, []);
+  }, [selectedSubfolder]);
   useEffect(() => { api.presets().then((r) => setPresets(r.presets)).catch(() => {}); }, []);   // caption look presets
   const [sizeDraft, setSizeDraft] = useState<number | null>(null);   // live size while dragging (commit on release)
   const [lane, setLane] = useState<"subs" | "blur" | "titles">("subs"); // left lane: which object type to edit
@@ -4039,20 +4733,9 @@ function Editor() {
   const soloAudioRef = useRef<HTMLAudioElement | null>(null);
   const [soloPlayingId, setSoloPlayingId] = useState<string | null>(null);
 
-  // Виртуализация списка субтитров (60 карточек в DOM)
-  const [subsScrollTop, setSubsScrollTop] = useState(0);
-  const latestSubsScrollTop = useRef(0);
-  const subsScrollRaf = useRef<number | null>(null);
-  const handleSubsScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    latestSubsScrollTop.current = e.currentTarget.scrollTop;
-    if (subsScrollRaf.current !== null) return;
-    subsScrollRaf.current = requestAnimationFrame(() => {
-      setSubsScrollTop(latestSubsScrollTop.current);
-      subsScrollRaf.current = null;
-    });
-  };
 
   const playEndRef = useRef<number>(Infinity);                        // stop time for single-phrase playback (Infinity = full)
+  const pendingPlayOnSeekedRef = useRef<boolean>(false);              // Smart Seek-then-Play: flag to launch once video frame is ready
   const [dubRev, setDubRev] = useState(0);                            // dub-audio cache-buster — bumped ONLY when the dub track is re-rendered (regen/export), NOT on every edit, so live edits don't reload <audio> mid-playback
 
   useEffect(() => {
@@ -4100,7 +4783,7 @@ function Editor() {
     a.volume = effectiveVol;
   }, [effectiveVol]);
 
-  // Dub playback & timeline driver (Master Clock)
+  // Dub playback — запуск/остановка аудио + плавное обновление scrub/вейформы
   useEffect(() => {
     const a = audioRef.current;
     if (!play) {
@@ -4110,9 +4793,8 @@ function Editor() {
     }
     setRendered(false);
     if (a && hasDubTrack) {
-      a.playbackRate = playSpeed;
       a.volume = effectiveVol;
-      a.currentTime = scrub;
+      a.currentTime = scrubRef.current;   // свежее значение через ref (не stale-замыкание)
       a.play()
         .then(() => {
           audioPlayingRef.current = true;
@@ -4126,26 +4808,37 @@ function Editor() {
       audioPlayingRef.current = false;
     }
 
-    const id = window.setInterval(() => {
-      if (audioPlayingRef.current && a && !a.paused) {
-        if (loopSegId) {
-          const lSeg = p.segments.find((s) => s.id === loopSegId);
-          if (lSeg && a.currentTime >= lSeg.end) {
-            a.currentTime = lSeg.start;
-            setScrub(lSeg.start);
-            return;
-          }
-        }
+  }, [play, hasDubTrack, currentAudioSrc]);
+
+  // Контроль завершения фразы строго по часам звука (Audio as Master, 60/120 FPS):
+  // Звук — единственный арбитр окончания реплики, ни один слог не обрезается.
+  useEffect(() => {
+    if (!play || !hasDubTrack) return;
+    const a = audioRef.current;
+    if (!a) return;
+
+    let animId: number | null = null;
+    let running = true;
+
+    const checkAudioEnd = () => {
+      if (!running) return;
+      if (a && !a.paused) {
         if (a.currentTime >= playEndRef.current) {
+          running = false;
           a.pause();
           setPlay(false);
-        } else {
-          setScrub(a.currentTime);
+          return;
         }
       }
-    }, 40);
-    return () => window.clearInterval(id);
-  }, [play, hasDubTrack, currentAudioSrc]);
+      animId = requestAnimationFrame(checkAudioEnd);
+    };
+
+    animId = requestAnimationFrame(checkAudioEnd);
+    return () => {
+      running = false;
+      if (animId !== null) cancelAnimationFrame(animId);
+    };
+  }, [play, hasDubTrack]);
 
   // Text-cursor split helper (Ctrl+Enter in text area)
   const handleSplitAtTextCursor = async (seg: Project["segments"][number], textarea: HTMLTextAreaElement) => {
@@ -4598,7 +5291,6 @@ function Editor() {
     } catch (e) { await surfaceErr(e); }
     finally { setRegenId(null); }
   }
-  const [dragSegId, setDragSegId] = useState<string | null>(null);
   async function moveSeg(segId: string, dir: "up" | "down") {
     const idx = p.segments.findIndex((s) => s.id === segId);
     if (idx === -1) return;
@@ -4608,20 +5300,6 @@ function Editor() {
     const [moved] = newSegs.splice(idx, 1);
     newSegs.splice(targetIdx, 0, moved);
     const newIds = newSegs.map((s) => s.id);
-    setProject({ ...p, segments: newSegs });
-    try { setProject(await api.patch(pid, { op: "reorder_segments", ids: newIds })); }
-    catch (e) { await surfaceErr(e); }
-  }
-  async function dropSeg(targetId: string) {
-    if (!dragSegId || dragSegId === targetId) return;
-    const fromIdx = p.segments.findIndex((s) => s.id === dragSegId);
-    const toIdx = p.segments.findIndex((s) => s.id === targetId);
-    if (fromIdx === -1 || toIdx === -1) return;
-    const newSegs = [...p.segments];
-    const [moved] = newSegs.splice(fromIdx, 1);
-    newSegs.splice(toIdx, 0, moved);
-    const newIds = newSegs.map((s) => s.id);
-    setDragSegId(null);
     setProject({ ...p, segments: newSegs });
     try { setProject(await api.patch(pid, { op: "reorder_segments", ids: newIds })); }
     catch (e) { await surfaceErr(e); }
@@ -4714,6 +5392,7 @@ function Editor() {
     }
   }
   function playFull() {                                               // bottom-bar Play: play the whole dub from the playhead
+    pendingPlayOnSeekedRef.current = false;
     const a = audioRef.current;
     if (play) { setPlay(false); return; }
     playEndRef.current = Infinity;
@@ -4723,16 +5402,42 @@ function Editor() {
   function playSeg(seg: Project["segments"][number]) {               // play JUST this phrase's TTS [start, end]
     const a = audioRef.current;
     playEndRef.current = seg.end;
-    if (a && hasDubTrack) a.currentTime = seg.start;
-    setScrub(seg.start);
+    const clamped = clampTime(seg.start, p.meta.duration || seg.start);
+    if (a && hasDubTrack) a.currentTime = clamped;
+    setScrub(clamped);
+    setSeekRequest({ id: Date.now(), time: clamped });
     setRendered(false);
-    if (!play) setPlay(true);
+
+    if (play) {
+      return;
+    }
+
+    // «Умный старт»: дожидаемся готовности кадра видео (события seeked) или стартуем по таймауту 60 мс
+    pendingPlayOnSeekedRef.current = true;
+    setTimeout(() => {
+      if (pendingPlayOnSeekedRef.current) {
+        pendingPlayOnSeekedRef.current = false;
+        if (!play) setPlay(true);
+      }
+    }, 60);
   }
+
+  const handleVideoSeeked = () => {
+    if (pendingPlayOnSeekedRef.current) {
+      pendingPlayOnSeekedRef.current = false;
+      if (!play) setPlay(true);
+    }
+  };
+
   // единый seek: скраб вейформы/слайдера + позиция dub-аудио (используется хоткеями, слайдером и вейформой)
   function onSeek(tt: number) {
+    userScrolledAtRef.current = 0;
+    pendingPlayOnSeekedRef.current = false;
+    const clamped = clampTime(tt, p.meta.duration || tt);
     setRendered(false);
-    setScrub(tt);
-    if (audioRef.current && hasDubTrack) audioRef.current.currentTime = tt;
+    setScrub(clamped);
+    setSeekRequest({ id: Date.now(), time: clamped });
+    if (audioRef.current && hasDubTrack) audioRef.current.currentTime = clamped;
   }
   useEffect(() => { scrubRef.current = scrub; }, [scrub]);   // свежий scrub для хоткеев (без stale-замыкания)
   const setVolK = (v: number) => { setVol(v); if (audioRef.current) audioRef.current.volume = v; localStorage.setItem("dub-vol", String(v)); };
@@ -4858,20 +5563,58 @@ function Editor() {
   const subsContainerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLDivElement>(null);
   const prevActiveIdRef = useRef<string | null>(null);
+  const prevViewModeRef = useRef<string | null>(null);
+  const userScrolledAtRef = useRef<number>(0);
   useEffect(() => {
-    if (!activeId || activeId === prevActiveIdRef.current) return;
+    const viewModeChanged = prevViewModeRef.current !== subsViewMode;
+    prevViewModeRef.current = subsViewMode;
+
+    if (!activeId) return;
+    if (activeId === prevActiveIdRef.current && !viewModeChanged) return;
     prevActiveIdRef.current = activeId;
+
+    // Пауза автоскролла: если пользователь недавно скроллил список вручную, не перебиваем его действия во время воспроизведения
+    if (play && Date.now() - userScrolledAtRef.current < 4000 && !viewModeChanged) {
+      return;
+    }
+
+    const container = subsContainerRef.current;
+    if (!container) return;
+
+    // Липкая панель инструментов внутри контейнера занимает ~52px (или ~98px в режиме карточек при активном множественном выборе)
+    const STICKY_HEADER_H = subsViewMode === "cards" && selSegs.size > 0 ? 98 : 52;
+
     if (activeRef.current) {
-      activeRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      const containerRect = container.getBoundingClientRect();
+      const elRect = activeRef.current.getBoundingClientRect();
+
+      // Защита: если элемент скрыт или имеет нулевой размер, не используем некорректный rect
+      if (elRect.height === 0 && elRect.width === 0) {
+        return;
+      }
+
+      const elRelativeTop = elRect.top - containerRect.top;
+      const elRelativeBottom = elRect.bottom - containerRect.top;
+
+      // Зона видимости (Deadzone): если карточка/строка уже комфортно видна между шапкой и низом контейнера — не скроллим
+      if (!viewModeChanged && elRelativeTop >= STICKY_HEADER_H + 10 && elRelativeBottom <= container.clientHeight - 10) {
+        return;
+      }
+
+      // При выходе за пределы видимости — позиционируем карточку/строку с отступом под липкой шапкой
+      const delta = elRelativeTop - (STICKY_HEADER_H + 16);
+      const targetTop = Math.max(0, container.scrollTop + delta);
+      container.scrollTo({ top: targetTop, behavior: play ? "auto" : "smooth" });
     } else {
+      // Карточка/строка вне текущего диапазона DOM — скроллим контейнер к её оценочной позиции
       const activeIdx = p.segments.findIndex((s) => s.id === activeId);
-      if (activeIdx >= 0 && subsContainerRef.current) {
-        const ROW_ESTIMATE = subsViewMode === "table" ? 28 : 135;
-        const targetTop = Math.max(0, activeIdx * ROW_ESTIMATE - subsContainerRef.current.clientHeight / 2);
-        subsContainerRef.current.scrollTo({ top: targetTop, behavior: "smooth" });
+      if (activeIdx >= 0) {
+        const ROW_ESTIMATE = subsViewMode === "table" ? 32 : 135;
+        const targetTop = Math.max(0, activeIdx * ROW_ESTIMATE - STICKY_HEADER_H - 16);
+        container.scrollTo({ top: targetTop, behavior: play ? "auto" : "smooth" });
       }
     }
-  }, [activeId, subsViewMode]);
+  }, [activeId, subsViewMode, play, selSegs.size]);
   return (
     <div className="flex-1 grid grid-cols-[1fr_420px] min-h-0">
       {/* Левая / Центральная секция: Видеопревью + Таймлайн на всю ширину */}
@@ -5014,21 +5757,34 @@ function Editor() {
                       : p
                   }
                   scrub={scrub}
+                  seekRequest={seekRequest}
                   rendered={rendered}
                   lane={lane}
                   playing={play}
                   vol={vol}
                   audioMuted={hasDubTrack}
                   onTimeUpdate={(t) => {
-                    if (!audioPlayingRef.current) {
+                    // Если дорожка дубляжа активна, ЗВУК является эталоном времени для завершения фразы.
+                    // Видео контролирует окончание фразы только в режиме без дубляжа (чистый видеорежим).
+                    if (!hasDubTrack) {
                       if (t >= playEndRef.current) {
                         setPlay(false);
-                      } else {
-                        setScrub(t);
+                        return;
                       }
                     }
+                    setScrub(t);
                   }}
-                  onEnded={() => setPlay(false)}
+                  onSeeked={handleVideoSeeked}
+                  onEnded={() => {
+                    audioPlayingRef.current = false;
+                    audioRef.current?.pause();
+                    setPlay(false);
+                  }}
+                  onMediaError={() => {
+                    audioPlayingRef.current = false;
+                    audioRef.current?.pause();
+                    setPlay(false);
+                  }}
                   onChanged={(fresh) => setProject(fresh)}
                 />
               )}
@@ -5272,6 +6028,12 @@ function Editor() {
             <audio
               ref={audioRef}
               src={hasDubTrack ? currentAudioSrc : undefined}
+              onTimeUpdate={(e) => {
+                if (!play) return;
+                if (e.currentTarget.currentTime >= playEndRef.current) {
+                  setPlay(false);
+                }
+              }}
               onEnded={() => setPlay(false)}
               onError={() => {
                 console.warn("Audio element error, falling back to video audio");
@@ -5372,477 +6134,374 @@ function Editor() {
             </div>
 
             {/* Скролл-тело списка субтитров */}
-            <div ref={subsContainerRef} data-kb-scroll onScroll={handleSubsScroll} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4">
-              {lane === "subs" && (
-                <div className="space-y-2">
-                  {(() => {
-                    const spks = [...new Set(p.segments.map((x) => x.speaker ?? "0"))].sort();
-                    const idsOf = (spk: string | null) => p.segments.filter((x) => spk === null || (x.speaker ?? "0") === spk).map((x) => x.id);
-                    const toggleMany = (ids: string[]) => setSelSegs((prev) => {
-                      const next = new Set(prev), all = ids.length > 0 && ids.every((i) => next.has(i));
-                      ids.forEach((i) => (all ? next.delete(i) : next.add(i)));
-                      return next;
-                    });
-                    const chip = "px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors";
-                    return (
-                      <div className="sticky top-0 z-20 -mx-3 px-3 pt-1 pb-2 mb-1 space-y-1.5 bg-[var(--color-surface)] border-b border-[var(--color-border)]">
-                        <div className="flex flex-wrap items-center gap-1">
-                          <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mr-0.5">{t("sel.pick")}</span>
-                          <button onClick={() => toggleMany(idsOf(null))} className={chip}>{t("sel.all")}</button>
-                          {spks.length > 1 && spks.map((spk) => <button key={spk} onClick={() => toggleMany(idsOf(spk))} className={chip}>{spk !== "0" ? spk : "SPK 0"}</button>)}
+            <div
+              ref={subsContainerRef}
+              data-kb-scroll
+              onWheel={() => { userScrolledAtRef.current = Date.now(); }}
+              onPointerDown={() => { userScrolledAtRef.current = Date.now(); }}
+              onTouchStart={() => { userScrolledAtRef.current = Date.now(); }}
+              className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-4"
+            >
+              <div className={lane === "subs" ? "space-y-2" : "hidden"}>
+                {(() => {
+                  const spks = [...new Set(p.segments.map((x) => x.speaker ?? "0"))].sort();
+                  const idsOf = (spk: string | null) => p.segments.filter((x) => spk === null || (x.speaker ?? "0") === spk).map((x) => x.id);
+                  const toggleMany = (ids: string[]) => setSelSegs((prev) => {
+                    const next = new Set(prev), all = ids.length > 0 && ids.every((i) => next.has(i));
+                    ids.forEach((i) => (all ? next.delete(i) : next.add(i)));
+                    return next;
+                  });
+                  const chip = "px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors";
+                  return (
+                    <div className="sticky top-0 z-20 -mx-3 px-3 pt-1 pb-2 mb-1 space-y-1.5 bg-[var(--color-surface)] border-b border-[var(--color-border)]">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted)] mr-0.5">{t("sel.pick")}</span>
+                        <button onClick={() => toggleMany(idsOf(null))} className={chip}>{t("sel.all")}</button>
+                        {spks.length > 1 && spks.map((spk) => <button key={spk} onClick={() => toggleMany(idsOf(spk))} className={chip}>{spk !== "0" ? spk : "SPK 0"}</button>)}
 
-                          <div className="ml-auto inline-flex items-center gap-1.5 shrink-0">
-                            <button onClick={handleSaveSubtitles} title="Сохранить субтитры в файл (.srt)"
-                              className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
-                              <Save size={13} />
-                              <span className="text-[10px] font-bold">SRT</span>
+                        <div className="ml-auto inline-flex items-center gap-1.5 shrink-0">
+                          <button onClick={handleSaveSubtitles} title="Сохранить субтитры в файл (.srt)"
+                            className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
+                            <Save size={13} />
+                            <span className="text-[10px] font-bold">SRT</span>
+                          </button>
+                          <button onClick={handleSaveAss} title="Сохранить субтитры в файл (.ass)"
+                            className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
+                            <Save size={13} />
+                            <span className="text-[10px] font-bold">ASS</span>
+                          </button>
+                          <label title="Импортировать файл субтитров (.srt, .ass, .vtt)" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold cursor-pointer hover:brightness-110 transition shrink-0">
+                            <Upload size={12} />
+                            <span>{t("import.importShort")}</span>
+                            <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
+                          </label>
+                        </div>
+                      </div>
+                      {subsViewMode === "cards" && selSegs.size > 0 && (
+                        <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-accent)]/50 bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)] px-2 py-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[12px] font-medium">{selSegs.size} {t("sel.count")}</span>
+                            <button onClick={() => setSelSegs(new Set())} className="text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><X size={14} /></button>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <select value="" onChange={(e) => { if (e.target.value) { doBulkSetSpeaker(e.target.value); e.target.value = ""; } }} disabled={regenId !== null}
+                              title={t("sel.spkHint")}
+                              className="bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[12px] rounded-md px-1.5 py-1 text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none transition-colors cursor-pointer disabled:opacity-40">
+                              <option value="">{t("sel.spkPlaceholder")}</option>
+                              {speakers.map((spk) => <option key={spk} value={spk}>SPK {spk}</option>)}
+                              <option value="__new__">{t("sel.spkNew")}</option>
+                            </select>
+                            <button onClick={() => bulkSeg("keep_segments", { keep: true })} disabled={regenId !== null}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><Music size={13} />{t("sel.keep")}</button>
+                            <button onClick={() => bulkSeg("hide_segments", { hidden: true })} disabled={regenId !== null}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><EyeOff size={13} />{t("sel.hide")}</button>
+                            <button onClick={doBulkRegen} disabled={regenId !== null} title={t("sel.regenHint")}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
+                              {regenId === "__bulk__" ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
+                              <span>{t("sel.regen")}</span>
                             </button>
-                            <button onClick={handleSaveAss} title="Сохранить субтитры в файл (.ass)"
-                              className="inline-flex items-center justify-center gap-1 p-1 px-1.5 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shrink-0">
-                              <Save size={13} />
-                              <span className="text-[10px] font-bold">ASS</span>
-                            </button>
-                            <label title="Импортировать файл субтитров (.srt, .ass, .vtt)" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold cursor-pointer hover:brightness-110 transition shrink-0">
-                              <Upload size={12} />
-                              <span>{t("import.importShort")}</span>
-                              <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
-                            </label>
+                            <button onClick={() => bulkSeg("del_segments")} disabled={regenId !== null}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
                           </div>
                         </div>
-                        {subsViewMode === "cards" && selSegs.size > 0 && (
-                          <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-accent)]/50 bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)] px-2 py-1.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[12px] font-medium">{selSegs.size} {t("sel.count")}</span>
-                              <button onClick={() => setSelSegs(new Set())} className="text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><X size={14} /></button>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <select value="" onChange={(e) => { if (e.target.value) { doBulkSetSpeaker(e.target.value); e.target.value = ""; } }} disabled={regenId !== null}
-                                title={t("sel.spkHint")}
-                                className="bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[12px] rounded-md px-1.5 py-1 text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none transition-colors cursor-pointer disabled:opacity-40">
-                                <option value="">{t("sel.spkPlaceholder")}</option>
-                                {speakers.map((spk) => <option key={spk} value={spk}>SPK {spk}</option>)}
-                                <option value="__new__">{t("sel.spkNew")}</option>
-                              </select>
-                              <button onClick={() => bulkSeg("keep_segments", { keep: true })} disabled={regenId !== null}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><Music size={13} />{t("sel.keep")}</button>
-                              <button onClick={() => bulkSeg("hide_segments", { hidden: true })} disabled={regenId !== null}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors"><EyeOff size={13} />{t("sel.hide")}</button>
-                              <button onClick={doBulkRegen} disabled={regenId !== null} title={t("sel.regenHint")}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                                {regenId === "__bulk__" ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
-                                <span>{t("sel.regen")}</span>
-                              </button>
-                              <button onClick={() => bulkSeg("del_segments")} disabled={regenId !== null}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] text-[12px] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                  {subsViewMode === "table" ? (
-                    <div className="rounded-lg border border-[var(--color-border)] overflow-hidden divide-y divide-[var(--color-border)]/40 bg-[var(--color-surface)] select-none">
-                      {p.segments.map((seg, idx) => {
-                        const isSelected = selSegs.has(seg.id);
-                        const isCurrent = scrub >= seg.start && scrub < seg.end;
-                        const actorName = seg.speaker && seg.speaker !== "0" ? seg.speaker : "";
-                        return (
-                          <div
-                            key={seg.id}
-                            ref={isCurrent ? activeRef : undefined}
-                            onMouseDown={(e) => handleRowMouseDown(idx, seg.id, e)}
-                            onMouseEnter={() => handleRowMouseEnter(idx)}
-                            onDoubleClick={() => { setRendered(false); setScrub(seg.start); }}
-                            className={`flex items-center gap-2 px-2.5 py-1 text-[11px] cursor-pointer transition-colors ${
-                              isSelected
-                                ? "bg-[var(--color-accent)]/20 text-[var(--color-text)] ring-1 ring-inset ring-[var(--color-accent)]/50"
-                                : isCurrent
-                                ? "bg-[var(--color-surface-2)] text-[var(--color-text)]"
-                                : "hover:bg-[var(--color-surface-2)]/60 text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                            }`}
-                          >
-                            <span className="mono text-[10px] w-6 shrink-0 opacity-50 font-bold">#{idx + 1}</span>
-                            <span className="mono text-[9.5px] shrink-0 opacity-60 w-11 tabnum">{fmtT(seg.start)}</span>
-                            <input
-                              type="text"
-                              value={seg.tgt_text ?? seg.src_text ?? ""}
-                              onChange={(e) => patchSeg(seg.id, e.target.value)}
-                              onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  (e.target as HTMLInputElement).blur();
-                                }
-                              }}
+                      )}
+                    </div>
+                  );
+                })()}
+                {subsViewMode === "table" ? (
+                  <div className="rounded-lg border border-[var(--color-border)] overflow-hidden divide-y divide-[var(--color-border)]/40 bg-[var(--color-surface)] select-none">
+                    {p.segments.map((seg, idx) => {
+                      const isSelected = selSegs.has(seg.id);
+                      const isCurrent = seg.id === activeId;
+                      const actorName = seg.speaker && seg.speaker !== "0" ? seg.speaker : "";
+                      return (
+                        <div
+                          key={seg.id}
+                          ref={isCurrent ? activeRef : undefined}
+                          onMouseDown={(e) => handleRowMouseDown(idx, seg.id, e)}
+                          onMouseEnter={() => handleRowMouseEnter(idx)}
+                          onDoubleClick={() => {
+                            userScrolledAtRef.current = 0;
+                            prevActiveIdRef.current = null;
+                            onSeek(seg.start);
+                          }}
+                          className={`flex items-center gap-2 px-2.5 py-1 text-[11px] cursor-pointer transition-colors ${
+                            isSelected
+                              ? "bg-[var(--color-accent)]/20 text-[var(--color-text)] ring-1 ring-inset ring-[var(--color-accent)]/50"
+                              : isCurrent
+                              ? "bg-[var(--color-surface-2)] text-[var(--color-text)]"
+                              : "hover:bg-[var(--color-surface-2)]/60 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                          }`}
+                        >
+                          <span className="mono text-[10px] w-6 shrink-0 opacity-50 font-bold">#{idx + 1}</span>
+                          <span className="mono text-[9.5px] shrink-0 opacity-60 w-11 tabnum">{fmtT(seg.start)}</span>
+                          <input
+                            type="text"
+                            value={seg.tgt_text ?? seg.src_text ?? ""}
+                            onChange={(e) => patchSeg(seg.id, e.target.value)}
+                            onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                (e.target as HTMLInputElement).blur();
+                              }
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            title={`${seg.tgt_text || seg.src_text || ""}\n\n(Двойной клик по строке — перейти к видео)`}
+                            placeholder="Текст перевода…"
+                            className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-surface)] rounded px-1.5 py-0.5 text-[11.5px] text-[var(--color-text)] focus:outline-none transition-colors truncate"
+                          />
+                          <div className="shrink-0" onMouseDown={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
                               onMouseDown={(e) => e.stopPropagation()}
-                              title={`${seg.tgt_text || seg.src_text || ""}\n\n(Двойной клик по строке — перейти к видео)`}
-                              placeholder="Текст перевода…"
-                              className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-surface)] rounded px-1.5 py-0.5 text-[11.5px] text-[var(--color-text)] focus:outline-none transition-colors truncate"
-                            />
-                            <div className="shrink-0" onMouseDown={(e) => e.stopPropagation()}>
-                              <button
-                                type="button"
-                                onMouseDown={(e) => e.stopPropagation()}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const targetIds = (selSegs.has(seg.id) || selSegs.size > 1) && selSegs.size > 0 ? [...selSegs] : [seg.id];
-                                  setActorPickerState({ targetIds, x: rect.left, y: rect.bottom + 4 });
-                                }}
-                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors max-w-[110px] truncate ${
-                                  actorName
-                                    ? "bg-[var(--color-surface-2)] text-emerald-400 border-emerald-500/30 hover:border-emerald-500/60 font-semibold"
-                                    : "bg-transparent text-[var(--color-muted)] border-dashed border-[var(--color-border)] hover:border-[var(--color-muted)] hover:text-[var(--color-text)]"
-                                }`}
-                                title={actorName ? `Актёр: ${actorName}` : "Назначить актёра"}
-                              >
-                                <span className="truncate">{actorName || t("voice.noActor", "+ Актёр")}</span>
-                                <ChevronDown size={10} className="opacity-50 shrink-0" />
-                              </button>
-                            </div>
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const targetIds = (selSegs.has(seg.id) || selSegs.size > 1) && selSegs.size > 0 ? [...selSegs] : [seg.id];
+                                setActorPickerState({ targetIds, x: rect.left, y: rect.bottom + 4 });
+                              }}
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors max-w-[110px] truncate ${
+                                actorName
+                                  ? "bg-[var(--color-surface-2)] text-emerald-400 border-emerald-500/30 hover:border-emerald-500/60 font-semibold"
+                                  : "bg-transparent text-[var(--color-muted)] border-dashed border-[var(--color-border)] hover:border-[var(--color-muted)] hover:text-[var(--color-text)]"
+                              }`}
+                              title={actorName ? `Актёр: ${actorName}` : "Назначить актёра"}
+                            >
+                              <span className="truncate">{actorName || t("voice.noActor", "+ Актёр")}</span>
+                              <ChevronDown size={10} className="opacity-50 shrink-0" />
+                            </button>
                           </div>
-                        );
-                      })}
-                    </div>
-                  ) : ((() => {
-                    const VIRTUAL_WINDOW = 60;
-                    const CARD_ESTIMATE = 135;
-                    const totalSegs = p.segments.length;
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {p.segments.map((seg, idx) => {
+                      const on = seg.id === activeId;
+                      const isRegen = Boolean(seg.extra?.regenerated);
+                      let donorDisplayNum: string | number | null = null;
+                      if (seg.voice && (seg.voice.startsWith("donor:") || seg.voice.startsWith("clone:"))) {
+                        const donorKey = seg.voice.replace(/^(donor|clone):/, "");
+                        const donorIdx = p.segments.findIndex((s) => s.id === donorKey);
+                        donorDisplayNum = donorIdx !== -1 ? donorIdx + 1 : donorKey;
+                      }
 
-                    let startIndex = 0;
-                    let endIndex = totalSegs;
-                    let topSpacer = 0;
-                    let bottomSpacer = 0;
-
-                    if (totalSegs > VIRTUAL_WINDOW) {
-                      const approxIdx = Math.floor(subsScrollTop / CARD_ESTIMATE);
-                      startIndex = Math.max(0, Math.min(approxIdx - 20, totalSegs - VIRTUAL_WINDOW));
-                      endIndex = Math.min(totalSegs, startIndex + VIRTUAL_WINDOW);
-                      topSpacer = startIndex * CARD_ESTIMATE;
-                      bottomSpacer = (totalSegs - endIndex) * CARD_ESTIMATE;
-                    }
-
-                    const visibleSegments = totalSegs > VIRTUAL_WINDOW ? p.segments.slice(startIndex, endIndex) : p.segments;
-
-                    return (
-                      <>
-                        {topSpacer > 0 && <div style={{ height: `${topSpacer}px` }} className="w-full pointer-events-none shrink-0" />}
-                        {visibleSegments.map((seg, i) => {
-                          const idx = startIndex + i;
-                          const on = isActive(seg);
-                          const isRegen = Boolean(seg.extra?.regenerated);
-                          return (
-                            <div key={seg.id} ref={on ? activeRef : undefined}
-                              onDragOver={(e) => { e.preventDefault(); }}
-                              onDrop={(e) => { e.preventDefault(); dropSeg(seg.id); }}
-                              onClick={() => { setRendered(false); setScrub(seg.start); }}
-                              title={isRegen ? "Фраза перегенерирована вручную" : undefined}
-                              className={`rounded-xl p-2 border-l-[3px] transition-all cursor-pointer ${
-                                dragSegId === seg.id ? "opacity-30 border-dashed border-[var(--color-accent)]" : ""
-                              } ${seg.hidden ? "opacity-50" : ""} ${selSegs.has(seg.id) ? "ring-1 ring-[var(--color-accent)]/60" : ""} ${
-                                on
-                                  ? `bg-[var(--color-surface-2)] ${isRegen ? "border-emerald-400 ring-1 ring-emerald-400/40" : "border-[var(--color-accent)]"}`
-                                  : isRegen
-                                  ? "bg-emerald-500/10 border-emerald-400 hover:bg-emerald-500/15"
-                                  : "bg-[var(--color-surface-2)]/40 border-transparent hover:bg-[var(--color-surface-2)]/70"
-                              }`}>
-                              <div className="flex items-center justify-between gap-1">
-                                <div className="flex items-center gap-1 flex-1 min-w-0">
-                                  <button type="button" draggable
-                                    onDragStart={(e) => { e.dataTransfer.setData("text/plain", seg.id); setDragSegId(seg.id); }}
-                                    onClick={(e) => e.stopPropagation()}
-                                    title="Перетащить фразу (Drag & Drop)"
-                                    className="cursor-grab active:cursor-grabbing text-[var(--color-muted)] hover:text-[var(--color-accent)] p-0.5 rounded shrink-0">
-                                    <GripVertical size={13} />
-                                  </button>
-                                  <span className={`mono px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 transition-colors ${isRegen ? "bg-emerald-500/25 text-emerald-300 border-emerald-400 font-extrabold shadow-sm" : "bg-[var(--color-surface)] text-[var(--color-muted)] border-[var(--color-border)] opacity-70"}`} title={`Фраза #${idx + 1}\nID: ${seg.id}\nКэш: seg_${seg.id}.wav${isRegen ? "\n✨ Перегенерирована вручную" : ""}`}>#{idx + 1}</span>
-                                  <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "up"); }} disabled={idx === 0} title="Переместить вверх"
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronUp size={13} /></button>
-                                  <button onClick={(e) => { e.stopPropagation(); moveSeg(seg.id, "down"); }} disabled={idx === p.segments.length - 1} title="Переместить вниз"
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-20 transition-colors shrink-0"><ChevronDown size={13} /></button>
-                                  <button onClick={(e) => { e.stopPropagation(); setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; }); }}
-                                    className={`grid place-items-center w-3.5 h-3.5 rounded shrink-0 border transition-colors ${selSegs.has(seg.id) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>
-                                    {selSegs.has(seg.id) && <Check size={10} />}</button>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      const rect = e.currentTarget.getBoundingClientRect();
-                                      setVoiceMenuSeg(voiceMenuSeg?.id === seg.id ? null : { id: seg.id, x: rect.left, y: rect.bottom + 4 });
-                                    }}
-                                    title="Сменить спикера или индивидуальный голос фразы"
-                                    className={`mono px-1.5 py-0.5 rounded text-[9px] font-semibold flex items-center gap-1 transition-all border shrink-0 ${
-                                      seg.voice
-                                        ? "bg-purple-500/20 text-purple-300 border-purple-500/50 shadow-sm"
-                                        : "bg-[var(--color-overlay)] text-[var(--color-muted)] hover:text-white border-transparent hover:border-[var(--color-border)]"
-                                    }`}
-                                  >
-                                    {seg.voice ? (
-                                      <>
-                                        <span>SPK {seg.speaker ?? "0"}</span>
-                                        <span className="opacity-50">·</span>
-                                        {seg.voice.startsWith("donor:") || seg.voice.startsWith("clone:") ? (() => {
-                                          const donorKey = seg.voice.replace(/^(donor|clone):/, "");
-                                          const donorIdx = p.segments.findIndex((s) => s.id === donorKey);
-                                          const displayNum = donorIdx !== -1 ? donorIdx + 1 : donorKey;
-                                          return (
-                                            <span className="text-cyan-300 font-bold" title={`Донор: фраза #${displayNum} (ID: ${donorKey})`}>
-                                              🧬 #{displayNum}
-                                            </span>
-                                          );
-                                        })() : (
-                                          <span className="text-purple-300 font-bold">🎙️ {seg.voice}</span>
-                                        )}
-                                      </>
-                                    ) : (
-                                      <span>SPK {seg.speaker ?? "0"}</span>
-                                    )}
-                                  </button>
-                                  <span className={`mono text-[9.5px] px-1 py-0.5 rounded tabnum shrink-0 ${on ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold" : "bg-[var(--color-overlay)] text-[var(--color-muted)]"}`}>{fmtT(seg.start)} → {fmtT(seg.end)}</span>
-                                </div>
-                                <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
-                                  {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
-                                  <button onClick={(e) => { e.stopPropagation(); playSeg(seg); }} title={t("seg.play")}
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><Play size={13} /></button>
-                                  <button onClick={(e) => { e.stopPropagation(); playSoloSeg(seg.id); }} title={t("voice.playSolo")}
-                                    className={`p-0.5 transition-colors ${soloPlayingId === seg.id ? "text-amber-400 font-bold" : "text-[var(--color-muted)] hover:text-amber-400"}`}><Headphones size={13} /></button>
-                                  <button onClick={(e) => { e.stopPropagation(); doRegen(seg.id); }} disabled={regenId !== null} title={t("seg.regen")}
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                                    {regenId === seg.id ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
-                                  </button>
-                                  <button onClick={(e) => { e.stopPropagation(); doKeepSeg(seg.id); }} disabled={regenId !== null} title={seg.keep_original ? t("seg.unkeep") : t("seg.keep")}
-                                    className={`p-0.5 disabled:opacity-40 transition-colors ${seg.keep_original ? "text-[var(--color-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"}`}><Music size={13} /></button>
-                                  <button onClick={(e) => { e.stopPropagation(); doHideSeg(seg.id); }} disabled={regenId !== null} title={seg.hidden ? t("seg.show") : t("seg.hide")}
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                                    {seg.hidden ? <EyeOff size={13} /> : <Eye size={13} />}</button>
-                                  <button onClick={(e) => { e.stopPropagation(); doDelSeg(seg.id); }} disabled={regenId !== null} title={t("seg.del")}
-                                    className="p-0.5 text-[var(--color-muted)] hover:text-[#ef4444] disabled:opacity-40 transition-colors"><Trash2 size={13} /></button>
-                                </div>
-                              </div>
-                              <div className="text-[11px] text-[var(--color-muted)]/80 mt-1.5 leading-snug">{seg.src_text}</div>
-                              <AutoGrowTextarea
-                                id={`seg-txt-${seg.id}`}
-                                value={seg.tgt_text}
-                                onChange={(e) => patchSeg(seg.id, e.target.value)}
-                                onSplit={(textarea) => handleSplitAtTextCursor(seg, textarea)}
-                                onKeyDown={(e) => {
-                                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                                    e.preventDefault();
-                                    handleSplitAtTextCursor(seg, e.currentTarget);
-                                  }
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                                onBlur={(e) => { burstRef.current = null; persistSeg(seg.id, e.target.value); }}
-                                title="ПКМ — теги эмоций и эффектов, Ctrl+Enter — разрезать фразу"
-                                className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors"
-                              />
-                              {on && (
-                                <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.timingHint")}>
-                                  <Clock size={11} className="text-[var(--color-muted)] shrink-0" />
-                                  <input type="number" step={0.1} min={0} defaultValue={seg.start.toFixed(2)} key={`st${seg.id}-${seg.start}`}
-                                    onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.start) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, start: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
-                                    className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
-                                  <ArrowRight size={11} className="text-[var(--color-muted)] shrink-0" />
-                                  <input type="number" step={0.1} min={0} defaultValue={seg.end.toFixed(2)} key={`en${seg.id}-${seg.end}`}
-                                    onBlur={async (e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && Math.abs(v - seg.end) > 0.001) { setRendered(false); try { setProject(await api.patch(pid, { op: "segment", id: seg.id, end: v })); bump(); } catch (err) { await surfaceErr(err); } } }}
-                                    className="w-[62px] bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] mono tabnum focus:border-[var(--color-accent)] focus:outline-none" />
-                                  <span className="text-[10px] text-[var(--color-muted)]">{t("seg.seconds")}</span>
-                                </div>
-                              )}
-                              {(on || selSegs.has(seg.id)) && !seg.keep_original && (
-                                <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()} title={t("seg.speakerHint")}>
-                                  <Users size={11} className="text-[var(--color-muted)] shrink-0" />
-                                  <select value={seg.speaker ?? ""}
-                                    onChange={async (e) => {
-                                      let val = e.target.value;
-                                      if (val === "__new__") {
-                                        const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
-                                        val = String(nums.length ? Math.max(...nums) + 1 : 1);
-                                      }
-                                      setRendered(false);
-                                      try { setProject(await api.patch(pid, { op: "segment", id: seg.id, speaker: val })); bump(); } catch (err) { await surfaceErr(err); }
-                                    }}
-                                    className="flex-1 min-w-0 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none transition-colors">
-                                    {seg.speaker == null && <option value="">—</option>}
-                                    {speakers.map((s) => <option key={s} value={s}>SPK {s}</option>)}
-                                    <option value="__new__">＋ {t("seg.newSpeaker")}</option>
-                                  </select>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                        {bottomSpacer > 0 && <div style={{ height: `${bottomSpacer}px` }} className="w-full pointer-events-none shrink-0" />}
-                      </>
-                    );
-                  })())}
-                  <button onClick={addSeg} disabled={regenId !== null} title={t("seg.addHint")}
-                    className="w-full mt-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                    <Plus size={14} />{t("seg.add")}
-                  </button>
-                  <label title="Загрузить готовые субтитры из файла (.srt, .ass)"
-                    className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] cursor-pointer transition-colors">
-                    <Upload size={14} /> Импортировать субтитры (.srt, .ass)
-                    <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
-                  </label>
-                </div>
-              )}
-              {lane === "blur" && (
-                <div className="space-y-2">
-                  <Toggle label={t("blur.on")} on={p.render.blur} onClick={() => branch("blur_enable", { on: !p.render.blur })} />
-                  {p.render.blur && (
-                    <div className="py-1">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="mono text-[10px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
-                        <span className="mono text-[10px] text-[var(--color-text)] font-semibold">{blurSigmaDraft ?? p.render.blur_sigma ?? 60} σ</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={5}
-                        max={150}
-                        step={5}
-                        value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
-                        onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
-                        onPointerUp={async () => {
-                          if (blurSigmaDraft != null) {
-                            await branch("blur_enable", { on: p.render.blur, sigma: blurSigmaDraft });
-                            setBlurSigmaDraft(null);
-                          }
-                        }}
-                        className="w-full accent-[var(--color-accent)] cursor-pointer"
-                      />
+                      return (
+                        <SubtitleCard
+                          key={seg.id}
+                          seg={seg}
+                          idx={idx}
+                          totalSegs={p.segments.length}
+                          on={on}
+                          isRegen={isRegen}
+                          isSelected={selSegs.has(seg.id)}
+                          isRegenerating={regenId === seg.id}
+                          isSolo={soloPlayingId === seg.id}
+                          isAnyRegen={regenId !== null}
+                          speakers={speakers}
+                          donorDisplayNum={donorDisplayNum}
+                          fmtT={fmtT}
+                          activeRef={on ? activeRef : undefined}
+                          onScrub={(start) => {
+                            userScrolledAtRef.current = 0;
+                            prevActiveIdRef.current = null;
+                            onSeek(start);
+                          }}
+                          onMoveUp={() => moveSeg(seg.id, "up")}
+                          onMoveDown={() => moveSeg(seg.id, "down")}
+                          onToggleSelect={() => setSelSegs((prev) => { const n = new Set(prev); n.has(seg.id) ? n.delete(seg.id) : n.add(seg.id); return n; })}
+                          onVoiceMenu={(rect) => setVoiceMenuSeg(voiceMenuSeg?.id === seg.id ? null : { id: seg.id, x: rect.left, y: rect.bottom + 4 })}
+                          onPlay={() => playSeg(seg)}
+                          onPlaySolo={() => playSoloSeg(seg.id)}
+                          onRegen={() => doRegen(seg.id)}
+                          onKeep={() => doKeepSeg(seg.id)}
+                          onHide={() => doHideSeg(seg.id)}
+                          onDel={() => doDelSeg(seg.id)}
+                          onPatchText={(val) => patchSeg(seg.id, val)}
+                          onPersistText={(val) => { burstRef.current = null; persistSeg(seg.id, val); }}
+                          onSplitAtTextCursor={(textarea) => handleSplitAtTextCursor(seg, textarea)}
+                          onTimingBlur={async (field, val) => {
+                            setRendered(false);
+                            try { setProject(await api.patch(pid, { op: "segment", id: seg.id, [field]: val })); bump(); } catch (err) { await surfaceErr(err); }
+                          }}
+                          onSpeakerChange={async (rawVal) => {
+                            let val = rawVal;
+                            if (val === "__new__") {
+                              const nums = p.segments.map((x) => parseInt(x.speaker ?? "", 10)).filter((n) => !isNaN(n));
+                              val = String(nums.length ? Math.max(...nums) + 1 : 1);
+                            }
+                            setRendered(false);
+                            try { setProject(await api.patch(pid, { op: "segment", id: seg.id, speaker: val })); bump(); } catch (err) { await surfaceErr(err); }
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+                <button onClick={addSeg} disabled={regenId !== null} title={t("seg.addHint")}
+                  className="w-full mt-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
+                  <Plus size={14} />{t("seg.add")}
+                </button>
+                <label title="Загрузить готовые субтитры из файла (.srt, .ass)"
+                  className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] cursor-pointer transition-colors">
+                  <Upload size={14} /> Импортировать субтитры (.srt, .ass)
+                  <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
+                </label>
+              </div>
+              <div className={lane === "blur" ? "space-y-2" : "hidden"}>
+                <Toggle label={t("blur.on")} on={p.render.blur} onClick={() => branch("blur_enable", { on: !p.render.blur })} />
+                {p.render.blur && (
+                  <div className="py-1">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="mono text-[10px] text-[var(--color-muted)]">{t("editor.blurStrength")}</span>
+                      <span className="mono text-[10px] text-[var(--color-text)] font-semibold">{blurSigmaDraft ?? p.render.blur_sigma ?? 60} σ</span>
                     </div>
-                  )}
-                  <div className={p.render.blur ? "" : "opacity-40 pointer-events-none"}>
-                    <div className="flex items-center justify-between mt-2 mb-1.5">
-                      <span className="mono text-[10px] text-[var(--color-muted)]">{blurAll ? `${t("blur.all")} · ${(p.captions.blur_boxes || []).length}` : t("blur.frame")}</span>
-                      <button onClick={() => setBlurAll(!blurAll)} className="mono text-[10px] text-[var(--color-accent)] hover:underline">
-                        {blurAll ? t("blur.frame") : `${t("blur.all")} (${(p.captions.blur_boxes || []).length})`}
-                      </button>
-                    </div>
-                    {(p.captions.blur_boxes || []).length > 0 && (
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <button onClick={() => setSelBlurs((prev) => prev.size === (p.captions.blur_boxes || []).length ? new Set() : new Set((p.captions.blur_boxes || []).map((_, i) => i)))}
-                          className="px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">{t("sel.all")}</button>
-                        {selBlurs.size > 0 && (<>
-                          <span className="text-[11px] text-[var(--color-muted)]">{selBlurs.size} {t("sel.count")}</span>
-                          <button onClick={() => bulkDelIdx("del_blurs", selBlurs, () => setSelBlurs(new Set()))}
-                            className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-surface-2)] hover:text-[#ef4444] transition-colors"><Trash2 size={12} /></button>
-                        </>)}
-                      </div>
-                    )}
-                    <div className="space-y-1 max-h-[46vh] overflow-y-auto pr-1">
-                      {(p.captions.blur_boxes || []).map((b, i) => ({ b, i }))
-                        .filter(({ b }) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4))
-                        .map(({ b, i }) => (
-                          <div key={i} onClick={() => { setSelBlur(i); setRendered(false); setScrub(Math.max(b.t0, 0)); }}
-                            className={`flex items-center gap-2 mono text-[10px] rounded px-2 py-1 cursor-pointer transition-colors ${selBlur === i ? "bg-[color-mix(in_oklab,var(--color-accent)_18%,transparent)] text-[var(--color-text)] ring-1 ring-[var(--color-accent)]" : "text-[var(--color-muted)] bg-[var(--color-surface-2)]/40 hover:text-[var(--color-text)]"} ${b.hidden ? "opacity-50" : ""} ${selBlurs.has(i) ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
-                            <button onClick={(e) => { e.stopPropagation(); setSelBlurs((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; }); }}
-                              className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selBlurs.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selBlurs.has(i) && <Check size={9} />}</button>
-                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, hidden: !b.hidden }); }}
-                              title={b.hidden ? t("blur.show") : t("blur.hide")}
-                              className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.hidden ? <EyeOff size={12} /> : <Eye size={12} />}</button>
-                            <span className="flex-1 truncate">#{i + 1} · {b.w}×{b.h} · {fmtT(b.t0)}{b.hidden ? ` · ${t("blur.off")}` : ""}</span>
-                            {b.fill && (
-                              <input type="color" value={b.fill} onClick={(e) => e.stopPropagation()}
-                                onChange={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: e.target.value }); }}
-                                title={t("blur.fillColor")} className="w-4 h-4 shrink-0 p-0 border-0 bg-transparent rounded cursor-pointer" />
-                            )}
-                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: b.fill ? null : "#000000" }); }}
-                              title={b.fill ? t("blur.modeFill") : t("blur.modeBlur")}
-                              className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.fill ? <Square size={12} /> : <Droplet size={12} />}</button>
-                            <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
-                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: Math.max(scrub, 0) }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
-                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
-                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
-                              <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
-                            </span>
-                            <button onClick={(e) => { e.stopPropagation(); branch("blur_del", { idx: i }); setSelBlur(null); }} className="shrink-0 hover:text-[var(--color-warn)] transition-colors"><Trash2 size={12} /></button>
-                          </div>
-                        ))}
-                      {!(p.captions.blur_boxes || []).some((b) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4)) &&
-                        <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
-                    </div>
-                    <button onClick={async () => { const fresh = await branch("blur_add", { x: Math.round((p.meta.width || 0) * 0.25), y: Math.round((p.meta.height || 0) * 0.45), w: Math.round((p.meta.width || 0) * 0.5), h: Math.round((p.meta.height || 0) * 0.08), t0: Math.max(0, scrub - 1), t1: scrub + 2 }); if (fresh) setSelBlur((fresh.captions.blur_boxes || []).length - 1); }}
-                      className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
-                      <Plus size={13} /> {t("blur.add")}
+                    <input
+                      type="range"
+                      min={5}
+                      max={150}
+                      step={5}
+                      value={blurSigmaDraft ?? p.render.blur_sigma ?? 60}
+                      onChange={(e) => setBlurSigmaDraft(parseInt(e.target.value))}
+                      onPointerUp={async () => {
+                        if (blurSigmaDraft != null) {
+                          await branch("blur_enable", { on: p.render.blur, sigma: blurSigmaDraft });
+                          setBlurSigmaDraft(null);
+                        }
+                      }}
+                      className="w-full accent-[var(--color-accent)] cursor-pointer"
+                    />
+                  </div>
+                )}
+                <div className={p.render.blur ? "" : "opacity-40 pointer-events-none"}>
+                  <div className="flex items-center justify-between mt-2 mb-1.5">
+                    <span className="mono text-[10px] text-[var(--color-muted)]">{blurAll ? `${t("blur.all")} · ${(p.captions.blur_boxes || []).length}` : t("blur.frame")}</span>
+                    <button onClick={() => setBlurAll(!blurAll)} className="mono text-[10px] text-[var(--color-accent)] hover:underline">
+                      {blurAll ? t("blur.frame") : `${t("blur.all")} (${(p.captions.blur_boxes || []).length})`}
                     </button>
                   </div>
-                </div>
-              )}
-              {lane === "titles" && (
-                <div className="space-y-2">
-                  {!(p.captions.titles || []).length && <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
-                  {(p.captions.titles || []).length > 0 && (
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <button onClick={() => setSelTitles((prev) => prev.size === (p.captions.titles || []).length ? new Set() : new Set((p.captions.titles || []).map((_, i) => i)))}
+                  {(p.captions.blur_boxes || []).length > 0 && (
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <button onClick={() => setSelBlurs((prev) => prev.size === (p.captions.blur_boxes || []).length ? new Set() : new Set((p.captions.blur_boxes || []).map((_, i) => i)))}
                         className="px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">{t("sel.all")}</button>
-                      {selTitles.size > 0 && (<>
-                        <span className="text-[11px] text-[var(--color-muted)]">{selTitles.size} {t("sel.count")}</span>
-                        <button onClick={() => bulkDelIdx("del_titles", selTitles, () => setSelTitles(new Set()))}
+                      {selBlurs.size > 0 && (<>
+                        <span className="text-[11px] text-[var(--color-muted)]">{selBlurs.size} {t("sel.count")}</span>
+                        <button onClick={() => bulkDelIdx("del_blurs", selBlurs, () => setSelBlurs(new Set()))}
                           className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-surface-2)] hover:text-[#ef4444] transition-colors"><Trash2 size={12} /></button>
                       </>)}
                     </div>
                   )}
-                  {(p.captions.titles || []).map((ti, i) => (
-                    <div key={`${ti.start}_${ti.end}_${i}`} onClick={() => { setSelTitle(i); setRendered(false); setScrub(Math.max(ti.start, 0)); }}
-                      className={`rounded-xl p-2.5 bg-[var(--color-surface-2)]/50 cursor-pointer transition-shadow ${selTitle === i ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
-                      <div className="flex items-center gap-2 mono text-[10px] text-[var(--color-muted)] mb-1.5">
-                        <button onClick={() => setSelTitles((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
-                          className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selTitles.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selTitles.has(i) && <Check size={9} />}</button>
-                        <span className="tabnum">{fmtT(ti.start)} → {fmtT(ti.end)}</span>
-                        <button onClick={(e) => { e.stopPropagation(); branch("title_del", { idx: i }); setSelTitle(null); }} className="ml-auto hover:text-[var(--color-warn)] transition-colors" title="delete"><Trash2 size={12} /></button>
-                      </div>
-                      <input value={ti.tgt || ti.text} onChange={(e) => titleText(i, e.target.value)} onClick={(e) => e.stopPropagation()}
-                        onBlur={async (e) => { burstRef.current = null; setRendered(false); try { setProject(await api.patch(pid, { op: "title", idx: i, text: e.target.value, tgt: e.target.value })); bump(); } catch (err) { await surfaceErr(err); } }}
-                        className="w-full bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded p-1.5 text-[13px] focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
-                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                        <button onClick={() => branch("title", { idx: i, bold: !ti.bold })}
-                          className={`text-[11px] font-bold px-2 py-0.5 rounded border transition-colors ${ti.bold ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.bold")}</button>
-                        <button onClick={() => branch("title", { idx: i, italic: !ti.italic })}
-                          className={`text-[11px] italic px-2 py-0.5 rounded border transition-colors ${ti.italic ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.italic")}</button>
-                        <button onClick={() => branch("title", { idx: i, uppercase: !ti.uppercase })} title={t("style.caps")}
-                          className={`text-[11px] font-semibold px-2 py-0.5 rounded border transition-colors ${ti.uppercase ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>AA</button>
-                        <input type="color" value={ti.color || "#FFFFFF"} onChange={(e) => branch("title", { idx: i, color: e.target.value })}
-                          title={t("style.color")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-[var(--color-border)]" />
-                        <input type="color" value={ti.outline || "#000000"} onChange={(e) => branch("title", { idx: i, outline: e.target.value })}
-                          title={t("style.outline")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-dashed border-[var(--color-border)]" />
-                        <input key={`ow${i}-${ti.outline_w ?? "a"}`} type="number" min={0} max={20} defaultValue={ti.outline_w ?? undefined} placeholder={t("style.outlineW")} title={t("style.outlineWFull")}
-                          onBlur={(e) => branch("title", { idx: i, outline_w: e.target.value === "" ? null : parseInt(e.target.value) })}
-                          className="w-12 bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
-                        <select value={ti.shadow_dir ?? ""} title={t("style.shadow")}
-                          onChange={(e) => branch("title", { idx: i, shadow_dir: e.target.value === "" ? null : parseInt(e.target.value) })}
-                          className="bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
-                          {SHADOW_DIRS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                        </select>
-                        <input key={`sz${i}-${ti.size_px ?? "a"}`} type="number" min={12} max={300} defaultValue={ti.size_px ?? undefined} placeholder="px" title={t("style.size")}
-                          onBlur={(e) => branch("title", { idx: i, size_px: e.target.value ? parseInt(e.target.value) : null })}
-                          className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
-                        <select value={ti.font || ""} onChange={(e) => branch("title", { idx: i, font: e.target.value })}
-                          className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
-                          <option value="">{t("style.font")}</option>
-                          {Object.keys(fonts).map((f) => <option key={f} value={f}>{f}</option>)}
-                        </select>
-                        <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden">
-                          {([["left", AlignLeft, "edit.alignLeft"], ["center", AlignCenter, "edit.alignCenter"], ["right", AlignRight, "edit.alignRight"]] as const).map(([a, Ic, k]) => (
-                            <button key={a} onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, align: a }); }} title={t(k)}
-                              className={`px-1.5 py-1 transition-colors ${(ti.align || "center") === a ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}><Ic size={12} /></button>
-                          ))}
-                        </span>
-                        <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
-                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: scrub }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
-                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
-                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
-                          <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  <button onClick={async () => { const fresh = await branch("title_add", { text: "Title", x: Math.round((p.meta.width || 0) * 0.15), y: Math.round((p.meta.height || 0) * 0.4), w: Math.round((p.meta.width || 0) * 0.7), h: Math.round((p.meta.height || 0) * 0.1), t0: Math.max(0, scrub - 0.5), t1: scrub + 3 }); if (fresh) setSelTitle((fresh.captions.titles || []).length - 1); }}
-                    className="w-full inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
-                    <Plus size={13} /> {t("titles.add")}
+                  <div className="space-y-1 max-h-[46vh] overflow-y-auto pr-1">
+                    {(p.captions.blur_boxes || []).map((b, i) => ({ b, i }))
+                      .filter(({ b }) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4))
+                      .map(({ b, i }) => (
+                        <div key={i} onClick={() => { setSelBlur(i); onSeek(Math.max(b.t0, 0)); }}
+                          className={`flex items-center gap-2 mono text-[10px] rounded px-2 py-1 cursor-pointer transition-colors ${selBlur === i ? "bg-[color-mix(in_oklab,var(--color-accent)_18%,transparent)] text-[var(--color-text)] ring-1 ring-[var(--color-accent)]" : "text-[var(--color-muted)] bg-[var(--color-surface-2)]/40 hover:text-[var(--color-text)]"} ${b.hidden ? "opacity-50" : ""} ${selBlurs.has(i) ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
+                          <button onClick={(e) => { e.stopPropagation(); setSelBlurs((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; }); }}
+                            className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selBlurs.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selBlurs.has(i) && <Check size={9} />}</button>
+                          <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, hidden: !b.hidden }); }}
+                            title={b.hidden ? t("blur.show") : t("blur.hide")}
+                            className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.hidden ? <EyeOff size={12} /> : <Eye size={12} />}</button>
+                          <span className="flex-1 truncate">#{i + 1} · {b.w}×{b.h} · {fmtT(b.t0)}{b.hidden ? ` · ${t("blur.off")}` : ""}</span>
+                          {b.fill && (
+                            <input type="color" value={b.fill} onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: e.target.value }); }}
+                              title={t("blur.fillColor")} className="w-4 h-4 shrink-0 p-0 border-0 bg-transparent rounded cursor-pointer" />
+                          )}
+                          <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, fill: b.fill ? null : "#000000" }); }}
+                            title={b.fill ? t("blur.modeFill") : t("blur.modeBlur")}
+                            className="shrink-0 hover:text-[var(--color-accent)] transition-colors">{b.fill ? <Square size={12} /> : <Droplet size={12} />}</button>
+                          <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: Math.max(scrub, 0) }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t0: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); branch("blur", { idx: i, t1: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
+                          </span>
+                          <button onClick={(e) => { e.stopPropagation(); branch("blur_del", { idx: i }); setSelBlur(null); }} className="shrink-0 hover:text-[var(--color-warn)] transition-colors"><Trash2 size={12} /></button>
+                        </div>
+                      ))}
+                    {!(p.captions.blur_boxes || []).some((b) => blurAll || (scrub >= b.t0 - 0.6 && scrub <= b.t1 + 0.4)) &&
+                      <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
+                  </div>
+                  <button onClick={async () => { const fresh = await branch("blur_add", { x: Math.round((p.meta.width || 0) * 0.25), y: Math.round((p.meta.height || 0) * 0.45), w: Math.round((p.meta.width || 0) * 0.5), h: Math.round((p.meta.height || 0) * 0.08), t0: Math.max(0, scrub - 1), t1: scrub + 2 }); if (fresh) setSelBlur((fresh.captions.blur_boxes || []).length - 1); }}
+                    className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
+                    <Plus size={13} /> {t("blur.add")}
                   </button>
                 </div>
-              )}
+              </div>
+              <div className={lane === "titles" ? "space-y-2" : "hidden"}>
+                {!(p.captions.titles || []).length && <div className="text-[11px] text-[var(--color-muted)]/50 py-3 text-center">—</div>}
+                {(p.captions.titles || []).length > 0 && (
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <button onClick={() => setSelTitles((prev) => prev.size === (p.captions.titles || []).length ? new Set() : new Set((p.captions.titles || []).map((_, i) => i)))}
+                      className="px-2 py-0.5 rounded-md text-[11px] border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">{t("sel.all")}</button>
+                    {selTitles.size > 0 && (<>
+                      <span className="text-[11px] text-[var(--color-muted)]">{selTitles.size} {t("sel.count")}</span>
+                      <button onClick={() => bulkDelIdx("del_titles", selTitles, () => setSelTitles(new Set()))}
+                        className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--color-surface-2)] hover:text-[#ef4444] transition-colors"><Trash2 size={12} /></button>
+                    </>)}
+                  </div>
+                )}
+                {(p.captions.titles || []).map((ti, i) => (
+                  <div key={`${ti.start}_${ti.end}_${i}`} onClick={() => { setSelTitle(i); onSeek(Math.max(ti.start, 0)); }}
+                    className={`rounded-xl p-2.5 bg-[var(--color-surface-2)]/50 cursor-pointer transition-shadow ${selTitle === i ? "ring-1 ring-[var(--color-accent)]" : ""}`}>
+                    <div className="flex items-center gap-2 mono text-[10px] text-[var(--color-muted)] mb-1.5">
+                      <button onClick={() => setSelTitles((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
+                        className={`grid place-items-center w-3.5 h-3.5 rounded-sm shrink-0 border transition-colors ${selTitles.has(i) ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]" : "border-[var(--color-border)] hover:border-[var(--color-accent)]"}`}>{selTitles.has(i) && <Check size={9} />}</button>
+                      <span className="tabnum">{fmtT(ti.start)} → {fmtT(ti.end)}</span>
+                      <button onClick={(e) => { e.stopPropagation(); branch("title_del", { idx: i }); setSelTitle(null); }} className="ml-auto hover:text-[var(--color-warn)] transition-colors" title="delete"><Trash2 size={12} /></button>
+                    </div>
+                    <input value={ti.tgt || ti.text} onChange={(e) => titleText(i, e.target.value)} onClick={(e) => e.stopPropagation()}
+                      onBlur={async (e) => { burstRef.current = null; setRendered(false); try { setProject(await api.patch(pid, { op: "title", idx: i, text: e.target.value, tgt: e.target.value })); bump(); } catch (err) { await surfaceErr(err); } }}
+                      className="w-full bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded p-1.5 text-[13px] focus:border-[var(--color-accent)] focus:outline-none transition-colors" />
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                      <button onClick={() => branch("title", { idx: i, bold: !ti.bold })}
+                        className={`text-[11px] font-bold px-2 py-0.5 rounded border transition-colors ${ti.bold ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.bold")}</button>
+                      <button onClick={() => branch("title", { idx: i, italic: !ti.italic })}
+                        className={`text-[11px] italic px-2 py-0.5 rounded border transition-colors ${ti.italic ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>{t("style.italic")}</button>
+                      <button onClick={() => branch("title", { idx: i, uppercase: !ti.uppercase })} title={t("style.caps")}
+                        className={`text-[11px] font-semibold px-2 py-0.5 rounded border transition-colors ${ti.uppercase ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>AA</button>
+                      <input type="color" value={ti.color || "#FFFFFF"} onChange={(e) => branch("title", { idx: i, color: e.target.value })}
+                        title={t("style.color")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-[var(--color-border)]" />
+                      <input type="color" value={ti.outline || "#000000"} onChange={(e) => branch("title", { idx: i, outline: e.target.value })}
+                        title={t("style.outline")} className="w-7 h-6 rounded bg-transparent cursor-pointer border border-dashed border-[var(--color-border)]" />
+                      <input key={`ow${i}-${ti.outline_w ?? "a"}`} type="number" min={0} max={20} defaultValue={ti.outline_w ?? undefined} placeholder={t("style.outlineW")} title={t("style.outlineWFull")}
+                        onBlur={(e) => branch("title", { idx: i, outline_w: e.target.value === "" ? null : parseInt(e.target.value) })}
+                        className="w-12 bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
+                      <select value={ti.shadow_dir ?? ""} title={t("style.shadow")}
+                        onChange={(e) => branch("title", { idx: i, shadow_dir: e.target.value === "" ? null : parseInt(e.target.value) })}
+                        className="bg-[var(--color-surface-2)] border border-dashed border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
+                        {SHADOW_DIRS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                      <input key={`sz${i}-${ti.size_px ?? "a"}`} type="number" min={12} max={300} defaultValue={ti.size_px ?? undefined} placeholder="px" title={t("style.size")}
+                        onBlur={(e) => branch("title", { idx: i, size_px: e.target.value ? parseInt(e.target.value) : null })}
+                        className="w-12 bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none" />
+                      <select value={ti.font || ""} onChange={(e) => branch("title", { idx: i, font: e.target.value })}
+                        className="bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] focus:border-[var(--color-accent)] focus:outline-none">
+                        <option value="">{t("style.font")}</option>
+                        {Object.keys(fonts).map((f) => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                      <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden">
+                        {([["left", AlignLeft, "edit.alignLeft"], ["center", AlignCenter, "edit.alignCenter"], ["right", AlignRight, "edit.alignRight"]] as const).map(([a, Ic, k]) => (
+                          <button key={a} onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, align: a }); }} title={t(k)}
+                            className={`px-1.5 py-1 transition-colors ${(ti.align || "center") === a ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]" : "text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}><Ic size={12} /></button>
+                        ))}
+                      </span>
+                      <span className="inline-flex rounded border border-[var(--color-border)] overflow-hidden shrink-0">
+                        <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: scrub }); }} title={t("edit.setStart")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronFirst size={13} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: scrub }); }} title={t("edit.setEnd")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ChevronLast size={13} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, start: 0 }); }} title={t("edit.startVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowLeftToLine size={13} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); branch("title", { idx: i, end: p.meta.duration || 0 }); }} title={t("edit.endVideo")} className="px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"><ArrowRightToLine size={13} /></button>
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                <button onClick={async () => { const fresh = await branch("title_add", { text: "Title", x: Math.round((p.meta.width || 0) * 0.15), y: Math.round((p.meta.height || 0) * 0.4), w: Math.round((p.meta.width || 0) * 0.7), h: Math.round((p.meta.height || 0) * 0.1), t0: Math.max(0, scrub - 0.5), t1: scrub + 3 }); if (fresh) setSelTitle((fresh.captions.titles || []).length - 1); }}
+                  className="w-full inline-flex items-center justify-center gap-1.5 text-[12px] py-1.5 rounded-lg border border-dashed border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
+                  <Plus size={13} /> {t("titles.add")}
+                </button>
+              </div>
             </div>
           </>
         ) : (
@@ -6168,26 +6827,101 @@ function Editor() {
                       <Combobox value={cur} onChange={on}
                         options={voiceList.map((v) => ({ value: v, label: v }))}
                         placeholder={voiceList.length ? t("voice.search") : "(пак не найден)"}
-                        noResults={t("voice.noMatch")} allowClear className="flex-1 min-w-0" />
+                        noResults={t("voice.noMatch")} allowClear className="flex-1 min-w-0"
+                        onPreview={toggleVoicePreview}
+                        previewingValue={voicePreview}
+                      />
                       <button type="button" disabled={!cur} onClick={() => toggleVoicePreview(cur)} title={t("voice.preview")}
                         className="shrink-0 w-8 h-8 inline-flex items-center justify-center rounded-lg border border-[var(--color-border)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
                         {voicePreview === cur && cur ? <Pause size={14} className="text-[var(--color-accent)]" /> : <Play size={14} />}
                       </button>
                     </div>
                   );
-                  if (spks.length <= 1)
-                    return <div className="mt-2 flex w-full min-w-0">{pick(names[0] || "", (v) => branch("recast", { voice_mode: "voice", voice_name: v }))}</div>;
                   return (
-                    <div className="mt-2 space-y-1.5 w-full min-w-0">
-                      {spks.map((spk, i) => (
-                        <div key={spk} className="flex items-center gap-2 w-full min-w-0">
-                          <span className="mono text-[10px] text-[var(--color-muted)] w-12 shrink-0">SPK {spk}</span>
-                          {pick(names[i] || "", (v) => branch("recast", {
-                            voice_mode: "voice",
-                            voice_name: spks.map((_, j) => (j === i ? v : names[j] || "")).join(","),
-                          }))}
+                    <div className="mt-2 space-y-2 w-full min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-medium text-[var(--color-muted)]">
+                          {t("voice.speakerVoices", "Голоса по спикерам:")}
+                        </span>
+                        {autoCastOn && (
+                          <button
+                            type="button"
+                            disabled={autoCastBusy}
+                            onClick={async () => {
+                              if (!pid) return;
+                              setAutoCastBusy(true);
+                              try {
+                                const res = await api.autoCast(pid, selectedSubfolder || undefined);
+                                if (res.ok && res.project) {
+                                  setProject(res.project);
+                                  bump();
+                                  const msg = res.summary && res.summary.length
+                                    ? `Автоподбор: ${res.summary.join(" | ")}`
+                                    : "Автоподбор: голоса успешно назначены спикерам!";
+                                  pushActivity(msg, "done");
+                                  playSfx("notify");
+                                }
+                              } catch (err) {
+                                await surfaceErr(err);
+                              } finally {
+                                setAutoCastBusy(false);
+                              }
+                            }}
+                            title="Автоматически подобрать и распределить голоса из пака voices/ по текущим спикерам и актёрам"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] text-[11px] font-medium text-[var(--color-text)] transition-colors shadow-sm disabled:opacity-50"
+                          >
+                            {autoCastBusy ? (
+                              <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
+                            ) : (
+                              <Sparkles size={12} className="text-[var(--color-accent)]" />
+                            )}
+                            <span>{t("voice.autoCastBtn", "Автоподбор")}</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {voiceSubfolders.length > 0 && (
+                        <div className="flex items-center gap-1.5 p-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+                          <Folder size={12} className="text-[var(--color-accent)] shrink-0" />
+                          <span className="text-[11px] text-[var(--color-muted)] shrink-0">{t("voice.packSelect", "Пак / Папка:")}</span>
+                          <select
+                            value={selectedSubfolder}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setSelectedSubfolder(v);
+                              localStorage.setItem("dub-autocast-pack", v);
+                              if (pid) {
+                                api.patch(pid, { op: "audio", auto_cast_pack: v }).catch(() => {});
+                              }
+                            }}
+                            className="flex-1 min-w-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[11px] text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none cursor-pointer"
+                          >
+                            <option value="">{t("voice.rootPack", "Корень (voices/)")}</option>
+                            {voiceSubfolders.map((sf) => (
+                              <option key={sf} value={sf}>{sf}</option>
+                            ))}
+                            <option value="all">{t("voice.allPacks", "Все папки (voices/ + подкаталоги)")}</option>
+                          </select>
                         </div>
-                      ))}
+                      )}
+
+                      {spks.length <= 1 ? (
+                        <div className="flex w-full min-w-0">{pick(names[0] || "", (v) => branch("recast", { voice_mode: "voice", voice_name: v }))}</div>
+                      ) : (
+                        <div className="space-y-1.5 w-full min-w-0">
+                          {spks.map((spk, i) => (
+                            <div key={spk} className="flex items-center gap-2 w-full min-w-0">
+                              <span className="mono text-[10px] text-[var(--color-muted)] w-12 shrink-0 truncate" title={`Спикер ${spk}`}>
+                                SPK {spk}
+                              </span>
+                              {pick(names[i] || "", (v) => branch("recast", {
+                                voice_mode: "voice",
+                                voice_name: spks.map((_, j) => (j === i ? v : names[j] || "")).join(","),
+                              }))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -7198,7 +7932,7 @@ function langOptions(langs: { code: string; name: string }[], uiLang: string, ex
 }
 
 // Фильтруемый комбобокс: печатаешь кусок имени -> список сужается. Для больших списков (голоса/языки/шрифты).
-function Combobox({ value, options, onChange, placeholder, noResults, allowClear, className, size = "md" }: {
+function Combobox({ value, options, onChange, placeholder, noResults, allowClear, className, size = "md", onPreview, previewingValue }: {
   value: string;
   options: { value: string; label: string; search?: string }[];
   onChange: (v: string) => void;
@@ -7207,6 +7941,8 @@ function Combobox({ value, options, onChange, placeholder, noResults, allowClear
   allowClear?: boolean;               // пункт «—» для сброса в ""
   className?: string;
   size?: "sm" | "md";
+  onPreview?: (v: string) => void;
+  previewingValue?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -7235,18 +7971,48 @@ function Combobox({ value, options, onChange, placeholder, noResults, allowClear
         }}
         className={`w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg ${pad} text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none transition-colors`} />
       {open && (
-        <div className="absolute z-40 mt-1 w-full min-w-[180px] max-h-64 overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-xl">
+        <div className="absolute z-40 mt-1 w-full min-w-[200px] max-h-64 overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-xl">
           {allowClear && (
             <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => commit("")}
               className="block w-full text-left px-2.5 py-1.5 text-[12px] text-[var(--color-muted)] hover:bg-[var(--color-overlay)]">—</button>
           )}
           {filtered.length === 0 && <div className="px-2.5 py-2 text-[12px] text-[var(--color-muted)]">{noResults ?? "∅"}</div>}
-          {filtered.map((o) => (
-            <button key={o.value} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => commit(o.value)}
-              title={o.label}
-              className={`block w-full text-left px-2.5 py-1.5 text-[12px] truncate hover:bg-[var(--color-overlay)] ${o.value === value ? "text-[var(--color-accent)]" : "text-[var(--color-text)]"}`}>
-              {o.label}</button>
-          ))}
+          {filtered.map((o) => {
+            const isPlaying = previewingValue === o.value;
+            return (
+              <div
+                key={o.value}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => commit(o.value)}
+                className={`flex items-center justify-between gap-1.5 px-2.5 py-1.5 text-[12px] hover:bg-[var(--color-overlay)] cursor-pointer transition-colors group ${
+                  o.value === value ? "text-[var(--color-accent)] font-medium" : "text-[var(--color-text)]"
+                }`}
+              >
+                <span className="truncate flex-1" title={o.label}>{o.label}</span>
+                {onPreview && o.value && (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPreview(o.value);
+                    }}
+                    title="Прослушать сэмпл голоса"
+                    className={`shrink-0 p-1 rounded hover:bg-white/15 transition-colors ${
+                      isPlaying
+                        ? "text-[var(--color-accent)]"
+                        : "text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                    }`}
+                  >
+                    {isPlaying ? <Pause size={12} /> : <Play size={12} fill="currentColor" />}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -7659,8 +8425,8 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
 }
 
 // Пакетная обработка: DropZone кладёт выбранные файлы + настройки сюда, BatchView читает (без раздувания стора).
-const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; funnyOn: boolean; funny: string; voGain: number; voDuckMode: string; dubMixMode: string; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
-  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") !== "0" : true, funnyOn: false, funny: "", voGain: -12, voDuckMode: "dynamic", dubMixMode: "separated", trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
+const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; autoAlign: boolean; funnyOn: boolean; funny: string; voGain: number; voDuckMode: string; dubMixMode: string; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
+  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") === "1" : false, autoAlign: typeof window !== "undefined" ? localStorage.getItem("dub-auto-align") === "1" : false, funnyOn: false, funny: "", voGain: -12, voDuckMode: "dynamic", dubMixMode: "separated", trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
 
 type BatchItem = {
   name: string;
@@ -7679,10 +8445,11 @@ function BatchView() {
   const { t } = useTranslation();
   const setStage = useStore((s) => s.setStage);
   const filesRef = useRef<File[]>(batchState.files);
-  const { tgt, src, audio, subs, burn, detectText, subBlur, funnyOn, funny, voGain, voDuckMode, dubMixMode, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
+  const { tgt, src, audio, subs, burn, detectText, subBlur, autoAlign, funnyOn, funny, voGain, voDuckMode, dubMixMode, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
   const visionOn = useStore((s) => s.visionOn);
   const setVisionOn = useStore((s) => s.setVisionOn);
   const [batchSubBlur, setBatchSubBlur] = useState(subBlur);
+  const [batchAutoAlign, setBatchAutoAlign] = useState(autoAlign);
   const [items, setItems] = useState<BatchItem[]>(() => filesRef.current.map((f) => ({ name: f.name, status: "queued", pid: null, pct: 0, subsFile: null })));
   const [running, setRunning] = useState(false);
   const [doneN, setDoneN] = useState(0);
@@ -7731,6 +8498,12 @@ function BatchView() {
             upd({ pct: e.pct ?? null, stage: e.stage, detail: e.msg || stepText || undefined });
           }
         });
+        // Автовыравнивание по вокалу: привязка старта фраз к звуку речи перед рендером (не для транскрипта)
+        if (batchAutoAlign && audio !== "transcribe") {
+          try {
+            await api.alignProject(project_id);
+          } catch { /* fail-safe */ }
+        }
         if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain, mode: voDuckMode });   // громкость и режим дакинга со старта -> общий для всех проектов батча
         if (audio === "dub") await api.patch(project_id, { op: "dub_mix_mode", mode: dubMixMode });
         // Блюр-подложка под субтитрами: патчим в проект перед рендером
@@ -7793,6 +8566,16 @@ function BatchView() {
             <span className="text-[15px] font-semibold flex items-center gap-2 whitespace-nowrap"><FolderDown size={16} className="text-[var(--color-accent)]" />{t("batch.title")}</span>
           </div>
           <div className="flex items-center gap-3 shrink-0">
+            {/* Тумблер автовыравнивания по вокалу (скрыт в транскрипте) */}
+            {audio !== "transcribe" && (
+              <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title="Автовыравнивание по вокалу: привязка старта фраз к звуку речи.">
+                <input type="checkbox" checked={batchAutoAlign} disabled={running} onChange={(e) => { setBatchAutoAlign(e.target.checked); batchState.autoAlign = e.target.checked; }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
+                <span>Выравнивание</span>
+                <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${batchAutoAlign ? "bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]" : "bg-[var(--color-surface-2)] text-[var(--color-muted)]"}`}>
+                  {batchAutoAlign ? "ВКЛ" : "ВЫКЛ"}
+                </span>
+              </label>
+            )}
             {/* Тумблер блюр-подложки */}
             <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title="Размытая подложка под субтитрами. Выкл = чистый текст без блюра видеоряда.">
               <input type="checkbox" checked={batchSubBlur} disabled={running} onChange={(e) => { setBatchSubBlur(e.target.checked); batchState.subBlur = e.target.checked; }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
@@ -8216,19 +8999,32 @@ function TranscriptView() {
   const [scrub, setScrub] = useState(() => initialScrub() || 0);      // ?t=SEC — deep-link на кадр транскрипта
   const [play, setPlay] = useState(false);
   const [showHelp, setShowHelp] = useState(false);                  // оверлей-шпаргалка хоткеев (?)
-  const videoRef = useRef<HTMLVideoElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);                  // контейнер <video> -> фулскрин по F + Ctrl-колесо
   const scrubRef = useRef(0);                                       // свежий scrub без stale-замыкания в хоткеях
-  // Плей: <video> тянет /dub — для транскрипта (nodub) это ОРИГИНАЛ (видео+аудио). Скраб следует за
-  // currentTime -> активная строка + караоке-подсветка слова. Один элемент = и картинка, и звук.
-  useEffect(() => {
-    const v = videoRef.current; if (!v) return;
-    if (!play) { v.pause(); return; }
-    v.play().catch(() => setPlay(false));
-    const id = window.setInterval(() => setScrub(v.currentTime), 80);
-    return () => window.clearInterval(id);
-  }, [play]);
-  const seek = (tt: number) => { setScrub(tt); if (videoRef.current) videoRef.current.currentTime = tt; };
+  const [seekReq, setSeekReq] = useState<SeekRequest | null>(null);
+
+  const seek = (tt: number) => {
+    const clamped = clampTime(tt, p.meta.duration || tt);
+    setScrub(clamped);
+    setSeekReq({ id: Date.now(), time: clamped });
+  };
+
+  const {
+    videoRef,
+    mediaReady: transcriptMediaReady,
+    error: transcriptMediaError,
+    retry: retryTranscriptMedia,
+  } = useVideoLifecycle({
+    src: api.sourceVideoUrl(pid),
+    playing: play,
+    requestedTime: scrub,
+    seekRequest: seekReq,
+    muted: false,
+    volume: 1,
+    onClock: setScrub,
+    onEnded: () => setPlay(false),
+    onError: () => setPlay(false),
+  });
   useEffect(() => { scrubRef.current = scrub; }, [scrub]);          // свежий scrub для хоткеев
   useMediaHotkeys({                                                 // громкости нет -> ↑/↓ пропущены (setVol не задан)
     enabled: true, duration: p.meta.duration || 0, scrubRef, seek,
@@ -8245,7 +9041,16 @@ function TranscriptView() {
   // активная фраза = та, чей [start,end] накрывает скраб; при смене — подсветка + автоскролл к ней
   const activeId = rows.find((s) => scrub >= s.start && scrub < (s.end > s.start ? s.end : s.start + 3))?.id;
   const activeRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { activeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [activeId]);
+  const transcribeContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!activeRef.current || !transcribeContainerRef.current) return;
+    const container = transcribeContainerRef.current;
+    const cRect = container.getBoundingClientRect();
+    const elRect = activeRef.current.getBoundingClientRect();
+    if (elRect.top >= cRect.top + 8 && elRect.bottom <= cRect.bottom - 8) return;
+    const delta = elRect.top - (cRect.top + 24);
+    container.scrollTo({ top: Math.max(0, container.scrollTop + delta), behavior: play ? "auto" : "smooth" });
+  }, [activeId, play]);
   const durOf = (spk: string) => p.segments.filter((s) => (s.speaker ?? "0") === spk).reduce((a, s) => a + Math.max(0, s.end - s.start), 0);
   const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
@@ -8320,17 +9125,25 @@ function TranscriptView() {
         </div>
         <div className="px-3 pt-2 space-y-2">
           <div ref={previewRef} className="fs-preview relative rounded-lg overflow-hidden bg-black/50 border border-[var(--color-border)] grid place-items-center max-h-[34vh]">
-            <video ref={videoRef} src={api.dubUrl(pid)} playsInline preload="auto"
-              onEnded={() => setPlay(false)} onClick={() => setPlay((x) => !x)}
+            <video ref={videoRef} playsInline preload="auto"
+              onClick={() => setPlay((x) => !x)}
               className="max-h-[34vh] max-w-full cursor-pointer" />
+            {!transcriptMediaReady && (
+              <div className="absolute inset-0 grid place-items-center bg-black/70 pointer-events-none z-10">
+                <span className="text-xs text-white/70">{transcriptMediaError ? "Видео не загрузилось" : "Загрузка видео..."}</span>
+              </div>
+            )}
+            {transcriptMediaError && (
+              <button type="button" onClick={retryTranscriptMedia} className="absolute bottom-2 right-2 px-2 py-1 rounded bg-white/10 text-xs text-white z-20">Повторить</button>
+            )}
             <button onClick={() => setPlay((x) => !x)} title={play ? t("common.pause") : t("common.play")}
-              className="absolute bottom-2 left-2 grid place-items-center w-10 h-10 rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-lg hover:brightness-110 transition">
+              className="absolute bottom-2 left-2 grid place-items-center w-10 h-10 rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-lg hover:brightness-110 transition z-20">
               {play ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
             </button>
           </div>
           <WaveformTimeline pid={pid} duration={p.meta.duration || 0} scrub={scrub} segments={p.segments} onSeek={seek} />
         </div>
-        <div data-kb-scroll className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-1.5">
+        <div ref={transcribeContainerRef} data-kb-scroll className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-1.5">
           {rows.map((s) => {
             const spk = s.speaker ?? "0";
             const active = s.id === activeId;
@@ -8465,6 +9278,9 @@ export default function App() {
     const sel = (c as { selection?: Record<string, string> }).selection ?? {};
     if (sel.vision_on !== undefined) {
       useStore.getState().setVisionOn(sel.vision_on !== "0");
+    }
+    if (sel.auto_cast_on !== undefined) {
+      useStore.getState().setAutoCastOn(sel.auto_cast_on !== "0");
     }
     const asrLabel = sel.asr_engine === "whisper" ? `whisper ${sel.whisper_model || "auto"}` : c.asr_model;
     const parts = [c.device, `ASR ${asrLabel}`];

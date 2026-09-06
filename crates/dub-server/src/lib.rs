@@ -33,7 +33,9 @@ mod setup;
 mod spa;
 mod subimport;
 mod translate;
+mod autocast;
 mod voice_slots;
+pub mod voice_library;
 mod wavio;
 
 use axum::extract::{Multipart, Path as AxPath, Query, State};
@@ -396,6 +398,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/record/stop", post(record_stop))
         .route("/voices/download-pack", post(voices_download_pack))
         .route("/voices/catalog", get(voices_catalog))
+        .route("/voices/subfolders", get(voices_subfolders_list))
         .route("/voices/cast", get(voices_cast_list))
         .route("/voices/open-cast", post(voices_open_cast))
         .route("/voices/sample", get(voice_sample))
@@ -404,6 +407,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/voices/delete", post(voices_delete))
         .route("/projects/{pid}/speaker-voice", post(speaker_voice))
         .route("/projects/{pid}/voice-slots", post(voice_slots_assign))
+        .route("/projects/{pid}/autocast", post(project_autocast))
         .route("/projects/{pid}/casting", get(casting_get).post(casting_save))
         .route("/projects/{pid}/casting/avatar", get(casting_avatar))
         .route("/projects/{pid}/casting/voice", get(casting_voice))
@@ -625,26 +629,28 @@ fn sanitize_voice_name(s: &str) -> String {
     if n.is_empty() { "Мой голос".to_string() } else { n }
 }
 
-/// Имена голосов в каталоге: стемы .wav/.mp3 (запись с микрофона = .wav; пак = .mp3).
+/// Имена голосов в каталоге: стемы .wav/.mp3.
 fn list_voice_names(dir: &Path) -> Vec<String> {
-    let mut names = std::collections::BTreeSet::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-            if ext == "wav" || ext == "mp3" {
-                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                    names.insert(stem.to_string());
-                }
-            }
-        }
-    }
-    names.into_iter().collect()
+    voice_library::list_voice_names(dir, None)
 }
 
-/// GET /voices — список голосов из каталога (пак + записи с микрофона).
-async fn voices_list(State(st): State<AppState>) -> Json<Value> {
-    Json(json!({ "voices": list_voice_names(&st.voices_dir) }))
+/// GET /voices?subfolder=<subfolder> — список голосов из каталога (пак + записи с микрофона + подпапки).
+async fn voices_list(
+    State(st): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let subfolder = q.get("subfolder").map(|s| s.trim()).filter(|s| !s.is_empty());
+    let (voices, detailed, subfolders) = voice_library::list_voices_detailed(&st.voices_dir, subfolder);
+    Json(json!({
+        "voices": voices,
+        "detailed": detailed,
+        "subfolders": subfolders,
+    }))
+}
+
+/// GET /voices/subfolders — список подкаталогов (паков) в каталоге voices/.
+async fn voices_subfolders_list(State(st): State<AppState>) -> Json<Value> {
+    Json(json!({ "subfolders": voice_library::list_voice_subfolders(&st.voices_dir) }))
 }
 
 /// GET /voices/cast — список голосов из каталога voices/cast/.
@@ -662,26 +668,19 @@ async fn voices_open_cast(State(st): State<AppState>) -> Json<Value> {
     Json(json!({ "ok": true }))
 }
 
-/// GET /voices/sample?name=<name> — отдать аудио-сэмпл голоса (voices/<name>.wav|.mp3 или voices/cast/<name>.wav|.mp3) с Range для <audio>
-/// (прослушка выбранного голоса в UI). sanitize защищает от path-traversal.
+/// GET /voices/sample?name=<name> — отдать аудио-сэмпл голоса с Range для <audio>.
+/// Ищет файл в voices/cast/, корне voices/ и рекурсивно в любых подкаталогах-паках.
 async fn voice_sample(
     State(st): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Response {
-    let name = sanitize_voice_name(q.get("name").map(|s| s.as_str()).unwrap_or(""));
-    if name.is_empty() {
+    let raw_name = q.get("name").map(|s| s.as_str()).unwrap_or("").trim();
+    if raw_name.is_empty() {
         return (StatusCode::BAD_REQUEST, "no name").into_response();
     }
-    for ext in ["wav", "mp3"] {
-        let cast_p = st.voices_dir.join("cast").join(format!("{name}.{ext}"));
-        if cast_p.is_file() {
-            return serve_file_range(&cast_p, req, None).await;
-        }
-        let p = st.voices_dir.join(format!("{name}.{ext}"));
-        if p.is_file() {
-            return serve_file_range(&p, req, None).await;
-        }
+    if let Some(p) = voice_library::find_voice_file(&st.voices_dir, raw_name) {
+        return serve_file_range(&p, req, None).await;
     }
     (StatusCode::NOT_FOUND, "voice not found").into_response()
 }
@@ -814,9 +813,8 @@ async fn voice_slots_assign(
     };
     let male = names_of("male");
     let female = names_of("female");
-    let available: std::collections::BTreeSet<String> = list_voice_names(&st.voices_dir).into_iter().collect();
     for n in male.iter().chain(female.iter()) {
-        if !available.contains(n) {
+        if voice_library::find_voice_file(&st.voices_dir, n).is_none() {
             return (StatusCode::BAD_REQUEST, format!("голос {n:?} не найден в voices/")).into_response();
         }
     }
@@ -871,6 +869,81 @@ async fn voice_slots_assign(
         }
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// POST /projects/{pid}/autocast {subfolder?} — автоподбор голосов из voices/ по спикерам и актёрам.
+async fn project_autocast(
+    State(st): State<AppState>,
+    axum::extract::Path(pid): axum::extract::Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let dir = match st.proj_dir(&pid) {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    let mut proj = match st.load_project(&pid) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+
+    let vocals = {
+        let clean = dir.join("vocals16_clean.wav");
+        let raw16 = dir.join("vocals16.wav");
+        let raw = dir.join("vocals.wav");
+        if clean.is_file() {
+            clean
+        } else if raw16.is_file() {
+            raw16
+        } else if raw.is_file() {
+            raw
+        } else {
+            return (
+                StatusCode::CONFLICT,
+                "нет вокала для автоподбора — сначала выполните анализ видео",
+            )
+                .into_response();
+        }
+    };
+
+    if !models::auto_cast_enabled(&st.models_root) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Автоподбор голосов (Auto-Cast) отключен в настройках программы",
+        )
+            .into_response();
+    }
+
+    let subfolder = body
+        .get("subfolder")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let voices_dir = st.voices_dir.clone();
+    let models_root = st.models_root.clone();
+    let dir_job = dir.clone();
+
+    let res = tokio::task::spawn_blocking(move || {
+        let summary = autocast::auto_assign_pack_voices_direct(
+            &mut proj,
+            &vocals,
+            &voices_dir,
+            &models_root,
+            &dir_job,
+            subfolder.as_deref(),
+        )?;
+        save_project_atomic(&dir_job, &proj)?;
+        Ok::<_, String>((summary, proj))
+    })
+    .await;
+
+    match res {
+        Ok(Ok((summary, proj))) => {
+            Json(json!({ "ok": true, "summary": summary, "project": proj })).into_response()
+        }
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("поток: {e}")).into_response(),
     }
 }
 
@@ -1358,6 +1431,7 @@ async fn create_project(
             let _ = tokio::fs::write(d.join("name.txt"), n.as_bytes()).await;
         }
         filename = fname;
+
     }
 
     // Создаём начальный project.json, чтобы проект сразу мог быть открыт в редакторе без вызова analyze
@@ -2591,6 +2665,8 @@ async fn source_video(
     if !f.is_file() {
         return (StatusCode::NOT_FOUND, "no source video found").into_response();
     }
+
+    // Всегда отдаём исходный файл: поддержка Range нужна аппаратному плееру.
     serve_file_range(&f, req, None).await
 }
 
@@ -2818,6 +2894,7 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
     }
 
     let audio_file = [
+        "vocals16_clean.wav",
         "stems/vocals.wav",
         "vocals16.wav",
         "ref_vocals16.wav",
@@ -2841,41 +2918,18 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         let mut count = 0usize;
         let mut wav_path = audio_file;
         let voc16 = d.join("vocals16_align.wav");
-        if wav_path.is_file() && media::to_16k_mono(&wav_path, &voc16).is_ok() {
-            wav_path = voc16;
+        let is_already_16k = wav_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|n| n.starts_with("vocals16"));
+        if !is_already_16k && wav_path.is_file() && media::to_16k_mono(&wav_path, &voc16).is_ok() {
+            wav_path = voc16.clone();
         }
 
         let n_segs = proj.segments.len();
-        let mut aligned_by_words = vec![false; n_segs];
+        let mut acoustically_aligned = vec![false; n_segs];
 
-        // 1. Пословное выравнивание Whisper/ASR (100% защита от вздохов, кашля и шумов)
-        for i in 0..n_segs {
-            if let Some(serde_json::Value::Array(words)) = proj.segments[i].extra.get("words") {
-                if !words.is_empty() {
-                    let first_start = words.first().and_then(|w| w.get("start")).and_then(serde_json::Value::as_f64);
-                    let last_end = words.last().and_then(|w| w.get("end")).and_then(serde_json::Value::as_f64);
-                    if let (Some(ws), Some(we)) = (first_start, last_end) {
-                        if we > ws && ws >= 0.0 {
-                            let prev_bound = if i > 0 { proj.segments[i - 1].end + dub_asr::MIN_SUBTITLE_GAP } else { 0.0 };
-                            let next_bound = if i + 1 < n_segs { proj.segments[i + 1].start - dub_asr::MIN_SUBTITLE_GAP } else { f64::INFINITY };
-                            let target_start = (ws - dub_asr::SPEECH_LEAD_IN).max(prev_bound).max(0.0);
-                            let target_end = (we + dub_asr::SPEECH_TAIL).min(next_bound).max(target_start + 0.100);
-                            let r_start = (target_start * 100.0).round() / 100.0;
-                            let r_end = (target_end * 100.0).round() / 100.0;
-                            if (r_start - proj.segments[i].start).abs() > 0.015 || (r_end - proj.segments[i].end).abs() > 0.015 {
-                                proj.segments[i].start = r_start;
-                                proj.segments[i].end = r_end;
-                                proj.segments[i].dirty = true;
-                                count += 1;
-                            }
-                            aligned_by_words[i] = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Для сегментов без сохранённых слов (новые/отредактированные) — строгий гармонический VAD
+        // 1. Приоритетное акустическое выравнивание по чистому вокалу (Harmonic VAD + Onset)
         if let Ok((samples, sr)) = wavio::read_mono_f32(&wav_path) {
             let mut bounds: Vec<dub_asr::SegmentBound> = proj
                 .segments
@@ -2888,14 +2942,70 @@ pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
 
             let changes = dub_asr::align_bounds(&mut bounds, &samples, sr);
             for (i, changed) in changes.into_iter().enumerate() {
-                if !aligned_by_words[i] && changed {
-                    proj.segments[i].start = bounds[i].start;
-                    proj.segments[i].end = bounds[i].end;
-                    proj.segments[i].dirty = true;
-                    count += 1;
+                if changed {
+                    let r_start = (bounds[i].start * 100.0).round() / 100.0;
+                    let r_end = (bounds[i].end * 100.0).round() / 100.0;
+                    if (r_start - proj.segments[i].start).abs() > 0.015 || (r_end - proj.segments[i].end).abs() > 0.015 {
+                        proj.segments[i].start = r_start;
+                        proj.segments[i].end = r_end;
+                        proj.segments[i].dirty = true;
+                        count += 1;
+
+                        // Если есть пословный тайминг, подтягиваем слова к обновлённым границам фразы
+                        if let Some(serde_json::Value::Array(words)) = proj.segments[i].extra.get_mut("words") {
+                            for w in words.iter_mut() {
+                                if let Some(obj) = w.as_object_mut() {
+                                    if let Some(ws) = obj.get("start").and_then(|v| v.as_f64()) {
+                                        if ws < r_start {
+                                            obj.insert("start".into(), serde_json::json!(r_start));
+                                        }
+                                    }
+                                    if let Some(we) = obj.get("end").and_then(|v| v.as_f64()) {
+                                        if we > r_end {
+                                            obj.insert("end".into(), serde_json::json!(r_end));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    acoustically_aligned[i] = true;
                 }
             }
         }
+
+        // 2. Фолбэк по пословным границам только для тех сегментов, где акустический VAD не нашёл звук
+        for i in 0..n_segs {
+            if !acoustically_aligned[i] {
+                if let Some(serde_json::Value::Array(words)) = proj.segments[i].extra.get("words") {
+                    if !words.is_empty() {
+                        let first_start = words.first().and_then(|w| w.get("start")).and_then(serde_json::Value::as_f64);
+                        let last_end = words.last().and_then(|w| w.get("end")).and_then(serde_json::Value::as_f64);
+                        if let (Some(ws), Some(we)) = (first_start, last_end) {
+                            if we > ws && ws >= 0.0 {
+                                let prev_bound = if i > 0 { proj.segments[i - 1].end + dub_asr::MIN_SUBTITLE_GAP } else { 0.0 };
+                                let next_bound = if i + 1 < n_segs { proj.segments[i + 1].start - dub_asr::MIN_SUBTITLE_GAP } else { f64::INFINITY };
+                                let target_start = ws.max(prev_bound).max(0.0);
+                                let target_end = (we + dub_asr::SPEECH_TAIL).min(next_bound).max(target_start + 0.100);
+                                let r_start = (target_start * 100.0).round() / 100.0;
+                                let r_end = (target_end * 100.0).round() / 100.0;
+                                if (r_start - proj.segments[i].start).abs() > 0.015 || (r_end - proj.segments[i].end).abs() > 0.015 {
+                                    proj.segments[i].start = r_start;
+                                    proj.segments[i].end = r_end;
+                                    proj.segments[i].dirty = true;
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if voc16.is_file() {
+            let _ = std::fs::remove_file(&voc16);
+        }
+
         let _ = save_project_atomic(&d, &proj);
         (count, proj)
     }).await;

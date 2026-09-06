@@ -95,10 +95,13 @@ pub fn is_selection_key(key: &str) -> bool {
             | "pause_squeeze_on" // "1" -> умное сжатие межсловных пауз перед ускорением; "0" -> выкл
             | "speech_rate_on"  // "1" -> адаптация темпа генерации TTS под длину текста/слота; "0" -> дефолт темп
             | "emo_ref_on"      // "1" -> эмоциональный референс сцены (перенос эмоций из оригинального вокала); "0" -> выкл
+            | "emo_ref_clean"   // "1" -> умный Emo-Ref (Smart Word-Trim, Text-Sync, Context-Pad); "0" -> базовый Emo-Ref
             | "vo_lead_in"      // "1" -> UN Voice-Over Lead-in (вступление диктора после оригинала); "0" -> без задержки
             | "dub_reverb_match" // "1" -> легкое акустическое согласование пространства (Early Reflections); "0" -> сухой звук
             | "voice_manual_ctrl" // "1" -> ручной контроль температуры/стабильности голоса; "0" -> дефолт
             | "voice_temp"      // температура голоса: "0.10".."0.36" (дефолт "0.20")
+            | "auto_cast_on"    // "1" -> доступность автоподбора голосов (Auto-Cast) из пака voices/; "0" -> выкл
+            | "auto_cast_pack"  // выбранная подпапка пака (пусто = весь каталог voices/)
             // Облачные модели (OpenRouter) — опциональная замена тяжёлого локального LLM/TTS. Всё ВЫКЛ по умолчанию.
             | "or_key"          // API-ключ OpenRouter (хранится локально в active.json, не логируется)
             | "or_llm_on"       // "1" -> перевод через OpenRouter chat вместо локальной Gemma
@@ -253,6 +256,11 @@ pub fn bench_enabled(mroot: &Path) -> bool {
 /// без него фон в дубляже звучит на полной громкости под голосом. Настройка "duck_on"="1".
 pub fn duck_enabled(mroot: &Path) -> bool {
     pick(&load_selection(mroot), "duck_on") == Some("1")
+}
+
+/// Включён ли автоподбор голосов (Auto-Cast) из пака voices/. Дефолт true ("1"); выкл "0".
+pub fn auto_cast_enabled(mroot: &Path) -> bool {
+    pick(&load_selection(mroot), "auto_cast_on") != Some("0")
 }
 
 /// Включён ли мультимодальный анализ видеокадров (Vision): "0" -> выкл (Fast Text Mode), иначе вкл (дефолт true).

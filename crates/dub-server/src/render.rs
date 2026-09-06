@@ -467,6 +467,97 @@ pub fn strip_higgs_tags(s: &str) -> String {
     out.split_whitespace().collect::<Vec<&str>>().join(" ")
 }
 
+/// Подсчет реальных произносимых буквенно-цифровых символов без управляющих тегов Higgs (<|...|>)
+pub fn count_speech_chars(s: &str) -> usize {
+    strip_higgs_tags(s)
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .count()
+}
+
+/// Извлечение чистых пословных границ и синхронизированного текста из `s.extra["words"]`.
+/// Возвращает (clean_start, clean_end, Option<synced_ref_text>).
+pub fn smart_word_bounds(
+    s: &dub_core::Segment,
+    cap: f64,
+    segs: &[(usize, &dub_core::Segment)],
+    key: &str,
+) -> Option<(f64, f64, Option<String>)> {
+    let words = s.extra.get("words").and_then(|v| v.as_array())?;
+    if words.is_empty() {
+        return None;
+    }
+    let first_start = words.first().and_then(|w| w.get("start")).and_then(|v| v.as_f64())?;
+    let last_end = words.last().and_then(|w| w.get("end")).and_then(|v| v.as_f64())?;
+    if last_end <= first_start || first_start < 0.0 {
+        return None;
+    }
+
+    // Защитные акустические поля:
+    // -20 мс на атаку взрывных («п», «т», «к»), +30 мс на затухание гласных
+    let mut ws = (first_start - 0.020).max(s.start).max(0.0);
+    let mut we = (last_end + 0.030).min(s.end);
+    let mut dur = we - ws;
+
+    // Контекстный охват коротких фраз (< 1.0с): если чистая речь короткая («Стой!», «Да!»),
+    // расширяем границы наружу на естественные паузы/вдохи оригинального актера до ~1.0-1.2с,
+    // но только если нет пересечения с речью ДРУГОГО персонажа.
+    if dur < 1.0 {
+        let needed = 1.0 - dur;
+        let pad_l = (needed * 0.5).min(0.35);
+        let pad_r = (needed * 0.5).min(0.35);
+        let cand_ws = (ws - pad_l).max(0.0);
+        let cand_we = we + pad_r;
+        let clean_expanded = !segs.iter().any(|(_, o)| {
+            let ospk = o.speaker.as_deref().unwrap_or("0");
+            ospk != key && o.start < cand_we && o.end > cand_ws
+        });
+        if clean_expanded {
+            ws = cand_ws;
+            we = cand_we;
+            dur = we - ws;
+        }
+    }
+
+    // Если даже после зачистки/паддинга чистая речь < 0.5с -> слишком коротко для Higgs (риск дефекта)
+    if dur < 0.5 {
+        return None;
+    }
+
+    let trim_end = we.min(ws + cap);
+    let capped = we > ws + cap + 0.05;
+
+    // Синхронизация текста: если аудио обрезано по капу ref_secs, отбираем только
+    // те слова, которые реально уложились в отрезанный кусок звука trim_end.
+    let text = if capped {
+        let fitting_words: Vec<&str> = words
+            .iter()
+            .filter(|w| {
+                w.get("end")
+                    .and_then(|v| v.as_f64())
+                    .map_or(false, |end_t| end_t <= trim_end + 0.10)
+            })
+            .filter_map(|w| w.get("word").and_then(|v| v.as_str()))
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+            .collect();
+        if fitting_words.is_empty() {
+            None
+        } else {
+            Some(fitting_words.join(" "))
+        }
+    } else {
+        let t = s.src_text.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    };
+
+    Some((ws, trim_end, text))
+}
+
 /// Похожесть ожидаемого перевода и услышанного ASR: нормализация (lowercase, ё→е, только буквы/цифры)
 /// + доля общих слов от максимума. Мягкая метрика: ловим «совсем не то/тишину», не орфографию.
 fn qc_similarity(expected: &str, heard: &str) -> f64 {
@@ -716,7 +807,7 @@ fn build_dub(
                     clone_slot_spks.insert(spk.clone()); // спикер на клоне — identity-реф ниже
                     continue;
                 }
-                let src = ["wav", "mp3"].iter().map(|e| paths.voices_dir.join(format!("{nm}.{e}"))).find(|p| p.is_file());
+                let src = crate::voice_library::find_voice_file(&paths.voices_dir, nm);
                 if let Some(src) = src {
                     let out = wd.join(format!("ref_pack_{i}.wav"));
                     // реф КАПИТСЯ до paths.ref_secs (дефолт 12с; на слабой RAM юзер уменьшает в настройках —
@@ -813,13 +904,20 @@ fn build_dub(
     // спикера (ref_of). Файл — свой на сегмент (по id), не конфликтует с seg_*.wav дубляжа. ref_text для
     // эмоц-рефа = src_text ЭТОГО же сегмента (совпадает с аудио по построению, перетранскрипция не нужна).
     // Порт коротких/1-спикер путей неизменен: при паке и на грязных/коротких репликах ведём себя как раньше.
-    let emo_ref_on = crate::models::load_selection(&paths.models_root)
+    let sel = crate::models::load_selection(&paths.models_root);
+    let emo_ref_on = sel
         .get("emo_ref_on")
         .and_then(|v| v.as_str())
         .map(|v| v != "0")
         .unwrap_or(true);
+    let emo_ref_clean = emo_ref_on
+        && sel
+            .get("emo_ref_clean")
+            .and_then(|v| v.as_str())
+            .map(|v| v == "1")
+            .unwrap_or(false);
     let emo_enabled = emo_ref_on;
-    let emo_ref_of = |s: &dub_core::Segment, sid: &str| -> Option<PathBuf> {
+    let emo_ref_of = |s: &dub_core::Segment, sid: &str| -> Option<(PathBuf, Option<String>)> {
         if !emo_enabled || dirty_count == 0 {
             return None;
         }
@@ -827,18 +925,40 @@ fn build_dub(
             return None; // пак — фикс-голос юзера, эмоцию источника не переносим
         }
         let key = s.speaker.as_deref().unwrap_or("0");
-        if (s.end - s.start) < 1.0 {
-            return None; // слишком коротко (< 1.0с) для отдельного рефа
-        }
         if !seg_is_clean(s, key, &segs) {
             return None; // оверлап чужого спикера -> не чистый эмоц-реф
         }
-        let out = wd.join(format!("emoref_{sid}.wav"));
-        // кап длины сверху ref_secs (не раздувать prefill-граф Higgs), как для identity-рефа.
         let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
-        let end = s.end.min(s.start + cap);
-        match media::trim(&vocals16, &out, s.start, end.max(s.start + 0.05), 16_000) {
-            Ok(()) => Some(out),
+
+        let (raw_start, raw_end, ref_text) = if emo_ref_clean {
+            if let Some((ws, we, txt)) = smart_word_bounds(s, cap, &segs, key) {
+                (ws, we, txt)
+            } else {
+                // Если words нет или чистая речь < 0.5с -> откат на базовое поведение
+                if (s.end - s.start) < 1.0 {
+                    return None;
+                }
+                let end = s.end.min(s.start + cap);
+                let capped = (s.end - s.start) > cap + 0.05;
+                let t = s.src_text.trim();
+                let txt = if capped || t.is_empty() { None } else { Some(t.to_string()) };
+                (s.start, end, txt)
+            }
+        } else {
+            // Базовый режим (emo_ref_clean=0): 1:1 оригинальное поведение
+            if (s.end - s.start) < 1.0 {
+                return None; // слишком коротко (< 1.0с) для отдельного рефа
+            }
+            let end = s.end.min(s.start + cap);
+            let capped = (s.end - s.start) > cap + 0.05;
+            let t = s.src_text.trim();
+            let txt = if capped || t.is_empty() { None } else { Some(t.to_string()) };
+            (s.start, end, txt)
+        };
+
+        let out = wd.join(format!("emoref_{sid}.wav"));
+        match media::trim(&vocals16, &out, raw_start, raw_end.max(raw_start + 0.05), 16_000) {
+            Ok(()) => Some((out, ref_text)),
             Err(_) => None, // сбой обрезки -> тихо на identity-реф
         }
     };
@@ -1064,7 +1184,7 @@ fn build_dub(
                 continue; // уже в кэше
             }
             let voice = cloud_voice_map.get(s.speaker.as_deref().unwrap_or("0")).cloned().unwrap_or_default();
-            jobs.push((raw, tgt.to_string(), voice));
+            jobs.push((raw, strip_higgs_tags(tgt), voice));
         }
         if jobs.len() > 1 && conc > 1 {
             emit(progress, "tts", &format!("облачный TTS: {} сегментов в {} параллельных потоков", jobs.len(), conc));
@@ -1075,6 +1195,7 @@ fn build_dub(
     let dirty_total = dirty_count;
     let mut synth_counter = 0usize;
     let mut engine_dead = false; // движок завис в DLL (ENGINE_STUCK) — больше не трогаем, остаток на оригинале
+    let mut custom_ref_cache: std::collections::HashMap<String, (PathBuf, Option<String>)> = std::collections::HashMap::new();
     for &(fi, s) in segs.iter() {
         // Кэш-файл сегмента — ПО ЕГО ID, не по индексу fi. Кэш переиспользуется между рендерами (не-dirty
         // сегменты не ре-синтезируются). При индекс-имени удаление/перестановка сегмента сдвигает индексы —
@@ -1105,11 +1226,13 @@ fn build_dub(
             continue;
         }
         let tgt = s.tgt_text.trim();
-        let tgt_chars = tgt.chars().filter(|c| c.is_alphanumeric()).count();
+        let tgt_chars = count_speech_chars(tgt);
 
         // Референс голоса для сегмента: custom_ref (голос из пака или донор) -> emo_ref -> identity-реф
         let custom_ref: Option<(PathBuf, Option<String>)> = if let Some(v) = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-            if let Some(donor_spec) = v.strip_prefix("donor:").or_else(|| v.strip_prefix("clone:")) {
+            if let Some(cached) = custom_ref_cache.get(v) {
+                Some(cached.clone())
+            } else if let Some(donor_spec) = v.strip_prefix("donor:").or_else(|| v.strip_prefix("clone:")) {
                 // Донорский клон из конкретного сегмента (по ID или по индексу #N)
                 let donor_seg = proj.segments.iter().find(|ds| ds.id == donor_spec).or_else(|| {
                     donor_spec.parse::<usize>().ok().and_then(|idx| if idx > 0 { proj.segments.get(idx - 1) } else { proj.segments.get(0) })
@@ -1120,7 +1243,9 @@ fn build_dub(
                     let end = ds.end.min(ds.start + cap);
                     if media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok() {
                         let t = ds.src_text.trim();
-                        Some((out, if t.is_empty() { None } else { Some(t.to_string()) }))
+                        let res = (out, if t.is_empty() { None } else { Some(t.to_string()) });
+                        custom_ref_cache.insert(v.to_string(), res.clone());
+                        Some(res)
                     } else {
                         None
                     }
@@ -1128,17 +1253,8 @@ fn build_dub(
                     None
                 }
             } else {
-                // Кастомный голос из библиотеки (voices/<name>.wav/mp3 или voices/cast/<name>.wav/mp3)
-                let voice_file = ["wav", "mp3"]
-                    .iter()
-                    .map(|e| paths.voices_dir.join("cast").join(format!("{v}.{e}")))
-                    .find(|p| p.is_file())
-                    .or_else(|| {
-                        ["wav", "mp3"]
-                            .iter()
-                            .map(|e| paths.voices_dir.join(format!("{v}.{e}")))
-                            .find(|p| p.is_file())
-                    });
+                // Кастомный голос из библиотеки (voices/<name>.wav/mp3, voices/cast/, или подкаталоги)
+                let voice_file = crate::voice_library::find_voice_file(&paths.voices_dir, v);
                 if let Some(vf) = voice_file {
                     let out = wd.join(format!("ref_voice_{sid}.wav"));
                     // Копируем во временный ASCII-файл, чтобы MinGW FFmpeg под Windows гарантированно открыл путь без сбоев кодировки
@@ -1150,13 +1266,13 @@ fn build_dub(
                     let _ = std::fs::remove_file(&temp_in);
                     if trim_ok && out.is_file() {
                         // Подтягиваем текст расшифровки сэмпла .txt, если он есть в каталоге (Higgs клонирует чище)
-                        let txt_file = if paths.voices_dir.join("cast").join(format!("{v}.txt")).is_file() {
-                            paths.voices_dir.join("cast").join(format!("{v}.txt"))
-                        } else {
-                            paths.voices_dir.join(format!("{v}.txt"))
-                        };
-                        let txt_content = std::fs::read_to_string(&txt_file).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-                        Some((out, txt_content))
+                        let txt_content = crate::voice_library::find_voice_txt(&paths.voices_dir, v)
+                            .and_then(|tf| std::fs::read_to_string(&tf).ok())
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty());
+                        let res = (out, txt_content);
+                        custom_ref_cache.insert(v.to_string(), res.clone());
+                        Some(res)
                     } else {
                         None
                     }
@@ -1172,16 +1288,10 @@ fn build_dub(
         let emo_ref = if custom_ref.is_some() { None } else { emo_ref_of(s, &sid) };
         let (ref_wav, ref_text): (PathBuf, Option<String>) = if let Some(cr) = custom_ref {
             cr
+        } else if let Some((er, et)) = emo_ref {
+            (er, et)
         } else {
-            match &emo_ref {
-                Some(er) => {
-                    let cap = paths.ref_secs.min(REF_IDEAL_HI).max(REF_MIN_AFTER_TRIM);
-                    let capped = (s.end - s.start) > cap + 0.05;
-                    let t = s.src_text.trim();
-                    (er.clone(), if capped || t.is_empty() { None } else { Some(t.to_string()) })
-                }
-                None => (ref_of(s), reftext_of(s)),
-            }
+            (ref_of(s), reftext_of(s))
         };
 
         let spk_seed_base: u64 = {
@@ -1232,7 +1342,8 @@ fn build_dub(
                 .get(s.speaker.as_deref().unwrap_or("0"))
                 .map(String::as_str)
                 .unwrap_or("");
-            match crate::cloud_tts::synth_audio(&paths.models_root, tgt, cv) {
+            let clean_cloud_tgt = strip_higgs_tags(tgt);
+            match crate::cloud_tts::synth_audio(&paths.models_root, &clean_cloud_tgt, cv) {
                 Ok(wav) => {
                     std::fs::write(&raw, &wav).map_err(|e| format!("запись облачного seg_{sid}: {e}"))?;
                 }
@@ -1467,7 +1578,7 @@ fn build_dub(
             let take1_ok = if delta <= 0.10 && raw_dur > 0.0 {
                 // Первый дубль уложился в 10% от слота — проверяем на отсутствие дефектов синтеза
                 if let Ok((samples, sr)) = crate::wavio::read_mono_f32(&raw) {
-                    synth_defect(&samples, sr as i32, tgt.chars().filter(|c| c.is_alphanumeric()).count()).is_none()
+                    synth_defect(&samples, sr as i32, count_speech_chars(tgt)).is_none()
                 } else {
                     false
                 }
@@ -1503,7 +1614,7 @@ fn build_dub(
                     let eng = engine.as_ref().unwrap();
                     match voice_clone_guarded(eng, tgt, &ref_wav_mt.to_string_lossy(), rt_mt, &opts, vc_to) {
                         Ok((samples, sr)) => {
-                            if synth_defect(&samples, sr, tgt.chars().filter(|c| c.is_alphanumeric()).count()).is_none() {
+                            if synth_defect(&samples, sr, count_speech_chars(tgt)).is_none() {
                                 let wav = AudiocppEngine::encode_wav(&samples, sr, 1);
                                 let _ = std::fs::write(&take_path, &wav);
                                 if let Ok(td) = media::duration(&take_path) {
@@ -1664,7 +1775,7 @@ fn build_dub(
                 let main_rw = if has_custom_voice { seg_rw.clone() } else { ref_of(s) };
                 let main_rt = if has_custom_voice { seg_rt.clone() } else { reftext_of(s) };
                 let alt = if has_custom_voice { None } else { alt_refs.get(spk) };
-                let tgt_chars = tgtq.chars().filter(|c| c.is_alphanumeric()).count();
+                let tgt_chars = count_speech_chars(tgtq);
                 // до 3 свежих попыток (низкая temperature по ENGINES_FINDINGS §1.3 + кап токенов §1.1):
                 // альт-реф 0.3 → альт-реф 0.15+RAS1 → основной 0.10 с новым seed
                 let e_dur = (s.end - s.start).max(0.6);
@@ -2157,6 +2268,19 @@ fn pick_ref_window(
     })
 }
 
+/// Безопасный ASCII-тег для имени спикера в именах файлов референсов.
+/// Защищает C++ движок (Higgs/audiocpp_engine.dll) под Windows от падений при кириллице в путях.
+fn safe_spk_tag(spk: &str) -> String {
+    if spk.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') && !spk.is_empty() {
+        spk.to_string()
+    } else {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        spk.hash(&mut hasher);
+        format!("u{:012x}", hasher.finish())
+    }
+}
+
 fn build_speaker_refs(
     segs: &[(usize, &dub_core::Segment)],
     vocals16: &Path,
@@ -2177,7 +2301,8 @@ fn build_speaker_refs(
         // НОВЫЙ выбор (#81): окно 7-12с, ±1с обрезка, дроп первой реплики. ТОЛЬКО под флагом.
         for spk in speakers {
             let Some(pick) = pick_ref_window(&spk, segs, ref_secs) else { continue };
-            let ref_wav = wd.join(format!("ref_spk{spk}.wav"));
+            let stag = safe_spk_tag(&spk);
+            let ref_wav = wd.join(format!("ref_spk{stag}.wav"));
             media::trim(vocals16, &ref_wav, pick.start, pick.end.max(pick.start + 0.05), 16_000)?;
             refs.insert(spk.clone(), ref_wav);
             if pick.exact_cover && !pick.src_text.is_empty() {
@@ -2243,8 +2368,9 @@ fn build_speaker_refs(
             }
         }
         batch_pos.insert(spk.clone(), batch.len());
+        let stag = safe_spk_tag(spk);
         for (i, c) in good.iter().enumerate() {
-            let p = wd.join(format!("ref_cand_spk{spk}_{i}.wav"));
+            let p = wd.join(format!("ref_cand_spk{stag}_{i}.wav"));
             media::trim(vocals16, &p, c.start, c.end.min(c.start + ref_secs), 16_000)?;
             batch.push(p);
         }
@@ -2287,8 +2413,9 @@ fn build_speaker_refs(
             }
         };
         let main_seg = cands[main_i];
-        let ref_wav = wd.join(format!("ref_spk{spk}.wav"));
-        std::fs::rename(wd.join(format!("ref_cand_spk{spk}_{main_i}.wav")), &ref_wav)
+        let stag = safe_spk_tag(spk);
+        let ref_wav = wd.join(format!("ref_spk{stag}.wav"));
+        std::fs::rename(wd.join(format!("ref_cand_spk{stag}_{main_i}.wav")), &ref_wav)
             .map_err(|e| format!("реф спикера {spk}: {e}"))?;
         refs.insert(spk.clone(), ref_wav);
         // ref_text: прошёл сверку -> УСЛЫШАННОЕ (точно соответствует звуку клипа); иначе src_text.
@@ -2307,8 +2434,8 @@ fn build_speaker_refs(
             .map(|(i, h, _)| (*i, *h))
             .or_else(|| verdict.iter().find(|(i, _, _)| *i != main_i).map(|(i, h, _)| (*i, *h)));
         if let Some((ai, ah)) = alt {
-            let alt_wav = wd.join(format!("ref_alt_spk{spk}.wav"));
-            if std::fs::rename(wd.join(format!("ref_cand_spk{spk}_{ai}.wav")), &alt_wav).is_ok() {
+            let alt_wav = wd.join(format!("ref_alt_spk{stag}.wav"));
+            if std::fs::rename(wd.join(format!("ref_cand_spk{stag}_{ai}.wav")), &alt_wav).is_ok() {
                 let at = ah
                     .filter(|h| !h.trim().is_empty())
                     .map(str::to_string)
@@ -2318,7 +2445,7 @@ fn build_speaker_refs(
         }
         // Прибрать невостребованных кандидатов.
         for (i, _) in cands.iter().enumerate() {
-            let _ = std::fs::remove_file(wd.join(format!("ref_cand_spk{spk}_{i}.wav")));
+            let _ = std::fs::remove_file(wd.join(format!("ref_cand_spk{stag}_{i}.wav")));
         }
         emit(
             progress,
@@ -3120,6 +3247,12 @@ mod tests {
         assert_eq!(strip_higgs_tags("<|emotion:fear|><|style:shouting|> Помогите! <|prosody:speed_fast|>"), "Помогите!");
         assert_eq!(strip_higgs_tags("Обычный текст без тегов."), "Обычный текст без тегов.");
         assert_eq!(strip_higgs_tags("<|emotion:sadness|>"), "");
+
+        // Подсчет реальных букв без раздувания тегами
+        assert_eq!(count_speech_chars("<|emotion:anger|>Привет мир!"), 9); // "Приветмир" = 9 букв
+        assert_eq!(count_speech_chars("<|style:whispering|>Тихий шепот"), 10);
+        assert_eq!(count_speech_chars("<|emotion:fear|><|style:shouting|> Помогите! <|prosody:speed_fast|>"), 8);
+        assert_eq!(count_speech_chars("<|emotion:sadness|>"), 0);
     }
 
     #[test]
@@ -3202,6 +3335,51 @@ mod tests {
 
         // Де-эссер должен динамически поджать резкий сибилянтный пик
         assert!(peak_after < peak_before * 0.85, "De-Esser must tame harsh sibilance: {peak_after} vs {peak_before}");
+    }
+
+    #[test]
+    fn test_smart_word_bounds_trim_and_sync() {
+        let mut s = seg("s0", 10.0, 15.0, "I don't believe you at all");
+        let words = serde_json::json!([
+            { "word": "I", "start": 10.40, "end": 10.60 },
+            { "word": "don't", "start": 10.65, "end": 11.00 },
+            { "word": "believe", "start": 11.05, "end": 11.80 },
+            { "word": "you", "start": 11.85, "end": 12.30 },
+            { "word": "at", "start": 12.35, "end": 12.60 },
+            { "word": "all", "start": 12.65, "end": 13.10 }
+        ]);
+        s.extra.insert("words".into(), words);
+
+        let segs = vec![(0, &s)];
+
+        // Без капа (cap = 10.0) -> срез строго по первому и последнему слову
+        let (ws, we, txt) = smart_word_bounds(&s, 10.0, &segs, "0").expect("should find bounds");
+        assert!((ws - 10.38).abs() < 0.001); // 10.40 - 0.020
+        assert!((we - 13.13).abs() < 0.001); // 13.10 + 0.030
+        assert_eq!(txt.as_deref(), Some("I don't believe you at all"));
+
+        // С капом 1.5с (cap = 1.5) -> обрезка по капу и синхронизация текста
+        // ws = 10.38, trim_end = 10.38 + 1.5 = 11.88
+        // Слова до 11.88 + 0.10 (11.98): "I", "don't", "believe" (end 11.80)
+        let (ws2, we2, txt2) = smart_word_bounds(&s, 1.5, &segs, "0").expect("should find bounds");
+        assert!((ws2 - 10.38).abs() < 0.001);
+        assert!((we2 - 11.88).abs() < 0.001);
+        assert_eq!(txt2.as_deref(), Some("I don't believe"));
+    }
+
+    #[test]
+    fn test_smart_word_bounds_short_context_pad() {
+        let mut s = seg("s0", 5.0, 5.8, "Stop!");
+        let words = serde_json::json!([
+            { "word": "Stop!", "start": 5.20, "end": 5.60 }
+        ]);
+        s.extra.insert("words".into(), words);
+        let segs = vec![(0, &s)];
+
+        // Чистая речь 0.4с (5.18..5.63). Контекстный паддинг расширяет до >= 0.8с, если нет других спикеров
+        let (ws, we, txt) = smart_word_bounds(&s, 10.0, &segs, "0").expect("should pad short");
+        assert!(we - ws >= 0.8, "duration should be padded: {}", we - ws);
+        assert_eq!(txt.as_deref(), Some("Stop!"));
     }
 }
 
