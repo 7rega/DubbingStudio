@@ -177,7 +177,23 @@ export default function PreviewCanvas({
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => ro.disconnect();
+
+    const onResize = () => {
+      measure();
+      requestAnimationFrame(measure);
+      setTimeout(measure, 50);
+      setTimeout(measure, 150);
+      setTimeout(measure, 300);
+    };
+
+    window.addEventListener("resize", onResize);
+    document.addEventListener("fullscreenchange", onResize);
+
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("fullscreenchange", onResize);
+    };
   }, [vw, vh]);
 
   useEffect(() => {
@@ -299,7 +315,7 @@ export default function PreviewCanvas({
   })();
 
   return (
-    <div ref={wrap} className="relative w-full h-full min-h-0 overflow-hidden grid place-items-center bg-black/40 rounded-xl">
+    <div ref={wrap} className="fs-canvas-wrap relative w-full h-full min-h-0 overflow-hidden grid place-items-center bg-black/40 rounded-xl">
       <div className="relative overflow-hidden rounded-lg" style={{ width: disp.w, height: disp.h }}>
         <>
           <video ref={videoRef} playsInline muted={audioMuted} preload="auto" className="absolute inset-0 w-full h-full rounded-lg object-contain bg-black" />

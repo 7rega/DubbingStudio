@@ -5784,7 +5784,7 @@ function Editor() {
           {/* Видео-контейнер */}
           <div
             ref={previewRef}
-            className={`fs-preview flex-1 min-h-0 relative flex flex-col justify-center items-center ${
+            className={`fs-preview flex-1 min-h-0 relative flex flex-col ${
               isFullscreen && !showFsControls && play ? "cursor-none" : ""
             }`}
             onMouseMove={handleFsMouseMove}
@@ -5795,7 +5795,7 @@ function Editor() {
                 <CastingPanel pid={pid} characters={characters!} voices={voiceList} onChange={setCharacters} />
               </div>
             )}
-            <div className={hasCasting && castView ? "hidden" : "w-full h-full"}>
+            <div className={hasCasting && castView ? "hidden" : "w-full h-full flex-1 min-h-0 flex flex-col items-center justify-center"}>
               {audioOnly ? (
                 <div className="w-full h-full grid place-items-center rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)]">
                   <div className="text-center px-6">
