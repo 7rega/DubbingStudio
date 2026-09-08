@@ -475,7 +475,10 @@ pub fn count_speech_chars(s: &str) -> usize {
         .count()
 }
 
-/// Извлечение чистых пословных границ и синхронизированного текста из `s.extra["words"]`.
+/// Извлечение чистых пословных границ (или границ сегмента) и синхронизированного текста.
+/// Поддерживает как сегменты со словным потоком Whisper `s.extra["words"]`, так и ручные/импортированные
+/// фразы без слов. При короткой длительности (< 1.0с) адаптивно расширяет границы в свободную тишину
+/// (учитывая соседей) до ~1.0-1.1с.
 /// Возвращает (clean_start, clean_end, Option<synced_ref_text>).
 pub fn smart_word_bounds(
     s: &dub_core::Segment,
@@ -483,43 +486,86 @@ pub fn smart_word_bounds(
     segs: &[(usize, &dub_core::Segment)],
     key: &str,
 ) -> Option<(f64, f64, Option<String>)> {
-    let words = s.extra.get("words").and_then(|v| v.as_array())?;
-    if words.is_empty() {
-        return None;
-    }
-    let first_start = words.first().and_then(|w| w.get("start")).and_then(|v| v.as_f64())?;
-    let last_end = words.last().and_then(|w| w.get("end")).and_then(|v| v.as_f64())?;
-    if last_end <= first_start || first_start < 0.0 {
-        return None;
-    }
+    let maybe_words = s.extra.get("words").and_then(|v| v.as_array()).filter(|w| !w.is_empty());
 
-    // Защитные акустические поля:
-    // -20 мс на атаку взрывных («п», «т», «к»), +30 мс на затухание гласных
-    let mut ws = (first_start - 0.020).max(s.start).max(0.0);
-    let mut we = (last_end + 0.030).min(s.end);
+    let (mut ws, mut we, has_words) = if let Some(words) = maybe_words {
+        let first_start = words.first().and_then(|w| w.get("start")).and_then(|v| v.as_f64())?;
+        let last_end = words.last().and_then(|w| w.get("end")).and_then(|v| v.as_f64())?;
+        if last_end <= first_start || first_start < 0.0 {
+            return None;
+        }
+        // Защитные акустические поля: -20 мс на атаку, +30 мс на затухание
+        let start = (first_start - 0.020).max(s.start).max(0.0);
+        let end = (last_end + 0.030).min(s.end);
+        (start, end, true)
+    } else {
+        // Нет слов (ручная фраза, импорт .srt/.ass, правка таймингов) -> берем физические границы сегмента
+        let start = s.start.max(0.0);
+        let end = s.end;
+        if end <= start {
+            return None;
+        }
+        (start, end, false)
+    };
+
     let mut dur = we - ws;
+    if dur <= 0.0 {
+        return None;
+    }
 
-    // Контекстный охват коротких фраз (< 1.0с): если чистая речь короткая («Стой!», «Да!»),
-    // расширяем границы наружу на естественные паузы/вдохи оригинального актера до ~1.0-1.2с,
-    // но только если нет пересечения с речью ДРУГОГО персонажа.
+    // Проверяем, не перекрывается ли УЖЕ начальный диапазон с другим спикером
+    let initial_conflict = segs.iter().any(|(_, o)| {
+        let ospk = o.speaker.as_deref().unwrap_or("0");
+        ospk != key && o.start < we && o.end > ws
+    });
+    if initial_conflict {
+        return None;
+    }
+
+    // Контекстный охват коротких фраз (< 1.0с): адаптивно расширяем границы наружу в тишину
+    // оригинальной дорожки до 1.0-1.1с, не задевая речь других персонажей.
     if dur < 1.0 {
         let needed = 1.0 - dur;
-        let pad_l = (needed * 0.5).min(0.35);
-        let pad_r = (needed * 0.5).min(0.35);
-        let cand_ws = (ws - pad_l).max(0.0);
-        let cand_we = we + pad_r;
-        let clean_expanded = !segs.iter().any(|(_, o)| {
+
+        // Ищем границы доступного свободного пространства слева и справа
+        let mut left_limit = 0.0f64;
+        let mut right_limit = f64::MAX;
+
+        for (_, o) in segs {
             let ospk = o.speaker.as_deref().unwrap_or("0");
-            ospk != key && o.start < cand_we && o.end > cand_ws
-        });
-        if clean_expanded {
-            ws = cand_ws;
-            we = cand_we;
-            dur = we - ws;
+            if ospk != key {
+                if o.end <= ws && o.end > left_limit {
+                    left_limit = o.end;
+                }
+                if o.start >= we && o.start < right_limit {
+                    right_limit = o.start;
+                }
+            }
         }
+
+        let max_left_pad = (ws - left_limit).max(0.0);
+        let max_right_pad = (right_limit - we).max(0.0);
+
+        let half = needed * 0.5;
+        let mut pad_l = half.min(max_left_pad);
+        let mut pad_r = half.min(max_right_pad);
+
+        // Если с одной стороны места не хватает (например, начало файла или близко чужой голос),
+        // компенсируем недостающее расширение за счет противоположной свободной стороны:
+        if pad_l < half {
+            let deficit = half - pad_l;
+            pad_r = (pad_r + deficit).min(max_right_pad);
+        } else if pad_r < half {
+            let deficit = half - pad_r;
+            pad_l = (pad_l + deficit).min(max_left_pad);
+        }
+
+        ws = (ws - pad_l).max(0.0);
+        we += pad_r;
+        dur = we - ws;
     }
 
-    // Если даже после зачистки/паддинга чистая речь < 0.5с -> слишком коротко для Higgs (риск дефекта)
+    // Если даже после попытки расширения отрезок < 0.5с -> слишком коротко для Higgs (риск дефекта)
     if dur < 0.5 {
         return None;
     }
@@ -527,9 +573,10 @@ pub fn smart_word_bounds(
     let trim_end = we.min(ws + cap);
     let capped = we > ws + cap + 0.05;
 
-    // Синхронизация текста: если аудио обрезано по капу ref_secs, отбираем только
-    // те слова, которые реально уложились в отрезанный кусок звука trim_end.
-    let text = if capped {
+    // Синхронизация текста: если аудио обрезано по капу ref_secs и есть слова,
+    // отбираем только слова, реально уложившиеся в отрезанный кусок звука trim_end.
+    let text = if capped && has_words {
+        let words = maybe_words.unwrap();
         let fitting_words: Vec<&str> = words
             .iter()
             .filter(|w| {
@@ -932,17 +979,20 @@ fn build_dub(
 
         let (raw_start, raw_end, ref_text) = if emo_ref_clean {
             if let Some((ws, we, txt)) = smart_word_bounds(s, cap, &segs, key) {
+                let orig_dur = (s.end - s.start).max(0.0);
+                let new_dur = we - ws;
+                if new_dur > orig_dur + 0.02 {
+                    eprintln!(
+                        "[Emo-Ref] {sid}: адаптивное расширение с {:.2}с до {:.2}с [{:.2}..{:.2}]",
+                        orig_dur, new_dur, ws, we
+                    );
+                }
                 (ws, we, txt)
             } else {
-                // Если words нет или чистая речь < 0.5с -> откат на базовое поведение
-                if (s.end - s.start) < 1.0 {
-                    return None;
-                }
-                let end = s.end.min(s.start + cap);
-                let capped = (s.end - s.start) > cap + 0.05;
-                let t = s.src_text.trim();
-                let txt = if capped || t.is_empty() { None } else { Some(t.to_string()) };
-                (s.start, end, txt)
+                eprintln!(
+                    "[Emo-Ref] {sid}: откат на identity-реф (коллизия со спикерами или длина < 0.5с)",
+                );
+                return None;
             }
         } else {
             // Базовый режим (emo_ref_clean=0): 1:1 оригинальное поведение
@@ -959,7 +1009,10 @@ fn build_dub(
         let out = wd.join(format!("emoref_{sid}.wav"));
         match media::trim(&vocals16, &out, raw_start, raw_end.max(raw_start + 0.05), 16_000) {
             Ok(()) => Some((out, ref_text)),
-            Err(_) => None, // сбой обрезки -> тихо на identity-реф
+            Err(e) => {
+                eprintln!("[Emo-Ref] {sid}: сбой обрезки вокала ffmpeg ({e}) -> откат на identity-реф");
+                None
+            }
         }
     };
 
@@ -1289,6 +1342,7 @@ fn build_dub(
         let (ref_wav, ref_text): (PathBuf, Option<String>) = if let Some(cr) = custom_ref {
             cr
         } else if let Some((er, et)) = emo_ref {
+            eprintln!("[Emo-Ref] Фраза #{fi}: применён эмо-реф сцены ({})", er.display());
             (er, et)
         } else {
             (ref_of(s), reftext_of(s))
@@ -3380,6 +3434,49 @@ mod tests {
         let (ws, we, txt) = smart_word_bounds(&s, 10.0, &segs, "0").expect("should pad short");
         assert!(we - ws >= 0.8, "duration should be padded: {}", we - ws);
         assert_eq!(txt.as_deref(), Some("Stop!"));
+    }
+
+    #[test]
+    fn test_smart_word_bounds_without_words_fallback() {
+        // Фраза без Whisper-слов (создана вручную или импортирована из SRT): 10.0 .. 10.4 (0.4с)
+        let s = seg("s0", 10.0, 10.4, "Нет!");
+        let segs = vec![(0, &s)];
+
+        let (ws, we, txt) = smart_word_bounds(&s, 10.0, &segs, "0").expect("should expand without words");
+        assert!((ws - 9.70).abs() < 0.001, "ws should be 9.70: got {ws}");
+        assert!((we - 10.70).abs() < 0.001, "we should be 10.70: got {we}");
+        assert!((we - ws - 1.00).abs() < 0.001, "duration should be 1.0s");
+        assert_eq!(txt.as_deref(), Some("Нет!"));
+    }
+
+    #[test]
+    fn test_smart_word_bounds_asymmetric_padding() {
+        // Фраза 10.0 .. 10.4 (0.4с). Слева чужой спикер до 9.90 (свободно только 0.10с).
+        // Алгоритм должен компенсировать нехватку расширением вправо на 0.50с.
+        let s0 = seg("s0", 10.0, 10.4, "Да");
+        let mut s_other = seg("s_other", 8.0, 9.90, "Другой спикер");
+        s_other.speaker = Some("1".to_string());
+        let segs = vec![(0, &s0), (1, &s_other)];
+
+        let (ws, we, _) = smart_word_bounds(&s0, 10.0, &segs, "0").expect("should pad asymmetrically");
+        assert!((ws - 9.90).abs() < 0.001, "ws should stop at 9.90 (left limit): got {ws}");
+        assert!((we - 10.90).abs() < 0.001, "we should expand to 10.90 (compensating right): got {we}");
+        assert!((we - ws - 1.00).abs() < 0.001, "duration should be exactly 1.0s");
+    }
+
+    #[test]
+    fn test_smart_word_bounds_sandwiched_fallback() {
+        // Фраза 10.0 .. 10.3 (0.3с) зажата между репликами спикера "1" (9.0..10.0 и 10.3..11.0)
+        let s0 = seg("s0", 10.0, 10.3, "Ой");
+        let mut s_left = seg("sl", 9.0, 10.0, "Слева");
+        s_left.speaker = Some("1".to_string());
+        let mut s_right = seg("sr", 10.3, 11.0, "Справа");
+        s_right.speaker = Some("1".to_string());
+        let segs = vec![(0, &s0), (1, &s_left), (2, &s_right)];
+
+        // Расширяться некуда, длительность 0.3с < 0.5с -> безопасный откат на None
+        let res = smart_word_bounds(&s0, 10.0, &segs, "0");
+        assert!(res.is_none(), "sandwiched phrase < 0.5s must safely return None");
     }
 }
 
