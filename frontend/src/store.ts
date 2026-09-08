@@ -94,7 +94,11 @@ export const useStore = create<State>((set, get) => ({
   setPid: (pid) => set({ pid }),
   setProject: (project) => set({ project }),
   setProgress: (stage, msg, pct = null) => set((s) => {   // keep the last message on a stage-only tick; pct only during a download
-    const progress = { stage, msg: msg || s.progress.msg, pct: pct ?? null };
+    const progress = {
+      stage,
+      msg: (stage === "" || stage === "done") && !msg ? "" : (msg || s.progress.msg),
+      pct: pct ?? null,
+    };
     const text = (msg || stage || "").trim();
     if (!text) return { progress };
     const kind: Activity["kind"] = stage === "error" ? "error" : stage === "done" ? "done" : "work";

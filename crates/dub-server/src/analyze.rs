@@ -977,10 +977,8 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
             &paths.caption_fps.to_string(),
         ]);
         cache.write_stage(&paths.work_dir, "ocr", &ocr_key, &[]);
-    } else if meta.width == 0 || meta.height == 0 {
+    } else if args.detect_text {
         emit(progress, "ocr_detect", "аудио-режим: без видео, детекция экранного текста не нужна");
-    } else {
-        emit(progress, "ocr_detect", "детекция вшитого текста отключена (галочка)");
     }
 
     // 7b) КАСТИНГ ПЕРСОНАЖЕЙ (#115). ГЕЙТ: только при галочке casting И наличии видео. При выкл — НИ

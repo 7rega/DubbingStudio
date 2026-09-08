@@ -1,7 +1,7 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -991,6 +991,36 @@ function HelpModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// editor stages mapped to the engine's stage markers (api._run emits `stage` per _timed block + "download").
+const ANALYZE_STEPS: { key: string; stages: string[] }[] = [
+  { key: "download",    stages: ["download"] },
+  { key: "separating",  stages: ["extract_audio", "separate"] },
+  { key: "diarizing",   stages: ["diarize"] },
+  { key: "recognizing", stages: ["asr"] },
+  { key: "translating", stages: ["translate", "translate_ctx", "vision", "rewrite", "rewrite_ctx"] },   // "vision" = ctx-проход (vision layout + перевод транскрипта)
+  { key: "voicing",     stages: ["tts", "mix"] },        // TTS synthesis + mix — runs BETWEEN translate and OCR; without this the stepper blanks (cur=-1) during voice gen
+  // «Находим текст на экране» = ТОЛЬКО OCR-стадии: юзер с выключенной детекцией не должен видеть этот
+  // шаг вовсе (жалоба). Сборка выходного файла (build/burn/mux) — отдельный честный шаг.
+  { key: "locating",    stages: ["ocr_detect", "translate_titles", "translate_tagline"] },
+  { key: "casting",     stages: ["cast_detect", "cast_embed", "cast_speaker"] },   // #115: лица (SCRFD) + эмбеддинги (LVFace) + active-speaker (LR-ASD)
+  { key: "assembling",  stages: ["build", "burn", "mux"] },
+];
+// стадия -> переведённая метка шага (бэкенд шлёт детальный msg по-русски; в UI показываем локализованный
+// ярлык стадии вместо сырого текста, чтобы статус был на языке интерфейса). Неизвестная стадия -> null.
+const STAGE_TO_STEPKEY: Record<string, string> = Object.fromEntries(
+  ANALYZE_STEPS.flatMap((s) => s.stages.map((st) => [st, s.key])),
+);
+// `allowed` — ключи шагов ТЕКУЩЕЙ джобы: стадия отфильтрованного шага (напр. ocr_detect при
+// выключенной детекции) не должна подписываться его ярлыком в статус-строке — вернём null, и
+// строка покажет сырое сообщение бэкенда («детекция вшитого текста отключена»), а не фантомный шаг.
+function stageLabel(stage: string | undefined, t: (k: string) => string, allowed?: string[] | null): string | null {
+  if (!stage) return null;
+  const k = STAGE_TO_STEPKEY[stage];
+  if (!k) return null;
+  if (allowed && !allowed.includes(k)) return null;
+  return t(`analyze.${k}`);
+}
+
 // Статус-строка в шапке: текущее действие приложения + разворот по клику в полный журнал (что делалось).
 function StatusBar() {
   const { t } = useTranslation();
@@ -1000,8 +1030,12 @@ function StatusBar() {
   const jobSteps = useStore((s) => s.jobSteps);
   const [open, setOpen] = useState(false);
   const last = activities[activities.length - 1];
-  const busy = rendering || progress.pct != null || (!!progress.stage && !["", "done", "error"].includes(progress.stage));
-  const text = busy ? (stageLabel(progress.stage, t, jobSteps) || progress.msg || last?.text || t("status.working")) : (last?.text || t("status.idle"));
+  const stepKey = progress.stage ? STAGE_TO_STEPKEY[progress.stage] : undefined;
+  const isExcluded = Boolean(jobSteps && stepKey && !jobSteps.includes(stepKey));
+  const busy = !isExcluded && (rendering || progress.pct != null || (!!progress.stage && !["", "done", "error"].includes(progress.stage)));
+  const text = busy
+    ? (stageLabel(progress.stage, t, jobSteps) || (isExcluded ? "" : progress.msg) || last?.text || t("status.working"))
+    : (last?.kind === "error" ? last.text : last?.kind === "done" ? last.text : t("status.idle"));
   const errored = !busy && last?.kind === "error";
   const fmt = (ms: number) => new Date(ms).toLocaleTimeString();
   return (
@@ -1461,24 +1495,22 @@ function DropZone() {
     s.setAudioOnly(audioOnly);               // «Анализируем аудио» вместо «видео» для аудио-входа
     // Шаги степпера — только те, что реально будут в ЭТОЙ джобе (жалоба: «Находим текст на экране»
     // при выключенной детекции; «Переводим/Генерируем озвучку» в режиме транскрипта).
-    {
-      // subs здесь — ЭФФЕКТИВНЫЙ (как eSubs ниже): transcribe-режим форсит субтитры оригинала,
-      // перевода в нём нет, что бы ни стояло в сыром стейте селектора.
-      const effSubs = audioOnly ? "none" : audio === "transcribe" ? "transcribe" : subs;
-      const wantTranslate = audio === "dub" || audio === "voiceover" || effSubs === "translate" || (funnyOn && !!funny.trim());
-      const wantVoice = audio === "dub" || audio === "voiceover";
-      const steps = ["download", "separating", "diarizing", "recognizing"];
-      if (wantTranslate) steps.push("translating");
-      if (wantVoice) steps.push("voicing");
-      if (!audioOnly && detectText) steps.push("locating");
-      // #115: кастинг гоняем только когда галка реально видна на старте (showCasting = !audioOnly && isVoiced),
-      // иначе персист castingOn=1 из прошлого дубляжа гнал бы детект лиц впустую в nodub/subtitles/transcribe.
-      if (!audioOnly && wantVoice && castingOn) steps.push("casting");   // доп. проход по кадрам — детект персонажей
-      // «Собираем видео» — только когда run() реально гонит рендер (dub/voiceover); в остальных
-      // режимах сборка происходит позже на Экспорте, и шаг висел бы серым навсегда (ревью).
-      if (wantVoice) steps.push("assembling");
-      s.setJobSteps(steps);
-    }
+    // subs здесь — ЭФФЕКТИВНЫЙ (как eSubs ниже): transcribe-режим форсит субтитры оригинала,
+    // перевода в нём нет, что бы ни стояло в сыром стейте селектора.
+    const effSubs = audioOnly ? "none" : audio === "transcribe" ? "transcribe" : subs;
+    const wantTranslate = audio === "dub" || audio === "voiceover" || effSubs === "translate" || (funnyOn && !!funny.trim());
+    const wantVoice = audio === "dub" || audio === "voiceover";
+    const steps = ["download", "separating", "diarizing", "recognizing"];
+    if (wantTranslate) steps.push("translating");
+    if (wantVoice) steps.push("voicing");
+    if (!audioOnly && detectText) steps.push("locating");
+    // #115: кастинг гоняем только когда галка реально видна на старте (showCasting = !audioOnly && isVoiced),
+    // иначе персист castingOn=1 из прошлого дубляжа гнал бы детект лиц впустую в nodub/subtitles/transcribe.
+    if (!audioOnly && wantVoice && castingOn) steps.push("casting");   // доп. проход по кадрам — детект персонажей
+    // «Собираем видео» — только когда run() реально гонит рендер (dub/voiceover); в остальных
+    // режимах сборка происходит позже на Экспорте, и шаг висел бы серым навсегда (ревью).
+    if (wantVoice) steps.push("assembling");
+    s.setJobSteps(steps);
     s.setProgress("", "", null);             // fresh stepper for this run
     try {
       const { project_id } = await api.createProject(file, isAudioFile(file) ? null : subsFile);   // сабы — только для видео
@@ -1505,7 +1537,13 @@ function DropZone() {
       const effContentType = effCasting ? contentType : "real";
       const effNumSpeakers = audio === "transcribe" ? mainTranscribeSpeakers : 0;
       const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers, audioOnly ? false : visionOn);
-      await api.watchJob(job_id, (e) => { if (e.type === "progress") s.setProgress(e.stage || "", e.msg || "", e.pct ?? null); });
+      await api.watchJob(job_id, (e) => {
+        if (e.type === "progress") {
+          const k = e.stage ? STAGE_TO_STEPKEY[e.stage] : undefined;
+          if (k && !steps.includes(k)) return;
+          s.setProgress(e.stage || "", e.msg || "", e.pct ?? null);
+        }
+      });
       // Автовыравнивание по вокалу: привязка старта фраз к звуку речи перед кастингом и рендером (не для транскрипта)
       if (autoAlign && audio !== "transcribe") {
         try {
@@ -1557,9 +1595,12 @@ function DropZone() {
           // (output.mp4) -> плей играет озвучку и двигает скраб -> кадры следуют (1:1 оригинал).
         } catch { /* рендер не удался -> редактор откроется на покадровом превью */ }
       }
+      s.setProgress("done", t("status.idle"), null);
+      s.setJobSteps(null);
       s.setStage("editor"); playSfx("success");
     } catch (err) {
       s.setProgress("error", String(err), null);  // surface backend failure instead of hanging on "analyzing"
+      s.setJobSteps(null);
       s.setStage("empty"); playSfx("error");
     }
   }
@@ -2213,36 +2254,6 @@ function DropZone() {
   );
 }
 
-// editor stages mapped to the engine's stage markers (api._run emits `stage` per _timed block + "download").
-const ANALYZE_STEPS: { key: string; stages: string[] }[] = [
-  { key: "download",    stages: ["download"] },
-  { key: "separating",  stages: ["extract_audio", "separate"] },
-  { key: "diarizing",   stages: ["diarize"] },
-  { key: "recognizing", stages: ["asr"] },
-  { key: "translating", stages: ["translate", "translate_ctx", "vision", "rewrite", "rewrite_ctx"] },   // "vision" = ctx-проход (vision layout + перевод транскрипта)
-  { key: "voicing",     stages: ["tts", "mix"] },        // TTS synthesis + mix — runs BETWEEN translate and OCR; without this the stepper blanks (cur=-1) during voice gen
-  // «Находим текст на экране» = ТОЛЬКО OCR-стадии: юзер с выключенной детекцией не должен видеть этот
-  // шаг вовсе (жалоба). Сборка выходного файла (build/burn/mux) — отдельный честный шаг.
-  { key: "locating",    stages: ["ocr_detect", "translate_titles", "translate_tagline"] },
-  { key: "casting",     stages: ["cast_detect", "cast_embed", "cast_speaker"] },   // #115: лица (SCRFD) + эмбеддинги (LVFace) + active-speaker (LR-ASD)
-  { key: "assembling",  stages: ["build", "burn", "mux"] },
-];
-// стадия -> переведённая метка шага (бэкенд шлёт детальный msg по-русски; в UI показываем локализованный
-// ярлык стадии вместо сырого текста, чтобы статус был на языке интерфейса). Неизвестная стадия -> null.
-const STAGE_TO_STEPKEY: Record<string, string> = Object.fromEntries(
-  ANALYZE_STEPS.flatMap((s) => s.stages.map((st) => [st, s.key])),
-);
-// `allowed` — ключи шагов ТЕКУЩЕЙ джобы: стадия отфильтрованного шага (напр. ocr_detect при
-// выключенной детекции) не должна подписываться его ярлыком в статус-строке — вернём null, и
-// строка покажет сырое сообщение бэкенда («детекция вшитого текста отключена»), а не фантомный шаг.
-function stageLabel(stage: string | undefined, t: (k: string) => string, allowed?: string[] | null): string | null {
-  if (!stage) return null;
-  const k = STAGE_TO_STEPKEY[stage];
-  if (!k) return null;
-  if (allowed && !allowed.includes(k)) return null;
-  return t(`analyze.${k}`);
-}
-
 function AnalyzeProgress() {
   const { t } = useTranslation();
   const { progress, audioOnly, jobSteps } = useStore();
@@ -2256,6 +2267,8 @@ function AnalyzeProgress() {
   const cur = maxStep.current;
   const dl = progress.stage === "download";
   const pct = progress.pct;
+  const stepKey = progress.stage ? STAGE_TO_STEPKEY[progress.stage] : undefined;
+  const isExcluded = Boolean(jobSteps && stepKey && !jobSteps.includes(stepKey));
   return (
     <div className="flex-1 grid place-items-center px-6">
       <div className="w-full max-w-sm">
@@ -2280,7 +2293,7 @@ function AnalyzeProgress() {
             ? <div className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-300" style={{ width: `${Math.max(2, Math.min(100, pct))}%` }} />
             : <div className="h-full w-1/3 rounded-full bg-[var(--color-accent)] animate-pulse" />}
         </div>
-        <div className="mt-2 min-h-4 text-center mono text-[12px] text-[var(--color-muted)] break-words">{stageLabel(progress.stage, t, jobSteps) || progress.msg}</div>
+        <div className="mt-2 min-h-4 text-center mono text-[12px] text-[var(--color-muted)] break-words">{stageLabel(progress.stage, t, jobSteps) || (isExcluded ? "" : progress.msg)}</div>
       </div>
     </div>
   );
@@ -2688,7 +2701,7 @@ function useMediaHotkeys(opts: {
         case " ":
           if (onButton) return;
           e.preventDefault(); togglePlay(); break;
-        case "k": case "K":
+        case "k": case "K": case "л": case "Л":
           e.preventDefault(); togglePlay(); break;
         case "ArrowRight":
           e.preventDefault(); seek(clamp(cur + (e.shiftKey ? 0.04 : e.ctrlKey ? 5 : 1))); break;
@@ -2706,7 +2719,7 @@ function useMediaHotkeys(opts: {
           if (setVol) { e.preventDefault(); setVol(Math.max(0, Math.min(1, (vol ?? 1) + (e.key === "ArrowUp" ? 0.05 : -0.05)))); }
           break;
         }
-        case "f": case "F":
+        case "f": case "F": case "а": case "А":
           e.preventDefault(); toggleElemFullscreen(previewRef.current); break;
         case "F10":
           e.preventDefault();
@@ -4720,6 +4733,42 @@ function Editor() {
   const [play, setPlay] = useState(false);                            // dub playback: play TTS audio + advance preview frames + playhead
   const [showHelp, setShowHelp] = useState(false);                    // оверлей-шпаргалка хоткеев (?)
   const previewRef = useRef<HTMLDivElement>(null);                    // контейнер превью -> фулскрин по F + Ctrl-колесо
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showFsControls, setShowFsControls] = useState(true);
+  const fsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const onFsChange = () => {
+      const isFs = document.fullscreenElement === previewRef.current;
+      setIsFullscreen(isFs);
+      if (isFs) {
+        setShowFsControls(true);
+      }
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFsChange);
+      if (fsTimerRef.current) clearTimeout(fsTimerRef.current);
+    };
+  }, []);
+
+  const handleFsMouseMove = useCallback(() => {
+    if (!document.fullscreenElement) return;
+    setShowFsControls(true);
+    if (fsTimerRef.current) clearTimeout(fsTimerRef.current);
+    fsTimerRef.current = setTimeout(() => {
+      setShowFsControls(false);
+    }, 2500);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      previewRef.current?.requestFullscreen?.().catch(() => {});
+    }
+  }, []);
+
   const scrubRef = useRef(0);                                         // свежий scrub без stale-замыкания в хоткеях
   const audioRef = useRef<HTMLAudioElement>(null);
   const [vol, setVol] = useState<number>(() => { const s = localStorage.getItem("dub-vol"); return s ? parseFloat(s) : 1; });
@@ -5114,12 +5163,20 @@ function Editor() {
     try { setProject(await api.patch(pid, { op: "add_segment", id: `u${Date.now().toString(36)}`, start, end: start + 2, speaker })); bump(); }
     catch (e) { await surfaceErr(e); }
   }
-  const watchDub = (jobId: string) => api.watchJob(jobId, (e) => {
-    if (e.type === "progress") {
-      if (e.msg) useStore.getState().pushActivity(e.msg, "work");
-      useStore.getState().setProgress(e.stage || "tts", e.msg || "", e.pct ?? null);
+  const watchDub = async (jobId: string) => {
+    try {
+      await api.watchJob(jobId, (e) => {
+        if (e.type === "progress") {
+          if (e.msg) useStore.getState().pushActivity(e.msg, "work");
+          useStore.getState().setProgress(e.stage || "tts", e.msg || "", e.pct ?? null);
+        }
+      });
+      useStore.getState().setProgress("done", t("status.idle"), null);
+    } catch (e) {
+      useStore.getState().setProgress("error", String(e), null);
+      throw e;
     }
-  });
+  };
   async function doRegen(segId: string) {                            // быстрый ре-синтез TTS ТОЛЬКО для одной фразы (< 1 сек)
     if (regenId) return;
     setRegenId(segId); pushActivity(t("seg.regen"));
@@ -5723,9 +5780,16 @@ function Editor() {
             )}
           </div>, s) : null; })()}
         </div>
-        <div ref={previewRef} className="fs-preview flex-1 min-h-0 p-3 overflow-hidden flex flex-col gap-2.5">
+        <div className="flex-1 min-h-0 p-3 overflow-hidden flex flex-col gap-2.5">
           {/* Видео-контейнер */}
-          <div className="flex-1 min-h-0">
+          <div
+            ref={previewRef}
+            className={`fs-preview flex-1 min-h-0 relative flex flex-col justify-center items-center ${
+              isFullscreen && !showFsControls && play ? "cursor-none" : ""
+            }`}
+            onMouseMove={handleFsMouseMove}
+            onDoubleClick={toggleFullscreen}
+          >
             {hasCasting && (
               <div className={castView ? "w-full h-full" : "hidden"}>
                 <CastingPanel pid={pid} characters={characters!} voices={voiceList} onChange={setCharacters} />
@@ -5789,6 +5853,175 @@ function Editor() {
                 />
               )}
             </div>
+
+            {/* Cinema Mode Floating HUD Controls (только в полноэкранном режиме) */}
+            {isFullscreen && (
+              <div
+                className={`fs-hud absolute bottom-0 inset-x-0 z-50 transition-all duration-300 pointer-events-auto select-none ${
+                  showFsControls || !play
+                    ? "opacity-100 translate-y-0"
+                    : "opacity-0 translate-y-4 pointer-events-none"
+                }`}
+                onMouseEnter={() => {
+                  setShowFsControls(true);
+                  if (fsTimerRef.current) clearTimeout(fsTimerRef.current);
+                }}
+                onMouseLeave={() => {
+                  if (play) {
+                    if (fsTimerRef.current) clearTimeout(fsTimerRef.current);
+                    fsTimerRef.current = setTimeout(() => setShowFsControls(false), 2500);
+                  }
+                }}
+              >
+                <div className="bg-gradient-to-t from-black/95 via-black/75 to-transparent pt-14 pb-6 px-8 flex flex-col gap-3">
+                  {/* Ползунок перемотки таймлайна */}
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max(0.1, p.meta.duration || 0)}
+                      step={0.05}
+                      value={Math.min(scrub, p.meta.duration || 0)}
+                      onChange={(e) => onSeek(parseFloat(e.target.value))}
+                      className="w-full h-1.5 hover:h-2.5 bg-white/25 hover:bg-white/35 rounded-full appearance-none cursor-pointer accent-[var(--color-accent)] transition-all"
+                    />
+                  </div>
+
+                  {/* Основная панель управления */}
+                  <div className="flex items-center justify-between gap-4 text-white">
+                    {/* Слева: Play/Pause, ±5s, таймкод */}
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={playFull}
+                        title={play ? "Пауза (Space / K)" : "Воспроизведение (Space / K)"}
+                        className="w-10 h-10 rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] flex items-center justify-center font-bold hover:brightness-110 active:scale-95 transition-all shadow-lg"
+                      >
+                        {play ? <Pause size={18} fill="currentColor" /> : <Play size={18} className="ml-0.5" fill="currentColor" />}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => onSeek(Math.max(0, scrub - 5))}
+                        title="Назад на 5 сек (←)"
+                        className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white/90 hover:text-white transition-colors"
+                      >
+                        <RotateCcw size={16} />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => onSeek(Math.min(p.meta.duration || 0, scrub + 5))}
+                        title="Вперед на 5 сек (→)"
+                        className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white/90 hover:text-white transition-colors"
+                      >
+                        <RotateCw size={16} />
+                      </button>
+
+                      <div className="mono text-[13px] tabnum tracking-wider text-white/90 font-medium ml-2 px-2.5 py-1 rounded-md bg-black/40 border border-white/10">
+                        <span className="text-[var(--color-accent)] font-semibold">
+                          {`${Math.floor(scrub / 60)}:${String(Math.floor(scrub % 60)).padStart(2, "0")}.${Math.floor((scrub % 1) * 10)}`}
+                        </span>
+                        <span className="text-white/35 mx-1.5">/</span>
+                        <span className="text-white/60">
+                          {`${Math.floor((p.meta.duration || 0) / 60)}:${String(Math.floor((p.meta.duration || 0) % 60)).padStart(2, "0")}`}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* По центру: Переключатель дорожек аудиомониторинга */}
+                    {hasDubTrack && (
+                      <div className="flex items-center gap-1.5 bg-black/60 backdrop-blur-md p-1 rounded-xl border border-white/10 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => setTrackState({ dub: true, bgm: true, vocals: false })}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg transition-all font-medium ${
+                            trackState.dub && trackState.bgm && !trackState.vocals
+                              ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] font-semibold shadow-sm"
+                              : "text-white/70 hover:text-white hover:bg-white/10"
+                          }`}
+                        >
+                          <Headphones size={13} />
+                          <span>Микс</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setTrackState({ dub: true, bgm: false, vocals: false })}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg transition-all font-medium ${
+                            trackState.dub && !trackState.bgm && !trackState.vocals
+                              ? "bg-emerald-500 text-black font-semibold shadow-sm"
+                              : "text-white/70 hover:text-white hover:bg-white/10"
+                          }`}
+                        >
+                          <Mic size={13} />
+                          <span>Дубляж</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setTrackState({ dub: false, bgm: false, vocals: true })}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg transition-all font-medium ${
+                            trackState.vocals && !trackState.dub && !trackState.bgm
+                              ? "bg-cyan-500 text-black font-semibold shadow-sm"
+                              : "text-white/70 hover:text-white hover:bg-white/10"
+                          }`}
+                        >
+                          <Users size={13} />
+                          <span>Вокал</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setTrackState({ dub: false, bgm: true, vocals: false })}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg transition-all font-medium ${
+                            !trackState.dub && !trackState.vocals && trackState.bgm
+                              ? "bg-purple-500 text-white font-semibold shadow-sm"
+                              : "text-white/70 hover:text-white hover:bg-white/10"
+                          }`}
+                        >
+                          <Music size={13} />
+                          <span>Фон</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Справа: Громкость и выход из фулскрина */}
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10">
+                        <button
+                          type="button"
+                          onClick={() => setVolK(vol > 0 ? 0 : 1)}
+                          className="text-white/80 hover:text-white transition-colors"
+                          title={vol === 0 ? "Включить звук" : "Выключить звук"}
+                        >
+                          {effectiveVol === 0 ? <VolumeX size={16} className="text-red-400" /> : <Volume2 size={16} />}
+                        </button>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.02}
+                          value={vol}
+                          onChange={(e) => setVolK(parseFloat(e.target.value))}
+                          className="w-20 h-1.5 bg-white/25 rounded-lg appearance-none cursor-pointer accent-[var(--color-accent)]"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={toggleFullscreen}
+                        title="Выход из полноэкранного режима (F / Esc)"
+                        className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors flex items-center gap-1.5 text-xs font-medium border border-white/10"
+                      >
+                        <Minimize2 size={16} />
+                        <span className="hidden sm:inline">Выход (Esc)</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Панель управления плеером прямо под видео (Audio Monitoring & Transport Bar) */}
@@ -6022,6 +6255,16 @@ function Editor() {
                     className="w-14 accent-[var(--color-accent)] cursor-pointer"
                   />
                 </div>
+
+                {/* Кнопка полноэкранного режима (Кинотеатр) */}
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  title="Во весь экран (F)"
+                  className="p-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] text-[var(--color-muted)] hover:text-white transition-colors shrink-0"
+                >
+                  <Maximize2 size={13} />
+                </button>
               </div>
             </div>
 
@@ -8955,6 +9198,8 @@ function TranscriptView() {
       } else {
         setProject(updated);
       }
+      setProgress("done", t("status.idle"), null);
+      setJobSteps(null);
       setStage("editor");
     } catch (err) {
       console.error("retranslate error", err);
@@ -8964,6 +9209,8 @@ function TranscriptView() {
       } catch {
         setProject({ ...p, mode });
       }
+      setProgress("error", String(err), null);
+      setJobSteps(null);
       setStage("editor");
     } finally { setReanalyzing(false); }
   }
@@ -8985,12 +9232,16 @@ function TranscriptView() {
       });
       const updated = await api.getProject(pid);
       setProject(updated);
+      setProgress("done", t("status.idle"), null);
+      setJobSteps(null);
       setStage("editor");
     } catch (err) {
       useStore.getState().pushActivity(String(err), "error");
       try {
         setProject(await api.getProject(pid));
       } catch { /* offline */ }
+      setProgress("error", String(err), null);
+      setJobSteps(null);
       setStage("editor");
     } finally { setReanalyzing(false); }
   }
@@ -9133,8 +9384,17 @@ function TranscriptView() {
                 <span className="text-xs text-white/70">{transcriptMediaError ? "Видео не загрузилось" : "Загрузка видео..."}</span>
               </div>
             )}
-            {transcriptMediaError && (
+            {transcriptMediaError ? (
               <button type="button" onClick={retryTranscriptMedia} className="absolute bottom-2 right-2 px-2 py-1 rounded bg-white/10 text-xs text-white z-20">Повторить</button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => toggleElemFullscreen(previewRef.current)}
+                title="Во весь экран (F)"
+                className="absolute bottom-2 right-2 grid place-items-center w-8 h-8 rounded-lg bg-black/60 hover:bg-black/80 text-white/80 hover:text-white transition z-20"
+              >
+                <Maximize2 size={15} />
+              </button>
             )}
             <button onClick={() => setPlay((x) => !x)} title={play ? t("common.pause") : t("common.play")}
               className="absolute bottom-2 left-2 grid place-items-center w-10 h-10 rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-lg hover:brightness-110 transition z-20">

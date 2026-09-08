@@ -73,8 +73,34 @@ body::after {
 
 @media (prefers-reduced-motion: reduce) { * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
 
-/* Фулскрин области превью (клавиша F): контейнер занимает весь экран, а вложенное медиа
-   (video/img/canvas превью) снимает свои max-h/max-w-ограничения и вписывается целиком.
-   Скоуп ТОЛЬКО .fs-preview: голый :fullscreen матчит и <html> при фулскрине окна (F10) и ломает раскладку. */
-.fs-preview:fullscreen { width: 100vw; height: 100vh; max-height: none !important; background: #000; display: grid; place-items: center; }
-.fs-preview:fullscreen video, .fs-preview:fullscreen img { max-width: 100vw !important; max-height: 100vh !important; width: auto; height: auto; object-fit: contain; }
+/* Фулскрин области превью (клавиша F / кнопка плеера): кинотеатр на весь экран.
+   Контейнер занимает весь экран с чистым чёрным фоном, скрывая интерфейс редактора. */
+.fs-preview:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  background: #000 !important;
+  position: relative !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+.fs-preview:fullscreen video,
+.fs-preview:fullscreen img {
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  width: auto;
+  height: auto;
+  object-fit: contain !important;
+}
+.fs-preview:fullscreen > div:not(.fs-hud) .rounded-xl,
+.fs-preview:fullscreen > div:not(.fs-hud) .rounded-lg {
+  border-radius: 0 !important;
+}
