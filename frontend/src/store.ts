@@ -99,7 +99,7 @@ export const useStore = create<State>((set, get) => ({
       msg: (stage === "" || stage === "done") && !msg ? "" : (msg || s.progress.msg),
       pct: pct ?? null,
     };
-    const text = (msg || stage || "").trim();
+    const text = (msg || (stage && stage !== "done" ? stage : "")).trim();
     if (!text) return { progress };
     const kind: Activity["kind"] = stage === "error" ? "error" : stage === "done" ? "done" : "work";
     const last = s.activities[s.activities.length - 1];

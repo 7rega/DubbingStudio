@@ -1030,12 +1030,10 @@ function StatusBar() {
   const jobSteps = useStore((s) => s.jobSteps);
   const [open, setOpen] = useState(false);
   const last = activities[activities.length - 1];
-  const stepKey = progress.stage ? STAGE_TO_STEPKEY[progress.stage] : undefined;
-  const isExcluded = Boolean(jobSteps && stepKey && !jobSteps.includes(stepKey));
-  const busy = !isExcluded && (rendering || progress.pct != null || (!!progress.stage && !["", "done", "error"].includes(progress.stage)));
+  const busy = rendering || progress.pct != null || (!!progress.stage && !["", "done", "error"].includes(progress.stage));
   const text = busy
-    ? (stageLabel(progress.stage, t, jobSteps) || (isExcluded ? "" : progress.msg) || last?.text || t("status.working"))
-    : (last?.kind === "error" ? last.text : last?.kind === "done" ? last.text : t("status.idle"));
+    ? (progress.msg || stageLabel(progress.stage, t, jobSteps) || last?.text || t("status.working"))
+    : (last?.text || t("status.idle"));
   const errored = !busy && last?.kind === "error";
   const fmt = (ms: number) => new Date(ms).toLocaleTimeString();
   return (
@@ -1537,13 +1535,7 @@ function DropZone() {
       const effContentType = effCasting ? contentType : "real";
       const effNumSpeakers = audio === "transcribe" ? mainTranscribeSpeakers : 0;
       const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers, audioOnly ? false : visionOn);
-      await api.watchJob(job_id, (e) => {
-        if (e.type === "progress") {
-          const k = e.stage ? STAGE_TO_STEPKEY[e.stage] : undefined;
-          if (k && !steps.includes(k)) return;
-          s.setProgress(e.stage || "", e.msg || "", e.pct ?? null);
-        }
-      });
+      await api.watchJob(job_id, (e) => { if (e.type === "progress") s.setProgress(e.stage || "", e.msg || "", e.pct ?? null); });
       // Автовыравнивание по вокалу: привязка старта фраз к звуку речи перед кастингом и рендером (не для транскрипта)
       if (autoAlign && audio !== "transcribe") {
         try {
@@ -1568,8 +1560,8 @@ function DropZone() {
           const r = await api.voiceSlots(project_id, { male: slotsM, female: slotsF });
           // Считаем только реально назначенных из библиотеки (voice != null) — спикеры без слота уйдут в клон.
           const nAssigned = Object.values(r.speakers || {}).filter((s) => s && s.voice).length;
-          useStore.getState().pushActivity(t("voiceSlots.assigned", { n: nAssigned }), "done");
-        } catch (e) { useStore.getState().pushActivity(String(e), "error"); }
+          if (nAssigned > 0) useStore.getState().pushActivity(`Назначено голосов из библиотеки: ${nAssigned}`, "done");
+        } catch { /* fail-safe */ }
       }
       // Автоподбор голосов из пака voices/ (#autocast): если включен авторежим на старте
       if (autoCastOn && autoCastAuto && (audio === "dub" || audio === "voiceover")) {
@@ -1595,7 +1587,7 @@ function DropZone() {
           // (output.mp4) -> плей играет озвучку и двигает скраб -> кадры следуют (1:1 оригинал).
         } catch { /* рендер не удался -> редактор откроется на покадровом превью */ }
       }
-      s.setProgress("done", t("status.idle"), null);
+      s.setProgress("", "", null);
       s.setJobSteps(null);
       s.setStage("editor"); playSfx("success");
     } catch (err) {
@@ -2267,8 +2259,6 @@ function AnalyzeProgress() {
   const cur = maxStep.current;
   const dl = progress.stage === "download";
   const pct = progress.pct;
-  const stepKey = progress.stage ? STAGE_TO_STEPKEY[progress.stage] : undefined;
-  const isExcluded = Boolean(jobSteps && stepKey && !jobSteps.includes(stepKey));
   return (
     <div className="flex-1 grid place-items-center px-6">
       <div className="w-full max-w-sm">
@@ -2293,7 +2283,7 @@ function AnalyzeProgress() {
             ? <div className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-300" style={{ width: `${Math.max(2, Math.min(100, pct))}%` }} />
             : <div className="h-full w-1/3 rounded-full bg-[var(--color-accent)] animate-pulse" />}
         </div>
-        <div className="mt-2 min-h-4 text-center mono text-[12px] text-[var(--color-muted)] break-words">{stageLabel(progress.stage, t, jobSteps) || (isExcluded ? "" : progress.msg)}</div>
+        <div className="mt-2 min-h-4 text-center mono text-[12px] text-[var(--color-muted)] break-words">{progress.msg || stageLabel(progress.stage, t, jobSteps)}</div>
       </div>
     </div>
   );
@@ -9198,7 +9188,7 @@ function TranscriptView() {
       } else {
         setProject(updated);
       }
-      setProgress("done", t("status.idle"), null);
+      setProgress("", "", null);
       setJobSteps(null);
       setStage("editor");
     } catch (err) {
@@ -9232,7 +9222,7 @@ function TranscriptView() {
       });
       const updated = await api.getProject(pid);
       setProject(updated);
-      setProgress("done", t("status.idle"), null);
+      setProgress("", "", null);
       setJobSteps(null);
       setStage("editor");
     } catch (err) {
