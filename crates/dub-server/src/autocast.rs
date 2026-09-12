@@ -28,6 +28,10 @@ pub struct PackVoiceProfile {
     pub gender: String, // "male" | "female" | "boy" | "girl" | "child"
     pub f0: f32,
     #[serde(default)]
+    pub hnr: f32, // Harmonics-to-Noise Ratio в дБ (шероховатость / хрипота)
+    #[serde(default)]
+    pub spectral_tilt: f32, // Спектральный наклон в дБ (зрелость / глубина тембра)
+    #[serde(default)]
     pub embedding: Vec<f32>, // 256-d WeSpeaker (может быть пуст, если модель недоступна)
     pub mtime: u64,
 }
@@ -390,7 +394,10 @@ pub fn scan_pack_voices(
         let mtime = file_mtime(&file_path);
 
         if let Some(mut cached) = cache.voices.get(&rel_path).cloned() {
-            if cached.mtime == mtime && (!cached.embedding.is_empty() || embedder.is_none()) {
+            if cached.mtime == mtime
+                && (!cached.embedding.is_empty() || embedder.is_none())
+                && (cached.hnr > 0.0 || cached.spectral_tilt > 0.0)
+            {
                 let fresh_gender = detect_voice_gender(&stem, cached.f0);
                 if cached.gender != fresh_gender {
                     cached.gender = fresh_gender;
@@ -419,6 +426,7 @@ pub fn scan_pack_voices(
 
         let f0 = estimate_f0_median(&samples, sr).unwrap_or(150.0);
         let gender = detect_voice_gender(&stem, f0);
+        let texture = crate::acoustic::analyze_voice_texture(&samples, sr).unwrap_or_default();
 
         // Извлекаем 256-d WeSpeaker эмбеддинг через быстрый in-memory ресемплинг до 16 000 Гц
         let embedding = if let Some(ref mut emb) = embedder {
@@ -447,6 +455,8 @@ pub fn scan_pack_voices(
             rel_path: rel_path.clone(),
             gender,
             f0,
+            hnr: texture.hnr,
+            spectral_tilt: texture.spectral_tilt,
             embedding,
             mtime,
         };
@@ -469,6 +479,8 @@ struct SpeakerCandidate {
     actor_name: String,
     gender: String,
     f0: f32,
+    hnr: f32,
+    spectral_tilt: f32,
     embedding: Vec<f32>,
     line_count: usize,
     total_speech_sec: f64,
@@ -546,12 +558,15 @@ fn extract_speaker_candidate(
     };
 
     let gender = detect_speaker_gender(&actor_name, f0, casting_gender, tract_gender);
+    let texture = crate::acoustic::analyze_voice_texture(&collected, sr).unwrap_or_default();
 
     SpeakerCandidate {
         spk_id: spk_id.to_string(),
         actor_name,
         gender,
         f0,
+        hnr: texture.hnr,
+        spectral_tilt: texture.spectral_tilt,
         embedding,
         line_count,
         total_speech_sec: total_sec,
@@ -559,7 +574,7 @@ fn extract_speaker_candidate(
 }
 
 /// Вычисление скора совместимости спикера и донорского голоса.
-fn compute_match_score(spk: &SpeakerCandidate, donor: &PackVoiceProfile) -> f32 {
+fn compute_match_score(spk: &SpeakerCandidate, donor: &PackVoiceProfile, is_used: bool) -> f32 {
     let mut score = 0.0f32;
 
     // 1. Тембральное сходство WeSpeaker (косинус [-1..1])
@@ -569,14 +584,46 @@ fn compute_match_score(spk: &SpeakerCandidate, donor: &PackVoiceProfile) -> f32 
         score += cos;
     }
 
-    // 2. Штраф за разницу регистров F0 (высоты тона)
-    let f0_diff = (donor.f0 - spk.f0).abs();
-    let f0_penalty = (f0_diff / spk.f0.max(50.0)) * 0.25;
+    // 2. Штраф за разницу регистров F0 (высоты тона).
+    // Человеческий слух воспринимает высоту тона логарифмически (в полутонах/октавах).
+    // Разница в октаву (x2 или /2) даст abs(log2) = 1.0. Умножаем на 1.5, чтобы сильно штрафовать.
+    let f0_ratio = donor.f0 / spk.f0.max(50.0);
+    let f0_penalty = f0_ratio.log2().abs() * 1.5;
     score -= f0_penalty;
 
-    // Если эмбеддингов нет вообще — скоринг чисто по минимальной дельте F0
+    // 3. Штраф за несовпадение фактуры/хрипоты (HNR).
+    // Разница в 8-10 дБ отличает чистый студийный голос от хриплого/прокуренного с песком.
+    if spk.hnr > 0.0 && donor.hnr > 0.0 {
+        let hnr_diff = (donor.hnr - spk.hnr).abs();
+        score -= (hnr_diff / 10.0) * 0.35;
+    }
+
+    // 4. Штраф за несовпадение спектральной зрелости/глубины (Spectral Tilt).
+    // Разница в 8-10 дБ отличает глубокий зрелый грудной бас от яркого звонкого юношеского.
+    if spk.spectral_tilt > 0.0 && donor.spectral_tilt > 0.0 {
+        let tilt_diff = (donor.spectral_tilt - spk.spectral_tilt).abs();
+        score -= (tilt_diff / 10.0) * 0.25;
+    }
+
+    // 5. Штраф за уже использованный голос (-0.5).
+    // Мы предпочитаем новые голоса, но если новый голос имеет плохой питч (штраф -1.0 и более),
+    // лучше повторно использовать идеально подходящий голос.
+    if is_used {
+        score -= 0.5;
+    }
+
+    // Если эмбеддингов нет вообще — скоринг чисто по физическим акустическим параметрам
     if !has_embs {
-        score = -f0_diff;
+        score = -f0_penalty;
+        if spk.hnr > 0.0 && donor.hnr > 0.0 {
+            score -= ((donor.hnr - spk.hnr).abs() / 10.0) * 0.35;
+        }
+        if spk.spectral_tilt > 0.0 && donor.spectral_tilt > 0.0 {
+            score -= ((donor.spectral_tilt - spk.spectral_tilt).abs() / 10.0) * 0.25;
+        }
+        if is_used {
+            score -= 0.5;
+        }
     }
 
     score
@@ -787,23 +834,20 @@ pub fn auto_assign_pack_voices_direct(
             pool = pack_profiles.iter().collect();
         }
 
-        // Сортируем кандидатов:
-        // 1. Сначала ещё не использованные голоса (is_used = false)
-        // 2. Затем по максимальному скору совместимости
+        // Сортируем кандидатов по итоговому скору, который теперь включает мягкий штраф за использование
         pool.sort_by(|a, b| {
             let used_a = used_voices.contains(&a.name);
             let used_b = used_voices.contains(&b.name);
-            let score_a = compute_match_score(spk, a);
-            let score_b = compute_match_score(spk, b);
+            let score_a = compute_match_score(spk, a, used_a);
+            let score_b = compute_match_score(spk, b, used_b);
 
-            used_a
-                .cmp(&used_b)
-                .then_with(|| score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal))
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
         });
 
         if let Some(best) = pool.first() {
             assigned_voices.insert(spk.spk_id.clone(), best.name.clone());
-            assigned_scores.insert(spk.spk_id.clone(), compute_match_score(spk, best));
+            let used = used_voices.contains(&best.name);
+            assigned_scores.insert(spk.spk_id.clone(), compute_match_score(spk, best, used));
             used_voices.insert(best.name.clone());
         }
     }
@@ -868,9 +912,16 @@ pub fn auto_assign_pack_voices_direct(
                 "female" => "жен.",
                 _ => "голос",
             };
+            let tex_desc = if spk.hnr > 0.0 && spk.hnr < 7.5 {
+                ", хриплый"
+            } else if spk.spectral_tilt > 12.0 {
+                ", глубокий"
+            } else {
+                ""
+            };
             format!(
-                "{} ({} фраз, {:.1}с, {}, {:.0} Гц) -> {}",
-                spk.actor_name, spk.line_count, spk.total_speech_sec, gender_ru, spk.f0, v
+                "{} ({} фраз, {:.1}с, {}, {:.0} Гц{}) -> {}",
+                spk.actor_name, spk.line_count, spk.total_speech_sec, gender_ru, spk.f0, tex_desc, v
             )
         })
         .collect();
@@ -881,6 +932,50 @@ pub fn auto_assign_pack_voices_direct(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_compute_match_score_texture() {
+        let spk = SpeakerCandidate {
+            spk_id: "0".into(),
+            actor_name: "Sheriff".into(),
+            gender: "male".into(),
+            f0: 110.0,
+            hnr: 5.0, // хриплый, прокуренный
+            spectral_tilt: 14.0, // глубокий, тяжелый
+            embedding: vec![0.5; 256],
+            line_count: 10,
+            total_speech_sec: 20.0,
+        };
+
+        // Донор 1: Тоже хриплый и глубокий
+        let donor_husky = PackVoiceProfile {
+            name: "Husky_Baritone".into(),
+            rel_path: "husky.wav".into(),
+            gender: "male".into(),
+            f0: 110.0,
+            hnr: 5.5,
+            spectral_tilt: 13.5,
+            embedding: vec![0.5; 256],
+            mtime: 0,
+        };
+
+        // Донор 2: Чистый звонкий диктор (молодой)
+        let donor_smooth = PackVoiceProfile {
+            name: "Smooth_Announcer".into(),
+            rel_path: "smooth.wav".into(),
+            gender: "male".into(),
+            f0: 110.0,
+            hnr: 15.0, // очень чистый
+            spectral_tilt: 6.0, // яркий, звонкий
+            embedding: vec![0.5; 256],
+            mtime: 0,
+        };
+
+        let score_husky = compute_match_score(&spk, &donor_husky, false);
+        let score_smooth = compute_match_score(&spk, &donor_smooth, false);
+
+        assert!(score_husky > score_smooth, "Husky donor must score higher for husky speaker! Husky: {:.2}, Smooth: {:.2}", score_husky, score_smooth);
+    }
 
     #[test]
     fn test_detect_speaker_gender_rules() {

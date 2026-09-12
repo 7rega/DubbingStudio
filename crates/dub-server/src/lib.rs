@@ -6,6 +6,7 @@
 //! GET /jobs/{id}/events. GPU-эндпоинты (analyze/render/preview/patch и т.д.) — каркас на следующие
 //! раунды; их карта в docs/PORT-CONTRACT.md.
 
+mod acoustic;
 mod analyze;
 mod bench;
 mod casting;
