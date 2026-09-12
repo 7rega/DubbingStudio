@@ -276,6 +276,8 @@
     "llamaUbatchHint": "越小越省内存（避免 32GB 溢出）",
     "higgsRef": "声音克隆参考时长",
     "higgsRefHint": "越短越省 TTS 内存（利于 32GB）",
+    "smartRefTrim": "按静音自然截断",
+    "smartRefTrimHint": "寻找词间自然停顿，避免词中截断",
     "higgsMaxTokens": "TTS 最大 Token 限制",
     "higgsMaxTokensHint": "限制单句生成长度（防止蜂鸣杂音）",
     "tokenDefault": "默认（引擎）",

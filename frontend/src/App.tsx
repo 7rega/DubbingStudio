@@ -456,6 +456,51 @@ function ModelsSection() {
         {[
           { key: "llama_ubatch", label: t("settings.llamaUbatch"), hint: t("settings.llamaUbatchHint"), opts: cap?.llama_ubatches ?? ["0", "512", "256", "128"], def: "0", fmt: (v: string) => (v === "0" ? t("settings.auto") : v) },
           { key: "higgs_ref_secs", label: t("settings.higgsRef"), hint: t("settings.higgsRefHint"), opts: cap?.higgs_ref_secs_opts ?? ["12", "8", "6", "4"], def: "12", fmt: (v: string) => `${v}${t("settings.sec")}` },
+        ].map((row) => {
+          const cur = cap?.selection?.[row.key] ?? row.def;
+          return (
+            <div key={row.key} className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+              <div className="flex items-center gap-2.5">
+                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-muted)]" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-medium truncate">{row.label}</div>
+                  <div className="mono text-[10px] text-[var(--color-muted)] truncate">{row.hint}</div>
+                </div>
+                <select value={cur} onChange={(e) => { api.setSelection(row.key, e.target.value).then(loadCap).catch((er) => setErr(er instanceof Error ? er.message : String(er))); }}
+                  className="shrink-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
+                  {row.opts.map((o) => <option key={o} value={o}>{row.fmt(o)}</option>)}
+                </select>
+              </div>
+            </div>
+          );
+        })}
+        {(() => {
+          const smartRefTrimOn = (cap?.selection?.smart_ref_trim ?? "1") !== "0";
+          return (
+            <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+              <div className="flex items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-muted)]" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[12px] font-medium truncate">{t("settings.smartRefTrim")}</div>
+                    <div className="mono text-[10px] text-[var(--color-muted)] truncate">{t("settings.smartRefTrimHint")}</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextVal = smartRefTrimOn ? "0" : "1";
+                    api.setSelection("smart_ref_trim", nextVal).then(loadCap).catch((er) => setErr(er instanceof Error ? er.message : String(er)));
+                  }}
+                  title={t("settings.smartRefTrim")}
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${smartRefTrimOn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface)] border border-[var(--color-border)]"}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${smartRefTrimOn ? "left-[18px]" : "left-0.5"}`} />
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+        {[
           {
             key: "higgs_max_tokens",
             label: t("settings.higgsMaxTokens"),

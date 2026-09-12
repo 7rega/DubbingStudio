@@ -795,6 +795,7 @@ fn build_dub(
     // Слот "-" (CLONE_SLOT, авто-распределение #114) — этот спикер остаётся на КЛОНИРОВАНИИ: пак-реф
     // не строим, его identity-реф добавляется ниже из вокала (spk_refs). Существующие CSV без "-"
     // ведут себя как раньше.
+    let smart_ref_on = crate::models::smart_ref_trim_enabled(&paths.models_root);
     let mut clone_slot_spks: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let cast_dir = paths.voices_dir.join("cast");
     let pack_refs: std::collections::BTreeMap<String, PathBuf> = if dirty_count > 0 && proj.audio.voice.mode == "autocast" {
@@ -823,7 +824,12 @@ fn build_dub(
             let key = spk.trim().to_lowercase();
             if let Some(src) = cast_files.get(&key) {
                 let out = wd.join(format!("ref_cast_{i}.wav"));
-                if media::trim(src, &out, 0.0, paths.ref_secs, 16_000).is_ok() {
+                let trimmed = if smart_ref_on {
+                    media::trim_smart_ref(src, &out, 0.0, paths.ref_secs).is_ok()
+                } else {
+                    media::trim(src, &out, 0.0, paths.ref_secs, 16_000).is_ok()
+                };
+                if trimmed && out.is_file() {
                     map.insert(spk.clone(), out);
                 } else {
                     clone_slot_spks.insert(spk.clone());
@@ -859,7 +865,12 @@ fn build_dub(
                     let out = wd.join(format!("ref_pack_{i}.wav"));
                     // реф КАПИТСЯ до paths.ref_secs (дефолт 12с; на слабой RAM юзер уменьшает в настройках —
                     // длинный реф раздувает prefill-граф Higgs -> OOM на 32ГБ).
-                    if media::trim(&src, &out, 0.0, paths.ref_secs, 16_000).is_ok() {
+                    let trimmed = if smart_ref_on {
+                        media::trim_smart_ref(&src, &out, 0.0, paths.ref_secs).is_ok()
+                    } else {
+                        media::trim(&src, &out, 0.0, paths.ref_secs, 16_000).is_ok()
+                    };
+                    if trimmed && out.is_file() {
                         map.insert(spk.clone(), out);
                     }
                 }
@@ -894,7 +905,7 @@ fn build_dub(
     } else {
         // Скоринг кандидатов + REF-QC ТОЛЬКО для спикеров, реально нуждающихся в клоне из вокала
         let mut asr = crate::models::build_engine(&paths.asr);
-        build_speaker_refs(&segs_needing_vocal_clone, &vocals16, wd, paths.ref_secs, asr.as_mut(), progress)?
+        build_speaker_refs(&segs_needing_vocal_clone, &vocals16, wd, paths.ref_secs, smart_ref_on, asr.as_mut(), progress)?
     };
     if dirty_count > 0 && use_pack {
         // Реф-транскрипция выбранным движком (Parakeet/Whisper), а НЕ захардкоженным Parakeet — иначе у
@@ -1294,7 +1305,12 @@ fn build_dub(
                     let out = wd.join(format!("ref_donor_{sid}.wav"));
                     let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
                     let end = ds.end.min(ds.start + cap);
-                    if media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok() {
+                    let trim_ok = if smart_ref_on && (ds.end - ds.start > cap + 0.1) {
+                        media::trim_smart_ref(&vocals16, &out, ds.start, cap).is_ok()
+                    } else {
+                        media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok()
+                    };
+                    if trim_ok && out.is_file() {
                         let t = ds.src_text.trim();
                         let res = (out, if t.is_empty() { None } else { Some(t.to_string()) });
                         custom_ref_cache.insert(v.to_string(), res.clone());
@@ -1315,14 +1331,34 @@ fn build_dub(
                     let temp_in = wd.join(format!("temp_v_{sid}.{ext}"));
                     let _ = std::fs::copy(&vf, &temp_in);
                     let in_p = if temp_in.is_file() { &temp_in } else { &vf };
-                    let trim_ok = media::trim(in_p, &out, 0.0, paths.ref_secs, 16_000).is_ok();
+                    let trim_ok = if smart_ref_on {
+                        media::trim_smart_ref(in_p, &out, 0.0, paths.ref_secs).is_ok()
+                    } else {
+                        media::trim(in_p, &out, 0.0, paths.ref_secs, 16_000).is_ok()
+                    };
                     let _ = std::fs::remove_file(&temp_in);
                     if trim_ok && out.is_file() {
-                        // Подтягиваем текст расшифровки сэмпла .txt, если он есть в каталоге (Higgs клонирует чище)
-                        let txt_content = crate::voice_library::find_voice_txt(&paths.voices_dir, v)
-                            .and_then(|tf| std::fs::read_to_string(&tf).ok())
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty());
+                        // Если включена умная нарезка, получаем точный текст среза через ASR,
+                        // исключая передачу огромного несоответствующего .txt файла в модель
+                        let txt_content = if smart_ref_on {
+                            let mut asr = crate::models::build_engine(&paths.asr);
+                            if let Ok(rsegs) = asr.transcribe(&out, "auto") {
+                                let t = rsegs
+                                    .iter()
+                                    .map(|s| s.text.trim())
+                                    .filter(|s| !s.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                if !t.is_empty() { Some(t) } else { None }
+                            } else {
+                                None
+                            }
+                        } else {
+                            crate::voice_library::find_voice_txt(&paths.voices_dir, v)
+                                .and_then(|tf| std::fs::read_to_string(&tf).ok())
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                        };
                         let res = (out, txt_content);
                         custom_ref_cache.insert(v.to_string(), res.clone());
                         Some(res)
@@ -2340,6 +2376,7 @@ fn build_speaker_refs(
     vocals16: &Path,
     wd: &Path,
     ref_secs: f64,
+    smart_ref_on: bool,
     asr: &mut dyn dub_asr::AsrEngine,
     progress: &Progress,
 ) -> Result<SpkRefs, String> {
@@ -2425,7 +2462,14 @@ fn build_speaker_refs(
         let stag = safe_spk_tag(spk);
         for (i, c) in good.iter().enumerate() {
             let p = wd.join(format!("ref_cand_spk{stag}_{i}.wav"));
-            media::trim(vocals16, &p, c.start, c.end.min(c.start + ref_secs), 16_000)?;
+            let trimmed = if smart_ref_on && (c.end - c.start > ref_secs + 0.1) {
+                media::trim_smart_ref(vocals16, &p, c.start, ref_secs).is_ok()
+            } else {
+                false
+            };
+            if !trimmed {
+                media::trim(vocals16, &p, c.start, c.end.min(c.start + ref_secs), 16_000)?;
+            }
             batch.push(p);
         }
         cand_map.insert(spk.clone(), good);

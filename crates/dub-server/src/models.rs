@@ -85,6 +85,7 @@ pub fn is_selection_key(key: &str) -> bool {
             // Лимиты RAM (видимые контролы в настройках, НЕ авто-магия): против OOM на слабой памяти.
             | "llama_ubatch"    // размер prefill-батча Gemma (меньше = меньше пиковый буфер графа prefill)
             | "higgs_ref_secs"  // длина реф-клипа клона голоса (меньше = меньше prefill Higgs; <12с спасает 32ГБ)
+            | "smart_ref_trim"  // "1" -> умная нарезка реф-клипов по паузам речи (дефолт); "0" -> классическая фикс-резка
             | "higgs_max_tokens" // лимит токенов Higgs TTS: default (дефолт DLL), auto (по длине фразы), или 256/512/768/1024
             | "bench"           // пер-стадийный бенчмарк (bench.json + ⏱ в журнале); галка в настройках, ВЫКЛ по умолчанию
             | "duck_on"         // дакинг фона под дубляжом (приглушать фон под речью); ВЫКЛ по умолчанию — не всем нужен
@@ -296,6 +297,24 @@ pub fn sel_num(mroot: &Path, key: &str) -> Option<f64> {
 /// Пользователь на 32ГБ RAM может уменьшить (баг-репорт: >12с не влезает в prefill Higgs, ручная резка <12с спасает).
 pub fn higgs_ref_secs(mroot: &Path) -> f64 {
     sel_num(mroot, "higgs_ref_secs").filter(|s| *s > 0.0 && *s <= 60.0).unwrap_or(12.0)
+}
+
+/// Включена ли умная нарезка референсов по естественным паузам речи (дефолт true / "1"; выкл "0").
+pub fn smart_ref_trim_enabled(mroot: &Path) -> bool {
+    load_selection(mroot)
+        .get("smart_ref_trim")
+        .and_then(|v| {
+            if let Some(s) = v.as_str() {
+                Some(s != "0")
+            } else if let Some(b) = v.as_bool() {
+                Some(b)
+            } else if let Some(n) = v.as_i64() {
+                Some(n != 0)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(true)
 }
 
 /// Лимит токенов Higgs Audio v3 TTS:

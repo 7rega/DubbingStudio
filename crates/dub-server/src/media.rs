@@ -983,6 +983,217 @@ pub fn trim(src: &Path, dst: &Path, start: f64, end: f64, sr: u32) -> Result<(),
     ])
 }
 
+/// Вычислить границы (start_sec, end_sec) для умной нарезки референса по паузам.
+/// Сканирует аудио:
+/// 1. Находит старт речи (отсекая начальную тишину/клики/шум).
+/// 2. Сканирует НАЗАД от максимального потолка (target_cap) к минимальному порогу (2.8с),
+///    находя естественную паузу между словами (тихий участок >= 120мс).
+/// 3. При непрерывной речи использует grace-окно (+0.6с) или точку локального минимума энергии.
+pub fn find_smart_ref_bounds(samples: &[f32], sr: u32, target_cap: f64) -> (f64, f64) {
+    let total_dur = samples.len() as f64 / sr as f64;
+    if total_dur <= 2.8 {
+        return (0.0, total_dur);
+    }
+
+    let frame_len = (sr as f64 * 0.020).round() as usize; // 20мс фрейм (320 сэмплов при 16k)
+    if frame_len == 0 {
+        return (0.0, total_dur.min(target_cap));
+    }
+
+    let num_frames = samples.len() / frame_len;
+    if num_frames < 10 {
+        return (0.0, total_dur.min(target_cap));
+    }
+
+    // Вычисляем RMS для каждого 20мс фрейма
+    let mut energies = Vec::with_capacity(num_frames);
+    for i in 0..num_frames {
+        let chunk = &samples[i * frame_len..(i + 1) * frame_len];
+        let sum_sq: f32 = chunk.iter().map(|s| s * s).sum();
+        let rms = (sum_sq / chunk.len() as f32).sqrt();
+        energies.push(rms);
+    }
+
+    // Анализ шума и пиков в рабочем окне (до target_cap + 2.0с)
+    let scan_limit_frame = ((target_cap + 2.0) * 50.0).round() as usize;
+    let scan_frames = &energies[..scan_limit_frame.min(energies.len())];
+
+    let mut sorted_energies = scan_frames.to_vec();
+    sorted_energies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let p15_idx = (sorted_energies.len() as f64 * 0.15).round() as usize;
+    let noise_floor = sorted_energies.get(p15_idx).copied().unwrap_or(0.001);
+
+    let p95_idx = (sorted_energies.len() as f64 * 0.95).round() as usize;
+    let peak_level = sorted_energies
+        .get(p95_idx.min(sorted_energies.len().saturating_sub(1)))
+        .copied()
+        .unwrap_or(0.05);
+
+    if peak_level < 0.005 {
+        // Практически полная тишина
+        return (0.0, total_dur.min(target_cap));
+    }
+
+    // Пороги активности
+    let speech_thresh = (noise_floor * 3.0).max(peak_level * 0.12).max(0.015);
+    let silence_thresh = (noise_floor * 1.8).max(peak_level * 0.07).max(0.006);
+
+    // 1. Поиск реального старта речи (T_start): отсекаем тишину, вдохи и клики
+    let mut onset_frame = 0;
+    for i in 0..scan_frames.len().saturating_sub(2) {
+        if scan_frames[i] >= speech_thresh
+            && scan_frames[i + 1] >= silence_thresh
+            && scan_frames[i + 2] >= silence_thresh
+        {
+            onset_frame = i;
+            break;
+        }
+    }
+    // Запас 40 мс перед атакой звука
+    let t_start = ((onset_frame as f64 * 0.020) - 0.040).max(0.0);
+
+    // 2. Определение границ поиска конца
+    let t_max = (t_start + target_cap).min(total_dur);
+    let t_min = (t_start + 2.8).min(t_max);
+
+    if t_max <= t_min + 0.1 {
+        return (t_start, t_max);
+    }
+
+    let frame_min = (t_min * 50.0).round() as usize;
+    let frame_max = (t_max * 50.0).round() as usize;
+
+    // 3. Обратное сканирование от frame_max к frame_min
+    // Ищем естественную паузу: тихий участок (RMS < silence_thresh) длиной >= 120мс (6 фреймов)
+    let min_pause_frames = 6;
+    let mut best_pause_end_frame = None;
+
+    let mut cur_silence = 0;
+    for f in (frame_min..=frame_max.min(scan_frames.len().saturating_sub(1))).rev() {
+        if scan_frames[f] < silence_thresh {
+            cur_silence += 1;
+            if cur_silence >= min_pause_frames {
+                // Найдена пауза! f - левый край паузы (где завершилось слово)
+                best_pause_end_frame = Some(f);
+                break;
+            }
+        } else {
+            cur_silence = 0;
+        }
+    }
+
+    let t_end = if let Some(pause_frame) = best_pause_end_frame {
+        // Пауза найдена! Даем 40мс хвоста для естественного затухания согласной
+        ((pause_frame as f64 * 0.020) + 0.040).min(t_max).max(t_min)
+    } else {
+        // Пауза не найдена в [t_min..t_max].
+        // Проверяем grace-окно чуть вперед (до +0.6с): может быть, слово заканчивается прямо сейчас?
+        let grace_frames = scan_frames.len().min(frame_max + 30); // +0.6с
+        let mut grace_found = None;
+        let mut g_silence = 0;
+        for f in frame_max..grace_frames {
+            if scan_frames[f] < silence_thresh {
+                g_silence += 1;
+                if g_silence >= 4 { // 80мс в grace-окне
+                    grace_found = Some(f.saturating_sub(g_silence) + 1);
+                    break;
+                }
+            } else {
+                g_silence = 0;
+            }
+        }
+
+        if let Some(gf) = grace_found {
+            ((gf as f64 * 0.020) + 0.030).min(total_dur)
+        } else {
+            // Если и в grace-окне сплошной звук — ищем точку локального минимума энергии
+            let mut min_e = f32::MAX;
+            let mut min_f = frame_max;
+            for f in frame_min..=frame_max.min(scan_frames.len().saturating_sub(1)) {
+                if scan_frames[f] < min_e {
+                    min_e = scan_frames[f];
+                    min_f = f;
+                }
+            }
+            (min_f as f64 * 0.020).min(t_max)
+        }
+    };
+
+    (t_start, t_end)
+}
+
+/// Умная нарезка аудио-референса по естественным паузам речи.
+/// 1. Считывает аудио (начиная со start_offset) в mono 16kHz.
+/// 2. Отсекает тишину/шум в начале до момента вступления речи (T_start).
+/// 3. Сканирует НАЗАД от максимального потолка (target_cap) в сторону минимума (2.8с),
+///    находя естественную паузу между словами (тихий участок >= 120мс).
+/// 4. Накладывает микро fade-in (15мс) и fade-out (30мс) для исключения щелчков.
+/// 5. Записывает чистый mono 16kHz PCM16 WAV в dst.
+/// Возвращает (abs_start, abs_end).
+pub fn trim_smart_ref(
+    src: &Path,
+    dst: &Path,
+    start_offset: f64,
+    target_cap: f64,
+) -> Result<(f64, f64), String> {
+    let (samples, sr) = if let Ok((mono, 16_000)) = crate::wavio::read_mono_f32(src) {
+        (mono, 16_000)
+    } else {
+        crate::wavio::decode_audio_mono_ffmpeg(src)
+            .map_err(|e| format!("decode {}: {e}", src.display()))?
+    };
+
+    let offset_samples = ((start_offset.max(0.0) * sr as f64).round() as usize).min(samples.len());
+    let available = &samples[offset_samples..];
+
+    if available.is_empty() {
+        return Err(format!("empty audio after offset {:.2}s in {}", start_offset, src.display()));
+    }
+
+    let (rel_start, rel_end) = find_smart_ref_bounds(available, sr, target_cap);
+    let abs_start = start_offset + rel_start;
+    let abs_end = start_offset + rel_end;
+
+    let idx_start = ((rel_start * sr as f64).round() as usize).min(available.len());
+    let idx_end = ((rel_end * sr as f64).round() as usize).min(available.len()).max(idx_start + 160);
+
+    let mut slice = available[idx_start..idx_end].to_vec();
+    if slice.is_empty() {
+        return Err("empty slice".to_string());
+    }
+
+    // Мягкий микро fade-in (15 мс)
+    let fi_len = ((sr as f64 * 0.015).round() as usize).min(slice.len() / 2);
+    for i in 0..fi_len {
+        slice[i] *= i as f32 / fi_len as f32;
+    }
+
+    // Мягкий микро fade-out (30 мс)
+    let fo_len = ((sr as f64 * 0.030).round() as usize).min(slice.len() / 2);
+    for i in 0..fo_len {
+        let idx = slice.len() - 1 - i;
+        slice[idx] *= i as f32 / fo_len as f32;
+    }
+
+    // Запись в mono 16kHz PCM16 WAV
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(dst, spec)
+        .map_err(|e| format!("create wav {}: {e}", dst.display()))?;
+    for &s in &slice {
+        let pcm = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        writer.write_sample(pcm).map_err(|e| format!("write sample: {e}"))?;
+    }
+    writer.finalize().map_err(|e| format!("finalize wav: {e}"))?;
+
+    Ok((abs_start, abs_end))
+}
+
 // ─── Оконная нарезка для полнометражного пайплайна (#79) ──────────────────────────────────────────
 // Новые хелперы (не трогают существующие): вырезать ОДНО окно вокала в отдельный WAV (RAM O(окна)),
 // либо нарезать весь вокал segment-muxer'ом одним проходом. `-reset_timestamps 1` даёт локальный t=0 в
@@ -1207,6 +1418,48 @@ mod pause_squeeze_tests {
         let silence = vec![0.0f32; 1000];
         let res = squeeze_internal_pauses(&silence, 1000, 40.0);
         assert_eq!(res.len(), 1000);
+    }
+
+    #[test]
+    fn test_smart_ref_bounds_silence_and_pause() {
+        let sr = 16_000u32;
+        let mut samples = Vec::new();
+
+        // 0.8с тишины в начале (шум 0.001)
+        samples.extend(vec![0.001f32; (0.8 * sr as f64) as usize]);
+
+        // 4.2с речи (синусоида с амплитудой 0.3) -> звучит от 0.8 до 5.0с
+        for i in 0..(4.2 * sr as f64) as usize {
+            let t = i as f32 / sr as f32;
+            samples.push(0.3 * (2.0 * std::f32::consts::PI * 220.0 * t).sin());
+        }
+
+        // 0.4с чистой паузы между словами -> от 5.0 до 5.4с
+        samples.extend(vec![0.001f32; (0.4 * sr as f64) as usize]);
+
+        // еще 3.0с речи -> от 5.4 до 8.4с
+        for i in 0..(3.0 * sr as f64) as usize {
+            let t = i as f32 / sr as f32;
+            samples.push(0.3 * (2.0 * std::f32::consts::PI * 220.0 * t).sin());
+        }
+
+        // Вызываем поиск при капе 6.0с
+        let (t_start, t_end) = find_smart_ref_bounds(&samples, sr, 6.0);
+
+        // Старт должен быть в районе 0.76..0.82с (отсечена тишина)
+        assert!(t_start >= 0.70 && t_start <= 0.82, "t_start={t_start} should be near 0.8s");
+
+        // Конец должен прийтись на паузу между словами (в районе 5.0..5.3с), а НЕ на слепые 6.0с
+        assert!(t_end >= 4.95 && t_end <= 5.40, "t_end={t_end} should land in the pause at ~5.0-5.3s");
+    }
+
+    #[test]
+    fn test_smart_ref_bounds_short_audio() {
+        let sr = 16_000u32;
+        let samples = vec![0.2f32; (2.0 * sr as f64) as usize];
+        let (t_start, t_end) = find_smart_ref_bounds(&samples, sr, 6.0);
+        assert_eq!(t_start, 0.0);
+        assert!((t_end - 2.0).abs() < 0.05);
     }
 }
 

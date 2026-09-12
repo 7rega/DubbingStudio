@@ -405,6 +405,8 @@
     "llamaUbatchHint": "Lower = less RAM (avoids OOM on 32 GB)",
     "higgsRef": "Voice-clone reference length",
     "higgsRefHint": "Shorter = less TTS RAM (helps 32 GB)",
+    "smartRefTrim": "Smart reference silence-trim",
+    "smartRefTrimHint": "Finds natural speech pauses, prevents cutting mid-word",
     "higgsMaxTokens": "TTS Max Tokens",
     "higgsMaxTokensHint": "Cap phrase generation length (prevents humming)",
     "tokenDefault": "Default (Engine)",

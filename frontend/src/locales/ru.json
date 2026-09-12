@@ -405,6 +405,8 @@
     "llamaUbatchHint": "Меньше = меньше RAM (против OOM на 32ГБ)",
     "higgsRef": "Длина реф-клипа клона",
     "higgsRefHint": "Короче = меньше RAM для TTS (спасает 32ГБ)",
+    "smartRefTrim": "Умная нарезка по паузам",
+    "smartRefTrimHint": "Поиск естественных пауз речи, без обрыва слов",
     "higgsMaxTokens": "Лимит токенов TTS",
     "higgsMaxTokensHint": "Ограничение длины генерации фразы (защита от гула)",
     "tokenDefault": "По умолчанию (движок)",
