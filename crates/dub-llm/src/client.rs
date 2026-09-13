@@ -347,13 +347,13 @@ mod tests {
 
         let r_body = remote.build_body(&msgs, &s);
         assert_eq!(r_body.get("model").and_then(|v| v.as_str()), Some("google/gemini-2.5-flash"));
-        assert_eq!(r_body.get("repetition_penalty").and_then(|v| v.as_f64()), Some(1.05));
+        assert_eq!(r_body.get("repetition_penalty").and_then(|v| v.as_f64()), Some(1.05f32 as f64));
         assert!(r_body.get("repeat_penalty").is_none());
         assert!(r_body.get("chat_template_kwargs").is_none());
 
         let l_body = local.build_body(&msgs, &s);
         assert!(l_body.get("model").is_none());
-        assert_eq!(l_body.get("repeat_penalty").and_then(|v| v.as_f64()), Some(1.05));
+        assert_eq!(l_body.get("repeat_penalty").and_then(|v| v.as_f64()), Some(1.05f32 as f64));
         assert!(l_body.get("repetition_penalty").is_none());
         assert!(l_body.get("chat_template_kwargs").is_some());
     }

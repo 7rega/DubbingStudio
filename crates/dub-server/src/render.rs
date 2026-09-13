@@ -3216,6 +3216,7 @@ mod tests {
             id: id.into(),
             start,
             end,
+            src_text: tgt.into(),
             tgt_text: tgt.into(),
             ..Default::default()
         }
@@ -3423,12 +3424,12 @@ mod tests {
             *s = vowel + sib;
         }
 
-        let peak_before = sibilant_burst[0.35 as usize * sr as usize..0.55 as usize * sr as usize]
+        let peak_before = sibilant_burst[(0.35 * sr as f64) as usize..(0.55 * sr as f64) as usize]
             .iter().fold(0.0f32, |m, &v| m.max(v.abs()));
 
         apply_deesser(&mut sibilant_burst, sr);
 
-        let peak_after = sibilant_burst[0.35 as usize * sr as usize..0.55 as usize * sr as usize]
+        let peak_after = sibilant_burst[(0.35 * sr as f64) as usize..(0.55 * sr as f64) as usize]
             .iter().fold(0.0f32, |m, &v| m.max(v.abs()));
 
         // Де-эссер должен динамически поджать резкий сибилянтный пик

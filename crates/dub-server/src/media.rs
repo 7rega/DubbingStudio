@@ -1021,10 +1021,10 @@ pub fn find_smart_ref_bounds(samples: &[f32], sr: u32, target_cap: f64) -> (f64,
     let mut sorted_energies = scan_frames.to_vec();
     sorted_energies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let p15_idx = (sorted_energies.len() as f64 * 0.15).round() as usize;
+    let p15_idx = ((sorted_energies.len().saturating_sub(1)) as f64 * 0.15) as usize;
     let noise_floor = sorted_energies.get(p15_idx).copied().unwrap_or(0.001);
 
-    let p95_idx = (sorted_energies.len() as f64 * 0.95).round() as usize;
+    let p95_idx = ((sorted_energies.len().saturating_sub(1)) as f64 * 0.95) as usize;
     let peak_level = sorted_energies
         .get(p95_idx.min(sorted_energies.len().saturating_sub(1)))
         .copied()
@@ -1373,7 +1373,7 @@ mod iso639_tests {
 
 #[cfg(test)]
 mod pause_squeeze_tests {
-    use super::squeeze_internal_pauses;
+    use super::{find_smart_ref_bounds, squeeze_internal_pauses};
 
     #[test]
     fn squeezes_internal_long_pauses_only() {

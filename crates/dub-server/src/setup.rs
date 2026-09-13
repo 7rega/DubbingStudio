@@ -179,10 +179,10 @@ pub fn manifest() -> Vec<Component> {
             delivery: Delivery::Download,
             size: 377_890_261,
             files: &[
-                FileSpec { url: dub_asr::forced::FILES[0].url, dest_rel: "models/alignment/en/model.onnx", size: 377887594, extract: Extract::None },
-                FileSpec { url: dub_asr::forced::FILES[1].url, dest_rel: "models/alignment/en/vocab.json", size: 358, extract: Extract::None },
-                FileSpec { url: dub_asr::forced::FILES[2].url, dest_rel: "models/alignment/en/config.json", size: 2094, extract: Extract::None },
-                FileSpec { url: dub_asr::forced::FILES[3].url, dest_rel: "models/alignment/en/preprocessor_config.json", size: 215, extract: Extract::None },
+                FileSpec { url: dub_asr::forced::URL_MODEL, dest_rel: "models/alignment/en/model.onnx", size: 377887594, extract: Extract::None },
+                FileSpec { url: dub_asr::forced::URL_VOCAB, dest_rel: "models/alignment/en/vocab.json", size: 358, extract: Extract::None },
+                FileSpec { url: dub_asr::forced::URL_CONFIG, dest_rel: "models/alignment/en/config.json", size: 2094, extract: Extract::None },
+                FileSpec { url: dub_asr::forced::URL_PREPROC, dest_rel: "models/alignment/en/preprocessor_config.json", size: 215, extract: Extract::None },
             ],
             markers: &[
                 Marker { rel: "models/alignment/en/model.onnx", expect: 377887594 },

@@ -14,16 +14,21 @@ pub struct ModelFile {
     pub size: u64,
     pub hash: &'static str,
 }
+pub const BASE_URL: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/";
+pub const URL_MODEL: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/onnx/model.onnx";
+pub const URL_VOCAB: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/vocab.json";
+pub const URL_CONFIG: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/config.json";
+pub const URL_PREPROC: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/preprocessor_config.json";
 macro_rules! model_file {
-    ($name:literal, $remote:literal, $size:literal, $hash:literal) => {
-        ModelFile { name: $name, url: concat!("https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/", $remote), size: $size, hash: $hash }
+    ($name:literal, $url:expr, $size:literal, $hash:literal) => {
+        ModelFile { name: $name, url: $url, size: $size, hash: $hash }
     };
 }
 pub const FILES: &[ModelFile] = &[
-    model_file!("model.onnx", "onnx/model.onnx", 377887594, "5659fcc79c33b1000eecf88f8f43bae2c7a9898f608f3c0295f015e1cd3f46d3"),
-    model_file!("vocab.json", "vocab.json", 358, "795edde10fe7ae15e260d4f67fe453913ea7f67f69f857755c15ce839a7ea6e9"),
-    model_file!("config.json", "config.json", 2094, "aeeb74ef2996494acdc86f224d4df1a2da22007ca2135ea6b3f94b0655491655"),
-    model_file!("preprocessor_config.json", "preprocessor_config.json", 215, "288b3cfae2bedc4fc6de73bfd3fec4b3d29d5d5db5fbd1980884433cd3e60371"),
+    model_file!("model.onnx", URL_MODEL, 377887594, "5659fcc79c33b1000eecf88f8f43bae2c7a9898f608f3c0295f015e1cd3f46d3"),
+    model_file!("vocab.json", URL_VOCAB, 358, "795edde10fe7ae15e260d4f67fe453913ea7f67f69f857755c15ce839a7ea6e9"),
+    model_file!("config.json", URL_CONFIG, 2094, "aeeb74ef2996494acdc86f224d4df1a2da22007ca2135ea6b3f94b0655491655"),
+    model_file!("preprocessor_config.json", URL_PREPROC, 215, "288b3cfae2bedc4fc6de73bfd3fec4b3d29d5d5db5fbd1980884433cd3e60371"),
 ];
 
 pub fn file_valid(path: &Path, spec: &ModelFile) -> bool {

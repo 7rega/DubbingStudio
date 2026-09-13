@@ -94,7 +94,9 @@ fn golden_bounds_match_experiment2_acoustic() {
 fn fixture_matches_approved_reference_hash() {
     let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/alignment_golden.json"));
     let bytes = std::fs::read(path).unwrap();
-    let hash = blake3::hash(&bytes).to_hex().to_string();
+    // Checkout may rewrite line endings (core.autocrlf); the approved hash is over LF bytes.
+    let normalized = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
+    let hash = blake3::hash(normalized.as_bytes()).to_hex().to_string();
     // Regenerate with: python tools/alignment (results.json bounds.baseline/acoustic).
     // If this fails, the fixture was edited or re-derived — re-approve against
     // F:\DubStudio\workspace\5eb3eef6308d\alignment_experiment2_20260913.
