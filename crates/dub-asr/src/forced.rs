@@ -4,7 +4,7 @@ use ort::{session::Session, value::TensorRef};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io::Read, path::Path};
 
-pub const VERSION: &str = "wav2vec2-en-fp32-edges-v1";
+pub const VERSION: &str = "wav2vec2-en-fp32-edges-v2";
 pub const COMPONENT: &str = "alignment-en";
 pub const MODEL_DIR: &str = "alignment/en";
 pub const REVISION: &str = "a19f851b3d42865797e410752b4c570c871e4825";

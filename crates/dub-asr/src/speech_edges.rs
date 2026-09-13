@@ -33,12 +33,61 @@ impl Envelope {
                     if b+5<=active.len()&&!active[b..b+5].iter().any(|x|*x)&&t>=edge-0.02&&t<=edge+0.25 {candidates.push(t.min(hi));}
                 }
             }
+            let mut consensus=false;
             if candidates.len()==3 {
                 candidates.sort_by(f64::total_cmp);
-                if candidates[2]-candidates[0]<=0.030000001 {boundary=if start{edge.min(candidates[1])}else{edge.max(candidates[1])};}
+                if candidates[2]-candidates[0]<=0.030000001 {boundary=if start{edge.min(candidates[1])}else{edge.max(candidates[1])};consensus=true;}
+            }
+            // Sustained/shouted tails (approved variant B): when the quiet-support
+            // consensus fails, walk the decaying envelope forward. A single short
+            // dip may bridge into a following burst (drawn-out shout); stop where
+            // that burst fades below 15% of its own peak for three frames.
+            if !start && !consensus {
+                let quiet=(threshold*0.35).max(0.0001);
+                let i0=indexes.iter().copied().min_by(|&a,&b|((a as f64*0.005+0.005)-edge).abs().total_cmp(&(((b as f64*0.005+0.005)-edge).abs()))).unwrap_or(0);
+                if self.rms.get(i0).copied().unwrap_or(0.0)>=quiet {
+                    let limit=((edge+0.900)/0.005) as usize;
+                    let hi_i=self.rms.len().min(((hi)/0.005) as usize);
+                    let stop=limit.min(hi_i);
+                    let mut i=i0; let mut last=i0; let mut a_end=edge; let mut b_end=edge;
+                    let mut a_done=false; let mut bridged=false;
+                    while i+1<stop {
+                        let t=(i+1) as f64*0.005+0.005;
+                        let cur=self.rms[i+1]; let prev=self.rms[i];
+                        if cur<quiet {break;}
+                        if cur>prev*1.25&&cur>quiet*2.0 {
+                            if !a_done {a_end=i as f64*0.005+0.010;a_done=true;}
+                            if !bridged {
+                                if let Some((m,burst_peak))=self.burst_end(i+1,edge,stop) {
+                                    if m-1>last&&burst_peak>=0.6*peak {bridged=true;last=m-1;b_end=last as f64*0.005+0.010;i=last;continue;}
+                                }
+                            }
+                            break;
+                        }
+                        last=i+1;i+=1;
+                        if !a_done {a_end=last as f64*0.005+0.010;}
+                        b_end=last as f64*0.005+0.010;
+                    }
+                    let gain=|v:f64| if v-edge>=0.040 {v} else {boundary};
+                    let walked=gain(b_end).max(gain(a_end));
+                    boundary=boundary.max(walked);
+                }
             }
         }
         round_ms(if start{(boundary-0.015).max(lo)}else{(boundary+0.020).min(hi)})
+    }
+    fn burst_end(&self,start:usize,edge:f64,stop:usize)->Option<(usize,f64)> {
+        let mut peak=0.0f64; let mut low=0usize;
+        for j in start..stop {
+            let t=j as f64*0.005+0.005;
+            if t>edge+0.900 {return None;}
+            peak=peak.max(self.rms[j]);
+            if peak>0.0&&self.rms[j]<peak*0.15 {
+                low+=1;
+                if low>=3 {return Some((j-2,peak));}
+            } else {low=0;}
+        }
+        None
     }
 }
 fn percentile(values:&[f64],p:f64)->f64 {
@@ -68,5 +117,23 @@ mod tests {
         let env=Envelope::new(&audio);let word=TimedWord{word:"shh".into(),start:0.50,end:1.0,score:0.9};
         assert!(env.expand(&word,true,0.0,2.0)<0.48);
         assert!(env.expand(&word,false,0.0,2.0)>1.1);
+    }
+    #[test]
+    fn sustained_shout_tail_is_not_cropped() {
+        // Burst 0.50-0.90, decaying tail 0.90-1.00, short dip, then a loud sustained
+        // shout 1.05-1.60 fading out: variant B must bridge the dip and keep the
+        // shout instead of stopping at the first rise.
+        let mut audio=vec![0.0;48000];
+        let burst=|a:&mut [f32],from:usize,to:usize,amp:f64|{for (i,x) in a[from..to].iter_mut().enumerate(){*x=(amp*((i as f64)*0.7).sin()) as f32;}};
+        burst(&mut audio,8000,14400,0.08);
+        for i in 14400..16000 {audio[i]=(0.05*(1.0-(i-14400) as f64/1600.0)*((i as f64)*0.5).sin()) as f32;}
+        for i in 16000..16800 {audio[i]=(0.006*((i as f64)*0.5).sin()) as f32;}
+        burst(&mut audio,16800,25600,0.12);
+        for i in 25600..28800 {audio[i]=(0.12*(1.0-(i-25600) as f64/3200.0)*((i as f64)*0.5).sin()) as f32;}
+        let env=Envelope::new(&audio);
+        let word=TimedWord{word:"Gryffindor!".into(),start:0.50,end:0.90,score:0.32};
+        let end=env.expand(&word,false,0.0,3.0);
+        assert!(end>1.55,"shout tail cropped at {end}");
+        assert!(end<1.95,"tail overran into silence: {end}");
     }
 }

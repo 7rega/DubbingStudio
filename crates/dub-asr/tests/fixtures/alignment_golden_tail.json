@@ -1,0 +1,277 @@
+{
+ "source": "project 131a2e5dc8a5, approved variant B (decaying tail + bridged shout)",
+ "segments": [
+  {
+   "id": "s0",
+   "text": "Before the start of term banquet, first years will partake in the sorting ceremony.",
+   "start": 2.827,
+   "end": 10.699,
+   "expect_start": 2.827,
+   "expect_end": 10.745
+  },
+  {
+   "id": "s1",
+   "text": "Granger Hermione.",
+   "start": 14.79,
+   "end": 16.487,
+   "expect_start": 14.79,
+   "expect_end": 16.565
+  },
+  {
+   "id": "s2",
+   "text": "Hi.",
+   "start": 16.933,
+   "end": 17.249,
+   "expect_start": 16.933,
+   "expect_end": 17.355
+  },
+  {
+   "id": "s3",
+   "text": "Did you love the summer reading?",
+   "start": 17.736,
+   "end": 18.834,
+   "expect_start": 17.736,
+   "expect_end": 18.834
+  },
+  {
+   "id": "s4",
+   "text": "There was summer reading.",
+   "start": 19.28,
+   "end": 20.378,
+   "expect_start": 19.28,
+   "expect_end": 20.455
+  },
+  {
+   "id": "s5",
+   "text": "Weasley Ronald.",
+   "start": 21.525,
+   "end": 23.397,
+   "expect_start": 21.525,
+   "expect_end": 23.397
+  },
+  {
+   "id": "s6",
+   "text": "Oi.",
+   "start": 26.285,
+   "end": 26.714,
+   "expect_start": 26.285,
+   "expect_end": 26.81
+  },
+  {
+   "id": "s7",
+   "text": "Porter Harry.",
+   "start": 29.4,
+   "end": 31.197,
+   "expect_start": 29.4,
+   "expect_end": 31.325
+  },
+  {
+   "id": "s8",
+   "text": "The house we're putting basically decides our entire future.",
+   "start": 34.226,
+   "end": 37.375,
+   "expect_start": 34.226,
+   "expect_end": 37.375
+  },
+  {
+   "id": "s9",
+   "text": "So, no pressure.",
+   "start": 38.04,
+   "end": 38.985,
+   "expect_start": 38.04,
+   "expect_end": 38.985
+  },
+  {
+   "id": "s10",
+   "text": "Not Slytherin.",
+   "start": 39.74,
+   "end": 40.427,
+   "expect_start": 39.74,
+   "expect_end": 40.427
+  },
+  {
+   "id": "s11",
+   "text": "Not Slytherin.",
+   "start": 40.78,
+   "end": 41.46,
+   "expect_start": 40.78,
+   "expect_end": 41.46
+  },
+  {
+   "id": "s12",
+   "text": "Gryffindor!",
+   "start": 41.953,
+   "end": 42.449,
+   "expect_start": 41.953,
+   "expect_end": 43.35
+  },
+  {
+   "id": "s13",
+   "text": "Welcome to a new year at Hogwarts.",
+   "start": 48.175,
+   "end": 51.59,
+   "expect_start": 48.175,
+   "expect_end": 51.59
+  },
+  {
+   "id": "s14",
+   "text": "Big G, lads!",
+   "start": 56.4,
+   "end": 57.565,
+   "expect_start": 56.4,
+   "expect_end": 57.565
+  },
+  {
+   "id": "s15",
+   "text": "How are we feeling?",
+   "start": 57.64,
+   "end": 58.577,
+   "expect_start": 57.64,
+   "expect_end": 58.625
+  },
+  {
+   "id": "s16",
+   "text": "Mr. Porter, I expect you to work hard.",
+   "start": 60.705,
+   "end": 63.69,
+   "expect_start": 60.705,
+   "expect_end": 63.69
+  },
+  {
+   "id": "s17",
+   "text": "Find what sparks your interest.",
+   "start": 65.115,
+   "end": 67.115,
+   "expect_start": 65.115,
+   "expect_end": 67.115
+  },
+  {
+   "id": "s18",
+   "text": "And make solid friendships.",
+   "start": 69.985,
+   "end": 71.737,
+   "expect_start": 69.985,
+   "expect_end": 71.91
+  },
+  {
+   "id": "s19",
+   "text": "Everyone thinks I'm this great wizard, Aquaphoris.",
+   "start": 77.245,
+   "end": 79.825,
+   "expect_start": 77.245,
+   "expect_end": 79.825
+  },
+  {
+   "id": "s20",
+   "text": "But I don't really know anything.",
+   "start": 81.15,
+   "end": 82.278,
+   "expect_start": 81.15,
+   "expect_end": 82.34
+  },
+  {
+   "id": "s21",
+   "text": "Let's hope you show some talent in the Quidditch, Vidge Potter.",
+   "start": 84.85,
+   "end": 87.845,
+   "expect_start": 84.85,
+   "expect_end": 87.845
+  },
+  {
+   "id": "s22",
+   "text": "You've certainly not exhibited any in here.",
+   "start": 90.509,
+   "end": 92.651,
+   "expect_start": 90.509,
+   "expect_end": 92.745
+  },
+  {
+   "id": "s23",
+   "text": "No way!",
+   "start": 93.885,
+   "end": 94.759,
+   "expect_start": 93.885,
+   "expect_end": 94.84
+  },
+  {
+   "id": "s24",
+   "text": "Family's more than just blood.",
+   "start": 99.22,
+   "end": 100.59,
+   "expect_start": 99.22,
+   "expect_end": 100.59
+  },
+  {
+   "id": "s25",
+   "text": "You'll find your place.",
+   "start": 101.435,
+   "end": 102.645,
+   "expect_start": 101.435,
+   "expect_end": 102.645
+  },
+  {
+   "id": "s26",
+   "text": "Oh.",
+   "start": 103.53,
+   "end": 103.858,
+   "expect_start": 103.53,
+   "expect_end": 103.905
+  },
+  {
+   "id": "s27",
+   "text": "We found something incredible.",
+   "start": 109.193,
+   "end": 110.575,
+   "expect_start": 109.193,
+   "expect_end": 110.575
+  },
+  {
+   "id": "s28",
+   "text": "We can't protect them.",
+   "start": 115.515,
+   "end": 116.608,
+   "expect_start": 115.515,
+   "expect_end": 116.72
+  },
+  {
+   "id": "s29",
+   "text": "We can only prepare them.",
+   "start": 116.974,
+   "end": 118.374,
+   "expect_start": 116.974,
+   "expect_end": 118.487
+  },
+  {
+   "id": "s30",
+   "text": "For what?",
+   "start": 118.6,
+   "end": 119.405,
+   "expect_start": 118.6,
+   "expect_end": 119.405
+  },
+  {
+   "id": "s31",
+   "text": "Anything could be lurking behind any door in this place.",
+   "start": 122.085,
+   "end": 124.615,
+   "expect_start": 122.085,
+   "expect_end": 124.615
+  },
+  {
+   "id": "s32",
+   "text": "Oh, come on.",
+   "start": 137.165,
+   "end": 138.132,
+   "expect_start": 137.165,
+   "expect_end": 138.132
+  },
+  {
+   "id": "s33",
+   "text": "Don't you two read?",
+   "start": 138.157,
+   "end": 139.07,
+   "expect_start": 138.157,
+   "expect_end": 139.07
+  }
+ ]
+}
