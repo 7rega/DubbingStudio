@@ -281,6 +281,7 @@ pub struct AnalyzeArgs {
                                  // tgt = импортированный текст, Даб Студио только озвучивает. Работает лишь с import_subs.
     pub num_speakers: usize,     // 0 = авто, 1..=8 = заданное число спикеров через WeSpeaker кластеризацию
     pub vision: bool,            // true = полный vision; false = fast text mode (без видеокадров)
+    pub auto_align: bool,
 }
 
 /// Пути к моделям/входу для одной джобы analyze.
@@ -688,6 +689,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
 
     // 4) сегменты: из импортированных субтитров (точный текст+тайминг, ASR пропущен) ЛИБО через ASR.
     //    Импорт: спикеров всё равно раздаём — по максимальному перекрытию реплики с диаризацией.
+    let mut detected_language = None;
     let (mut segments, mut n_spk): (Vec<Segment>, usize) = if let Some(subs_path) = &paths.import_subs {
         let content = std::fs::read_to_string(subs_path)
             .map_err(|e| format!("чтение субтитров {}: {e}", subs_path.display()))?;
@@ -783,6 +785,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
         let ts = asr
             .transcribe_with_diar(&asr_wav, turns, &args.src_lang)
             .map_err(|e| format!("transcribe: {e}"))?;
+        detected_language = asr.detected_language();
         let segs: Vec<Segment> = ts
             .into_iter()
             .enumerate()
@@ -934,6 +937,9 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     // Язык оригинала (для метки 2-й дорожки при keep_original_track). "auto" не детектится типизированно —
     // храним как есть; render маппит непустой не-auto код через iso639, иначе "und". Инвариант extra=allow.
     proj.meta.extra.insert("src_lang".into(), Value::String(args.src_lang.clone()));
+    if let Some(language) = detected_language {
+        proj.meta.extra.insert("detected_src_lang".into(), Value::String(language));
+    }
     proj.subs.mode = subs_mode;
     proj.subs.burn = args.burn; // композируемость: вжигать субтитры/титры или нет
     proj.segments = segments;
@@ -949,6 +955,13 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     //    Gemma получает всю VRAM. Fail-safe: сбой стадии оставляет tgt пустым (перевод — не блокер analyze).
     // vocals16 уже объявлен выше (стадия ASR) и не перемещался — переиспользуем.
     // Сигнатуру translate::stage НЕ трогаем — только пишем её param-хэш вокруг вызова (задел под resume).
+    if args.auto_align {
+        bench.stage("aligning");
+        // Fail-safe: сбой выравнивания не блокирует analyze (перевод/дубляж продолжаются).
+        if let Err(e) = crate::alignment::run(&mut proj, &paths.work_dir, &paths.models_root, Some(&args.src_lang), progress) {
+            progress(json!({ "stage": "aligning", "pct": 100, "msg": format!("Выравнивание пропущено: {e}") }));
+        }
+    }
     bench.stage("translate");
     crate::translate::stage(args, paths, &mut proj, &asr_wav, meta.height, meta.duration, progress);
     let translate_key = cache::hash_stage(&[

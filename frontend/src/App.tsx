@@ -698,9 +698,9 @@ function PresetsSection({ onApplied }: { onApplied?: () => void }) {
   );
 }
 
-function SettingsModal({ onClose }: { onClose: () => void }) {
+function SettingsModal({ onClose, initialTab = "models" }: { onClose: () => void; initialTab?: "models" | "components" }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<"models" | "components">("models");
+  const [tab, setTab] = useState<"models" | "components">(initialTab);
   const [sfx, setSfx] = useState(sfxEnabled());
   // Пер-стадийный бенчмарк (bench.json + ⏱ в журнале) — ВЫКЛ по умолчанию, состояние на бэке (active.json).
   const [bench, setBench] = useState(false);
@@ -1117,6 +1117,12 @@ function StatusBar() {
 function TopBar() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"models" | "components">("models");
+  useEffect(() => {
+    const open = () => { setSettingsTab("components"); setSettings(true); };
+    window.addEventListener("dub-open-components", open);
+    return () => window.removeEventListener("dub-open-components", open);
+  }, []);
   const [help, setHelp] = useState(false);
   const setStage = useStore((s) => s.setStage);
   const setPid = useStore((s) => s.setPid);
@@ -1184,7 +1190,7 @@ function TopBar() {
         <LanguageSwitcher />
       </div>
       {help && <HelpModal onClose={() => setHelp(false)} />}
-      {settings && <SettingsModal onClose={() => setSettings(false)} />}
+      {settings && <SettingsModal initialTab={settingsTab} onClose={() => { setSettings(false); setSettingsTab("models"); }} />}
     </header>
   );
 }
@@ -1579,18 +1585,8 @@ function DropZone() {
       const effCastingRef = effCasting ? castingRef : "";
       const effContentType = effCasting ? contentType : "real";
       const effNumSpeakers = audio === "transcribe" ? mainTranscribeSpeakers : 0;
-      const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers, audioOnly ? false : visionOn);
+      const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers, audioOnly ? false : visionOn, autoAlign);
       await api.watchJob(job_id, (e) => { if (e.type === "progress") s.setProgress(e.stage || "", e.msg || "", e.pct ?? null); });
-      // Автовыравнивание по вокалу: привязка старта фраз к звуку речи перед кастингом и рендером (не для транскрипта)
-      if (autoAlign && audio !== "transcribe") {
-        try {
-          s.setProgress("aligning", "Автовыравнивание по вокалу...", null);
-          const rAlign = await api.alignProject(project_id);
-          if (rAlign.ok && rAlign.count > 0) {
-            useStore.getState().pushActivity(`Автовыравнивание: ${rAlign.count} фраз`, "done");
-          }
-        } catch { /* fail-safe */ }
-      }
       if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain, mode: voDuckMode });   // громкость и режим дакинга со старта -> рендер ниже подхватит
       if (audio === "dub") await api.patch(project_id, { op: "dub_mix_mode", mode: dubMixMode });                             // режим сведения дубляжа (классический vs с эффектами)
       // Блюр-подложка под субтитрами — опция дубляжа/субтитров (дефолт вкл). Патчим, когда сабы вжигаются.
@@ -2005,11 +2001,11 @@ function DropZone() {
                         <span title="Размытая подложка под субтитрами. Выкл — без подложки." onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
                       </label>
                     )}
-                    {/* АВТОВЫРАВНИВАНИЕ ПО ВОКАЛУ — устраняет опережение речи Whisper'ом, дефолт ВКЛ. */}
-                    <label className="mt-1.5 flex items-center gap-2 text-[12px] cursor-pointer select-none w-fit" title="Привязка старта фраз к реальному звуку вокала. Устраняет опережение речи Whisper'ом.">
+                    {/* Общая backend-стадия до перевода, включая транскрибацию. */}
+                    <label className="mt-1.5 flex items-center gap-2 text-[12px] cursor-pointer select-none w-fit" title={t("align.hint")}>
                       <input type="checkbox" checked={autoAlign} onChange={(e) => setAutoAlignSaved(e.target.checked)} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
                       Автовыравнивание по вокалу
-                      <span title="Акустическое выравнивание: устраняет пустоту и вдохи перед фразой, подтягивая старт к реальной речи." onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
+                      <span title={t("align.hint")} onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
                     </label>
                     {/* КАСТИНГ ПЕРСОНАЖЕЙ (#115): доп. проход по кадрам -> база персонажей (аватар/голос). Опц., дефолт ВЫКЛ. */}
                     {showCasting && (
@@ -4697,6 +4693,7 @@ function Editor() {
   const [blurSigmaDraft, setBlurSigmaDraft] = useState<number | null>(null); // черновик силы блюра
   const [blurAlphaDraft, setBlurAlphaDraft] = useState<number | null>(null); // черновик затемнения/прозрачности блюра
   const [isAligning, setIsAligning] = useState(false);               // индикатор автовыравнивания субтитров по вокалу
+  const [alignProgress, setAlignProgress] = useState<number | null>(null);
   const [voiceMenuSeg, setVoiceMenuSeg] = useState<{ id: string; x: number; y: number } | null>(null); // всплывающее меню голоса/спикера фразы
   const [donorInput, setDonorInput] = useState<string>("");           // ввод номера фразы-донора для чистого клона
   const [showExportModal, setShowExportModal] = useState(false);
@@ -5457,24 +5454,38 @@ function Editor() {
     a.play().catch(() => setSoloPlayingId(null));
   }
   async function doAlignProject() {                                   // автовыравнивание субтитров по звуковой волне вокала
-    if (isAligning || !p) return;
+    if (isAligning || regenId || !p) return;
     setIsAligning(true);
+    setAlignProgress(null);
     pushActivity(t("align.working"), "work");
     try {
-      pushHistory(p);
-      const res = await api.alignProject(pid);
-      if (res && res.project) {
-        setProject(res.project);
-        setRendered(false);
-        bump();
-        const cnt = res.count ?? 0;
-        if (cnt > 0) {
-          pushActivity(t("align.success", { count: cnt }), "done");
-          playSfx("notify");
-        } else {
-          pushActivity(t("align.none"), "done");
-        }
+      await api.waitForEdits();
+      const snapshot = await api.getProject(pid);
+      const cap = await api.capabilities();
+      if (!cap.alignment?.ready) {
+        if (window.confirm(t("align.installPrompt"))) window.dispatchEvent(new Event("dub-open-components"));
+        return;
       }
+      let language = snapshot.meta.detected_src_lang || snapshot.meta.src_lang || "auto";
+      if (language === "auto") {
+        const selected = window.prompt(t("align.languagePrompt"), "en");
+        if (!selected) return;
+        language = selected.trim().toLowerCase();
+      }
+      const { job_id } = await api.alignProject(pid, language);
+      let summary: import("./lib/api").AlignmentSummary | undefined;
+      await api.watchJob(job_id, (event) => {
+        if (event.type === "progress") setAlignProgress(event.pct ?? null);
+        if (event.type === "done") summary = (event.result as { summary?: import("./lib/api").AlignmentSummary } | undefined)?.summary;
+      });
+      const fresh = await api.getProject(pid);
+      pushHistory(snapshot);
+      setProject(fresh);
+      setRendered(false);
+      bump();
+      pushActivity(summary ? t("align.summary", { count: summary.changed, unchanged: summary.unchanged, skipped: summary.skipped, review: summary.review }) : t("align.none"), "done");
+      if (summary?.skipped) pushActivity(summary.details.map(d => `${d.id}: ${d.reason}`).join("; "), "done");
+      playSfx("notify");
     } catch (e) {
       console.error("Auto-align error:", e);
       pushActivity(String(e), "error");
@@ -6137,7 +6148,7 @@ function Editor() {
                 <button
                   type="button"
                   onClick={doAlignProject}
-                  disabled={isAligning}
+                  disabled={isAligning || !!regenId}
                   title={t("align.hint")}
                   className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--color-surface-2)] border border-cyan-500/40 hover:border-cyan-400 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
                 >
@@ -6146,7 +6157,7 @@ function Editor() {
                   ) : (
                     <Magnet size={12} className="text-cyan-400" />
                   )}
-                  <span className="hidden xl:inline">{isAligning ? t("align.working") : t("align.btn")}</span>
+                  <span className="hidden xl:inline">{isAligning ? `${t("align.working")}${alignProgress === null ? "" : ` ${Math.round(alignProgress)}%`}` : t("align.btn")}</span>
                 </button>
 
                 {/* Кнопка «Принять правки» со счётчиком перегенерированных фраз */}
@@ -8768,7 +8779,7 @@ function BatchView() {
         // Загруженные субтитры считаются уже переведёнными -> пропускаем MT-перевод
         const importTranslated = !ao && !!curItem?.subsFile;
         // Стиль перевода (#112) — параметром analyze (patch до analyze невозможен: project.json ещё нет).
-        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, importTranslated, trStyle, false, "", "auto", effNumSpeakers, ao ? false : visionOn);
+        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, importTranslated, trStyle, false, "", "auto", effNumSpeakers, ao ? false : visionOn, batchAutoAlign);
         await api.watchJob(job_id, (e) => {
           if (e.type === "progress") {
             const stepText = stageLabel(e.stage, t) || e.msg || e.stage || "";
@@ -8776,12 +8787,6 @@ function BatchView() {
             upd({ pct: e.pct ?? null, stage: e.stage, detail: e.msg || stepText || undefined });
           }
         });
-        // Автовыравнивание по вокалу: привязка старта фраз к звуку речи перед рендером (не для транскрипта)
-        if (batchAutoAlign && audio !== "transcribe") {
-          try {
-            await api.alignProject(project_id);
-          } catch { /* fail-safe */ }
-        }
         if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain, mode: voDuckMode });   // громкость и режим дакинга со старта -> общий для всех проектов батча
         if (audio === "dub") await api.patch(project_id, { op: "dub_mix_mode", mode: dubMixMode });
         // Блюр-подложка под субтитрами: патчим в проект перед рендером
@@ -8844,16 +8849,14 @@ function BatchView() {
             <span className="text-[15px] font-semibold flex items-center gap-2 whitespace-nowrap"><FolderDown size={16} className="text-[var(--color-accent)]" />{t("batch.title")}</span>
           </div>
           <div className="flex items-center gap-3 shrink-0">
-            {/* Тумблер автовыравнивания по вокалу (скрыт в транскрипте) */}
-            {audio !== "transcribe" && (
-              <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title="Автовыравнивание по вокалу: привязка старта фраз к звуку речи.">
+            {/* Автовыравнивание доступно и для транскрибации. */}
+              <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title={t("align.hint")}>
                 <input type="checkbox" checked={batchAutoAlign} disabled={running} onChange={(e) => { setBatchAutoAlign(e.target.checked); batchState.autoAlign = e.target.checked; }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
                 <span>Выравнивание</span>
                 <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${batchAutoAlign ? "bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]" : "bg-[var(--color-surface-2)] text-[var(--color-muted)]"}`}>
                   {batchAutoAlign ? "ВКЛ" : "ВЫКЛ"}
                 </span>
               </label>
-            )}
             {/* Тумблер блюр-подложки */}
             <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title="Размытая подложка под субтитрами. Выкл = чистый текст без блюра видеоряда.">
               <input type="checkbox" checked={batchSubBlur} disabled={running} onChange={(e) => { setBatchSubBlur(e.target.checked); batchState.subBlur = e.target.checked; }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />

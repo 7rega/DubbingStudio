@@ -8,6 +8,7 @@
 
 mod acoustic;
 mod analyze;
+mod alignment;
 mod bench;
 mod casting;
 mod casting_library;
@@ -57,6 +58,7 @@ pub use jobs::JobQueue;
 
 pub type TtsCache = Arc<Mutex<Option<(render::EngineKey, Arc<audiocpp::AudiocppEngine>)>>>;
 static GLOBAL_TTS_CACHE: OnceLock<TtsCache> = OnceLock::new();
+static PROJECT_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 static TITLE_HOOK: std::sync::RwLock<Option<Box<dyn Fn(&str) + Send + Sync>>> = std::sync::RwLock::new(None);
 
@@ -140,6 +142,7 @@ pub fn verify_captions_e2e(
         import_translated: false,
         num_speakers: 0,
         vision: models::vision_enabled(&mroot),
+        auto_align: false,
     };
     let sel = models::load_selection(&mroot);
     let (mt_model, mmproj) = models::resolve_mt(&mroot, &sel);
@@ -358,6 +361,11 @@ impl AppState {
 /// Атомарная запись project.json: сериализуем в tmp рядом, затем rename (tmp+rename — как в
 /// проверенных питон-паттернах; частичного файла при падении не будет).
 fn save_project_atomic(dir: &Path, proj: &Project) -> Result<(), String> {
+    let _guard = PROJECT_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
+    save_project_unlocked(dir, proj)
+}
+
+fn save_project_unlocked(dir: &Path, proj: &Project) -> Result<(), String> {
     let json = proj
         .to_json_pretty()
         .map_err(|e| format!("сериализация project.json: {e}"))?;
@@ -425,7 +433,7 @@ pub fn build_router(state: AppState) -> Router {
             get(get_project).patch(patch_project).put(endpoints::put_project).delete(delete_project),
         )
         .route("/projects/{pid}/analyze", post(analyze_project))
-        .route("/projects/{pid}/align", post(align_project))
+        .route("/projects/{pid}/align", post(alignment::handle))
         .route("/projects/{pid}/remix", post(endpoints::remix_project))
         .route("/projects/{pid}/render", post(render_project))
         .route("/projects/{pid}/export-lang", post(export_lang))   // клон+ре-перевод+рендер на другом языке (экспорт-уровень мультиязыка)
@@ -486,6 +494,7 @@ async fn capabilities(State(st): State<AppState>) -> Json<Value> {
         // Выбор ASR: движок (parakeet|whisper), модель Whisper, квант Whisper (compute_type).
         "selection": sel,
         "asr_engines": ["parakeet","whisper"],
+        "alignment": { "languages": ["en"], "ready": dub_asr::forced::verified_model_ready(&st.models_root.join(dub_asr::forced::MODEL_DIR)), "component": "alignment-en" },
         "whisper_models": ["tiny","base","small","medium","large-v3","large-v3-turbo"],
         // Кванты Whisper (compute_type): float16 / int8_float16 задействуют Tensor Cores на CUDA GPU.
         "whisper_computes": ["int8","int8_float16","float16","int8_float32","float32"],
@@ -1714,7 +1723,13 @@ async fn analyze_project(
         vision: q.get("vision")
             .map(|v| v != "0")
             .unwrap_or_else(|| models::vision_enabled(&st.models_root)),
+        auto_align: qget("auto_align", "0") == "1",
     };
+    if args.auto_align {
+        if let Err(e) = alignment::preflight(&st.models_root) {
+            return (StatusCode::CONFLICT, e).into_response();
+        }
+    }
     // Активный вариант модели резолвится ПРИ КАЖДОЙ джобе (не морозится на старте): скачал/выбрал
     // квант -> применяется без рестарта. См. models::resolve_*.
     let sel = models::load_selection(&st.models_root);
@@ -1783,6 +1798,10 @@ async fn patch_project(
         Ok(d) => d,
         Err(resp) => return resp,
     };
+    let _guard = match PROJECT_WRITE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     let mut proj = match st.load_project(&pid) {
         Ok(p) => p,
         Err(resp) => return resp,
@@ -1791,7 +1810,7 @@ async fn patch_project(
         let status = StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_REQUEST);
         return (status, msg).into_response();
     }
-    if let Err(e) = save_project_atomic(&dir, &proj) {
+    if let Err(e) = save_project_unlocked(&dir, &proj) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
     }
     match proj.to_json() {
@@ -2879,146 +2898,6 @@ fn sse_stream(
 
 fn sse_event(ev: &Value) -> Result<Event, Infallible> {
     Ok(Event::default().data(serde_json::to_string(ev).unwrap_or_default()))
-}
-
-// ─── POST /projects/{pid}/align — автоподгонка таймингов под оригинальные голоса ─────
-pub async fn align_project(State(st): State<AppState>, AxPath(pid): AxPath<String>) -> Response {
-    let Ok(d) = st.proj_dir(&pid) else {
-        return (StatusCode::NOT_FOUND, "project not found").into_response();
-    };
-    let mut proj = match st.load_project(&pid) {
-        Ok(p) => p,
-        Err(r) => return r,
-    };
-    if proj.segments.is_empty() {
-        return Json(proj).into_response();
-    }
-
-    let audio_file = [
-        "vocals16_clean.wav",
-        "stems/vocals.wav",
-        "vocals16.wav",
-        "ref_vocals16.wav",
-        "audio_hq.wav",
-    ]
-        .iter()
-        .map(|f| d.join(f))
-        .find(|p| p.is_file())
-        .unwrap_or_else(|| d.join("audio_hq.wav"));
-
-    if !audio_file.is_file() {
-        if let Ok(src_str) = tokio::fs::read_to_string(d.join("source.txt")).await {
-            let src_p = Path::new(src_str.trim());
-            if src_p.is_file() {
-                let _ = media::to_16k_mono(src_p, &audio_file);
-            }
-        }
-    }
-
-    let res = tokio::task::spawn_blocking(move || {
-        let mut count = 0usize;
-        let mut wav_path = audio_file;
-        let voc16 = d.join("vocals16_align.wav");
-        let is_already_16k = wav_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .is_some_and(|n| n.starts_with("vocals16"));
-        if !is_already_16k && wav_path.is_file() && media::to_16k_mono(&wav_path, &voc16).is_ok() {
-            wav_path = voc16.clone();
-        }
-
-        let n_segs = proj.segments.len();
-        let mut acoustically_aligned = vec![false; n_segs];
-
-        // 1. Приоритетное акустическое выравнивание по чистому вокалу (Harmonic VAD + Onset)
-        if let Ok((samples, sr)) = wavio::read_mono_f32(&wav_path) {
-            let mut bounds: Vec<dub_asr::SegmentBound> = proj
-                .segments
-                .iter()
-                .map(|s| dub_asr::SegmentBound {
-                    start: s.start,
-                    end: s.end,
-                })
-                .collect();
-
-            let changes = dub_asr::align_bounds(&mut bounds, &samples, sr);
-            for (i, changed) in changes.into_iter().enumerate() {
-                if changed {
-                    let r_start = (bounds[i].start * 100.0).round() / 100.0;
-                    let r_end = (bounds[i].end * 100.0).round() / 100.0;
-                    if (r_start - proj.segments[i].start).abs() > 0.015 || (r_end - proj.segments[i].end).abs() > 0.015 {
-                        proj.segments[i].start = r_start;
-                        proj.segments[i].end = r_end;
-                        proj.segments[i].dirty = true;
-                        count += 1;
-
-                        // Если есть пословный тайминг, подтягиваем слова к обновлённым границам фразы
-                        if let Some(serde_json::Value::Array(words)) = proj.segments[i].extra.get_mut("words") {
-                            for w in words.iter_mut() {
-                                if let Some(obj) = w.as_object_mut() {
-                                    if let Some(ws) = obj.get("start").and_then(|v| v.as_f64()) {
-                                        if ws < r_start {
-                                            obj.insert("start".into(), serde_json::json!(r_start));
-                                        }
-                                    }
-                                    if let Some(we) = obj.get("end").and_then(|v| v.as_f64()) {
-                                        if we > r_end {
-                                            obj.insert("end".into(), serde_json::json!(r_end));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    acoustically_aligned[i] = true;
-                }
-            }
-        }
-
-        // 2. Фолбэк по пословным границам только для тех сегментов, где акустический VAD не нашёл звук
-        for i in 0..n_segs {
-            if !acoustically_aligned[i] {
-                if let Some(serde_json::Value::Array(words)) = proj.segments[i].extra.get("words") {
-                    if !words.is_empty() {
-                        let first_start = words.first().and_then(|w| w.get("start")).and_then(serde_json::Value::as_f64);
-                        let last_end = words.last().and_then(|w| w.get("end")).and_then(serde_json::Value::as_f64);
-                        if let (Some(ws), Some(we)) = (first_start, last_end) {
-                            if we > ws && ws >= 0.0 {
-                                let prev_bound = if i > 0 { proj.segments[i - 1].end + dub_asr::MIN_SUBTITLE_GAP } else { 0.0 };
-                                let next_bound = if i + 1 < n_segs { proj.segments[i + 1].start - dub_asr::MIN_SUBTITLE_GAP } else { f64::INFINITY };
-                                let target_start = ws.max(prev_bound).max(0.0);
-                                let target_end = (we + dub_asr::SPEECH_TAIL).min(next_bound).max(target_start + 0.100);
-                                let r_start = (target_start * 100.0).round() / 100.0;
-                                let r_end = (target_end * 100.0).round() / 100.0;
-                                if (r_start - proj.segments[i].start).abs() > 0.015 || (r_end - proj.segments[i].end).abs() > 0.015 {
-                                    proj.segments[i].start = r_start;
-                                    proj.segments[i].end = r_end;
-                                    proj.segments[i].dirty = true;
-                                    count += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if voc16.is_file() {
-            let _ = std::fs::remove_file(&voc16);
-        }
-
-        let _ = save_project_atomic(&d, &proj);
-        (count, proj)
-    }).await;
-
-    match res {
-        Ok((count, fresh_proj)) => Json(serde_json::json!({
-            "ok": true,
-            "count": count,
-            "project": fresh_proj,
-        })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
 }
 
 // ─── SPA fallback ───────────────────────────────────────────────────────────

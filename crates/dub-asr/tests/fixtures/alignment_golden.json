@@ -1,0 +1,482 @@
+{
+ "source": "alignment_experiment2_20260913/results.json (bounds.baseline -> bounds.acoustic)",
+ "segments": [
+  {
+   "id": "s0",
+   "text": "You're always eating.",
+   "speaker": "0",
+   "start": 1.511,
+   "end": 2.512,
+   "expect_start": 1.48,
+   "expect_end": 2.65
+  },
+  {
+   "id": "s1",
+   "text": "You never stop eating.",
+   "speaker": "0",
+   "start": 2.792,
+   "end": 3.733,
+   "expect_start": 2.775,
+   "expect_end": 3.753
+  },
+  {
+   "id": "s2",
+   "text": "Yeah, I stop eating.",
+   "speaker": "1",
+   "start": 3.773,
+   "end": 4.694,
+   "expect_start": 3.758,
+   "expect_end": 4.744
+  },
+  {
+   "id": "s3",
+   "text": "Yeah, if you're sleeping or if you're shooting a guy.",
+   "speaker": "0",
+   "start": 4.794,
+   "end": 8.098,
+   "expect_start": 4.765,
+   "expect_end": 8.118
+  },
+  {
+   "id": "s4",
+   "text": "Chris, we're on an airplane, all right?",
+   "speaker": "2",
+   "start": 8.358,
+   "end": 10.16,
+   "expect_start": 8.325,
+   "expect_end": 10.18
+  },
+  {
+   "id": "s5",
+   "text": "Fucking shooting a guy.",
+   "speaker": "2",
+   "start": 10.22,
+   "end": 11.381,
+   "expect_start": 10.2,
+   "expect_end": 11.401
+  },
+  {
+   "id": "s6",
+   "text": "Shut the fuck up.",
+   "speaker": "2",
+   "start": 11.501,
+   "end": 12.482,
+   "expect_start": 11.486,
+   "expect_end": 12.502
+  },
+  {
+   "id": "s7",
+   "text": "Don't pull rank on me.",
+   "speaker": "0",
+   "start": 12.742,
+   "end": 14.083,
+   "expect_start": 12.727,
+   "expect_end": 14.103
+  },
+  {
+   "id": "s8",
+   "text": "I've killed people in countries you can't even spell.",
+   "speaker": "0",
+   "start": 14.264,
+   "end": 17.246,
+   "expect_start": 14.249,
+   "expect_end": 17.27
+  },
+  {
+   "id": "s9",
+   "text": "Name one country you killed someone in that I can't spell.",
+   "speaker": "0",
+   "start": 17.339,
+   "end": 20.145,
+   "expect_start": 17.315,
+   "expect_end": 20.165
+  },
+  {
+   "id": "s10",
+   "text": "Czechoslovakia.",
+   "speaker": "0",
+   "start": 20.306,
+   "end": 21.428,
+   "expect_start": 20.27,
+   "expect_end": 21.448
+  },
+  {
+   "id": "s11",
+   "text": "You never killed anyone in Czechoslovakia.",
+   "speaker": "0",
+   "start": 23.374,
+   "end": 25.502,
+   "expect_start": 23.359,
+   "expect_end": 25.522
+  },
+  {
+   "id": "s12",
+   "text": "You just know I can't spell it.",
+   "speaker": "1",
+   "start": 25.562,
+   "end": 27.007,
+   "expect_start": 25.532,
+   "expect_end": 27.145
+  },
+  {
+   "id": "s13",
+   "text": "All right, listen up.",
+   "speaker": "1",
+   "start": 29.723,
+   "end": 30.325,
+   "expect_start": 29.708,
+   "expect_end": 30.36
+  },
+  {
+   "id": "s14",
+   "text": "Can we just keep a little bit of a low profile while we're here?",
+   "speaker": "1",
+   "start": 31.569,
+   "end": 34.378,
+   "expect_start": 31.554,
+   "expect_end": 34.43
+  },
+  {
+   "id": "s15",
+   "text": "Can we just have a nice time?",
+   "speaker": "0",
+   "start": 37.401,
+   "end": 39.303,
+   "expect_start": 37.37,
+   "expect_end": 39.375
+  },
+  {
+   "id": "s16",
+   "text": "So how's Easter fucking Island, big shot?",
+   "speaker": "2",
+   "start": 39.543,
+   "end": 41.285,
+   "expect_start": 39.5,
+   "expect_end": 41.305
+  },
+  {
+   "id": "s17",
+   "text": "Great, Marge. They got all these big stone heads here.",
+   "speaker": "3",
+   "start": 41.485,
+   "end": 43.847,
+   "expect_start": 41.45,
+   "expect_end": 43.925
+  },
+  {
+   "id": "s18",
+   "text": "They remind me of you, actually, except they're quiet.",
+   "speaker": "3",
+   "start": 44.388,
+   "end": 46.49,
+   "expect_start": 44.373,
+   "expect_end": 46.51
+  },
+  {
+   "id": "s19",
+   "text": "Well,",
+   "speaker": "3",
+   "start": 46.97,
+   "end": 47.351,
+   "expect_start": 46.955,
+   "expect_end": 47.49
+  },
+  {
+   "id": "s20",
+   "text": "first big heads.",
+   "speaker": "3",
+   "start": 48.592,
+   "end": 49.573,
+   "expect_start": 48.577,
+   "expect_end": 49.745
+  },
+  {
+   "id": "s21",
+   "text": "Not say anything or do anything that'll reveal anything that we don't want revealed.",
+   "speaker": "1",
+   "start": 50.423,
+   "end": 56.408,
+   "expect_start": 50.37,
+   "expect_end": 56.585
+  },
+  {
+   "id": "s22",
+   "text": "Thanks for bringing me.",
+   "speaker": "1",
+   "start": 57.089,
+   "end": 58.25,
+   "expect_start": 57.074,
+   "expect_end": 58.325
+  },
+  {
+   "id": "s23",
+   "text": "Girls, how do you like your new president?",
+   "speaker": "1",
+   "start": 59.291,
+   "end": 62.774,
+   "expect_start": 59.23,
+   "expect_end": 62.965
+  },
+  {
+   "id": "s24",
+   "text": "What'd I say about before, Chris?",
+   "speaker": "1",
+   "start": 63.555,
+   "end": 64.836,
+   "expect_start": 63.54,
+   "expect_end": 64.93
+  },
+  {
+   "id": "s25",
+   "text": "Everybody likes him.",
+   "speaker": "2",
+   "start": 65.116,
+   "end": 66.017,
+   "expect_start": 64.995,
+   "expect_end": 66.217
+  },
+  {
+   "id": "s26",
+   "text": "Not everybody.",
+   "speaker": "1",
+   "start": 66.417,
+   "end": 67.158,
+   "expect_start": 66.335,
+   "expect_end": 67.178
+  },
+  {
+   "id": "s27",
+   "text": "That wouldn't be true.",
+   "speaker": "1",
+   "start": 67.965,
+   "end": 68.787,
+   "expect_start": 67.915,
+   "expect_end": 68.845
+  },
+  {
+   "id": "s28",
+   "text": "And who the fuck are you? The CIA?",
+   "speaker": "2",
+   "start": 69.97,
+   "end": 71.553,
+   "expect_start": 69.92,
+   "expect_end": 71.575
+  },
+  {
+   "id": "s29",
+   "text": "We are the CIA.",
+   "speaker": "2",
+   "start": 72.736,
+   "end": 73.758,
+   "expect_start": 72.605,
+   "expect_end": 73.778
+  },
+  {
+   "id": "s30",
+   "text": "We're totally the CIA.",
+   "speaker": "0",
+   "start": 75.565,
+   "end": 77.032,
+   "expect_start": 75.475,
+   "expect_end": 77.052
+  },
+  {
+   "id": "s31",
+   "text": "We're not the CIA.",
+   "speaker": "3",
+   "start": 77.192,
+   "end": 77.936,
+   "expect_start": 77.177,
+   "expect_end": 77.956
+  },
+  {
+   "id": "s32",
+   "text": "Your country's gonna get fucked.",
+   "speaker": "0",
+   "start": 80.525,
+   "end": 82.371,
+   "expect_start": 80.485,
+   "expect_end": 82.391
+  },
+  {
+   "id": "s33",
+   "text": "Your country's gonna be absolutely fine.",
+   "speaker": "2",
+   "start": 82.411,
+   "end": 84.017,
+   "expect_start": 82.391,
+   "expect_end": 84.095
+  },
+  {
+   "id": "s34",
+   "text": "Hello.",
+   "speaker": "3",
+   "start": 86.071,
+   "end": 86.611,
+   "expect_start": 86.025,
+   "expect_end": 86.685
+  },
+  {
+   "id": "s35",
+   "text": "Where's Big Mouth?",
+   "speaker": "3",
+   "start": 87.292,
+   "end": 88.012,
+   "expect_start": 87.235,
+   "expect_end": 88.032
+  },
+  {
+   "id": "s36",
+   "text": "He's next door.",
+   "speaker": "1",
+   "start": 88.633,
+   "end": 89.173,
+   "expect_start": 88.618,
+   "expect_end": 89.193
+  },
+  {
+   "id": "s37",
+   "text": "We hear he's been acting problematic again.",
+   "speaker": "3",
+   "start": 89.474,
+   "end": 91.656,
+   "expect_start": 89.459,
+   "expect_end": 91.74
+  },
+  {
+   "id": "s38",
+   "text": "Problematic?",
+   "speaker": "3",
+   "start": 91.996,
+   "end": 92.696,
+   "expect_start": 91.981,
+   "expect_end": 92.716
+  },
+  {
+   "id": "s39",
+   "text": "No, he's acting the same exact pain in the ass he's always acting.",
+   "speaker": "1",
+   "start": 92.777,
+   "end": 95.399,
+   "expect_start": 92.737,
+   "expect_end": 95.435
+  },
+  {
+   "id": "s40",
+   "text": "Yo, hungry?",
+   "speaker": "2",
+   "start": 95.779,
+   "end": 96.68,
+   "expect_start": 95.66,
+   "expect_end": 96.775
+  },
+  {
+   "id": "s41",
+   "text": "Remember, he ain't leaving the fucking island, Lee.",
+   "speaker": "3",
+   "start": 97.321,
+   "end": 100.043,
+   "expect_start": 97.275,
+   "expect_end": 100.12
+  },
+  {
+   "id": "s42",
+   "text": "What's that, a threat?",
+   "speaker": "1",
+   "start": 100.463,
+   "end": 101.264,
+   "expect_start": 100.448,
+   "expect_end": 101.284
+  },
+  {
+   "id": "s43",
+   "text": "You can take it any way you fucking want.",
+   "speaker": "3",
+   "start": 101.704,
+   "end": 103.206,
+   "expect_start": 101.605,
+   "expect_end": 103.23
+  },
+  {
+   "id": "s44",
+   "text": "Well, how about you take it and you shove it up your flabby little ass? How about that?",
+   "speaker": "3",
+   "start": 103.879,
+   "end": 107.428,
+   "expect_start": 103.864,
+   "expect_end": 107.48
+  },
+  {
+   "id": "s45",
+   "text": "Who was that, your mom?",
+   "speaker": "0",
+   "start": 111.437,
+   "end": 112.786,
+   "expect_start": 111.422,
+   "expect_end": 112.806
+  },
+  {
+   "id": "s46",
+   "text": "Do you ever get paranoid you're not being paranoid enough?",
+   "speaker": "0",
+   "start": 122.643,
+   "end": 125.692,
+   "expect_start": 122.628,
+   "expect_end": 125.712
+  },
+  {
+   "id": "s47",
+   "text": "Because I think we're being followed.",
+   "speaker": "0",
+   "start": 126.133,
+   "end": 127.918,
+   "expect_start": 126.118,
+   "expect_end": 128.025
+  },
+  {
+   "id": "s48",
+   "text": "Is that why you shot up a car last night?",
+   "speaker": "0",
+   "start": 130.502,
+   "end": 132.446,
+   "expect_start": 130.43,
+   "expect_end": 132.466
+  },
+  {
+   "id": "s49",
+   "text": "Did someone say I shot up a car last night?",
+   "speaker": "0",
+   "start": 132.686,
+   "end": 135.07,
+   "expect_start": 132.665,
+   "expect_end": 135.09
+  },
+  {
+   "id": "s50",
+   "text": "You said you just drove around.",
+   "speaker": "0",
+   "start": 135.11,
+   "end": 136.373,
+   "expect_start": 135.095,
+   "expect_end": 136.393
+  },
+  {
+   "id": "s51",
+   "text": "I drove around and I shot up a car.",
+   "speaker": "0",
+   "start": 136.473,
+   "end": 138.096,
+   "expect_start": 136.423,
+   "expect_end": 138.116
+  },
+  {
+   "id": "s52",
+   "text": "What are we, hippies now?",
+   "speaker": "0",
+   "start": 138.236,
+   "end": 139.619,
+   "expect_start": 138.166,
+   "expect_end": 139.66
+  }
+ ]
+}

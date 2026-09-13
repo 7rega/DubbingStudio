@@ -8,6 +8,8 @@
 //! dubengine/asr.py и dubengine/diarize.py: паузы >0.6с, конец предложения .!?…, макс 8.0с.
 
 mod align;
+pub mod forced;
+mod speech_edges;
 mod reconcile;
 mod segment;
 mod speaker_global;
@@ -171,6 +173,8 @@ pub struct SpeakerSegment {
 /// (`Asr`) и Whisper (`WhisperAsr`) — analyze выбирает движок по настройке (models/active.json), не зная
 /// деталей. Методы берут `&Path` (объект-трейт: без дженериков).
 pub trait AsrEngine {
+    /// Actual language reported by ASR, separate from the requested "auto".
+    fn detected_language(&self) -> Option<String> { None }
     fn transcribe(&mut self, wav: &Path, lang: &str) -> Result<Vec<Segment>, AsrError>;
     fn transcribe_turns(&mut self, wav: &Path, turns: &[Turn], lang: &str) -> Result<Vec<SpeakerSegment>, AsrError>;
     /// Словный поток аудиофайла с таймкодами каждого слова.
@@ -775,7 +779,7 @@ fn is_dup_of_tail(all: &[Word], w: &Word, tol: f64) -> bool {
 // ─── загрузка/подготовка аудио ──────────────────────────────────────────────
 
 /// Прочитать WAV, свести в моно и ресемплировать в 16 кГц (parakeet-rs требует ровно 16k моно).
-pub(crate) fn load_wav_16k_mono(path: &Path) -> Result<(Vec<f32>, u32), AsrError> {
+pub fn load_wav_16k_mono(path: &Path) -> Result<(Vec<f32>, u32), AsrError> {
     let disp = path.display().to_string();
     let wav_err = |e: hound::Error| AsrError::WavRead(disp.clone(), e.to_string());
     let mut reader = hound::WavReader::open(path).map_err(wav_err)?;

@@ -90,6 +90,7 @@ pub struct WhisperAsr {
     device: String,
     /// Дополнительные аргументы командной строки WhisperXXL.
     xxl_args: Option<String>,
+    detected_language: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl WhisperAsr {
@@ -108,6 +109,7 @@ impl WhisperAsr {
             compute: compute.into(),
             device: device.into(),
             xxl_args,
+            detected_language: Default::default(),
         }
     }
 
@@ -346,12 +348,25 @@ impl WhisperAsr {
         let txt = std::fs::read_to_string(&json_path)
             .map_err(|e| AsrError::WavRead(json_path.display().to_string(), e.to_string()))?;
         let words = parse_whisper_json(&txt);
+        if let Some(language) = serde_json::from_str::<serde_json::Value>(&txt).ok()
+            .and_then(|v| v.get("language").and_then(|l| l.as_str()).map(str::to_owned)) {
+            if let Ok(mut detected) = self.detected_language.lock() {
+                match detected.as_deref() {
+                    None => *detected = Some(language),
+                    Some(previous) if previous != language => *detected = Some("mixed".into()),
+                    _ => {}
+                }
+            }
+        }
         let _ = std::fs::remove_dir_all(&out_dir);
         Ok(words)
     }
 }
 
 impl AsrEngine for WhisperAsr {
+    fn detected_language(&self) -> Option<String> {
+        self.detected_language.lock().ok().and_then(|value| value.clone())
+    }
     fn transcribe(&mut self, wav: &Path, lang: &str) -> Result<Vec<Segment>, AsrError> {
         let words = self.run_words_auto(wav, lang)?;
         Ok(segment_words(&words, SEG_MAX_GAP, SEG_MAX_DUR))
