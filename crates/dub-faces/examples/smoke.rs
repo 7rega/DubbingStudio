@@ -53,11 +53,9 @@ fn main() {
     // Опц.: реальное видео (arg 1) -> семплинг кадров + детект реальных лиц + кластеризация.
     if let Some(video) = std::env::args().nth(1) {
         let dir = std::env::temp_dir().join("dubfaces_smoke_frames");
-        let frames = dub_faces::sample_frames(std::path::Path::new(&video), &dir, 1.0).expect("frames");
-        println!("\nвидео {video}: кадров {}", frames.len());
         let mut all: Vec<dub_faces::FrameFace> = Vec::new();
         let mut total_faces = 0usize;
-        for fr in &frames {
+        let count = dub_faces::stream_frames(std::path::Path::new(&video), &dir, 1.0, |fr| {
             let fs = scrfd.detect(&fr.img).unwrap_or_default();
             total_faces += fs.len();
             for f in &fs {
@@ -72,7 +70,10 @@ fn main() {
                     });
                 }
             }
-        }
+            Ok(dub_faces::FrameDisposition::Delete)
+        })
+        .expect("frames");
+        println!("\nвидео {video}: кадров {}", count);
         println!("всего лиц: {total_faces}");
         let clusters = dub_faces::cluster_faces(&all, dub_faces::cluster_cos_threshold());
         println!("кластеров (персонажей): {}", clusters.len());

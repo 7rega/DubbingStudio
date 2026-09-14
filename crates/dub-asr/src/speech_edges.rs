@@ -1,9 +1,21 @@
 //! Local, bounded waveform expansion, matching experiment2 (10/5 ms RMS).
 use crate::forced::{round_ms, TimedWord};
-pub(crate) struct Envelope { rms:Vec<f64> }
+pub struct Envelope { rms:Vec<f64> }
 impl Envelope {
     pub fn new(samples:&[f32])->Self {
         Self {rms:samples.windows(160).step_by(80).map(|f|(f.iter().map(|x|(*x as f64).powi(2)).sum::<f64>()/160.0).sqrt()).collect()}
+    }
+    /// Max RMS over [a,b] seconds (frame time = i*0.005+0.005). Empty range -> 0.
+    pub fn max_rms(&self,a:f64,b:f64)->f64 {
+        if !(b>a) {return 0.0;}
+        let i0=(((a-0.005)/0.005).ceil().max(0.0)) as usize;
+        let mut m=0.0f64;
+        for i in i0..self.rms.len() {
+            let t=i as f64*0.005+0.005;
+            if t>b {break;}
+            m=m.max(self.rms[i]);
+        }
+        m
     }
     pub fn expand(&self,w:&TimedWord,start:bool,lo:f64,hi:f64)->f64 {
         let edge=if start{w.start}else{w.end};
@@ -52,7 +64,6 @@ impl Envelope {
                     let mut i=i0; let mut last=i0; let mut a_end=edge; let mut b_end=edge;
                     let mut a_done=false; let mut bridged=false;
                     while i+1<stop {
-                        let t=(i+1) as f64*0.005+0.005;
                         let cur=self.rms[i+1]; let prev=self.rms[i];
                         if cur<quiet {break;}
                         if cur>prev*1.25&&cur>quiet*2.0 {

@@ -13,6 +13,7 @@ import ResourceMonitor from "./components/ResourceMonitor";
 import { HiggsContextMenu, type HiggsContextMenuState, stripHiggsTags } from "./components/HiggsTagMenu";
 import { useVideoLifecycle, type SeekRequest } from "./hooks/useVideoLifecycle";
 import { decimatePeaks, clampTime, computeFallbackPeaks } from "./lib/timelineUtils";
+import { longestMergeChain, mergeKey, releaseBoundaryAudio } from "./lib/regroup";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -1403,7 +1404,9 @@ function DropZone() {
   const setSubBlurSaved = (v: boolean) => { setSubBlur(v); localStorage.setItem("dub-sub-blur", v ? "1" : "0"); };
   // Автовыравнивание по вокалу — опция (устраняет опережение речи Whisper'ом), дефолт ВЫКЛ.
   const [autoAlign, setAutoAlign] = useState<boolean>(() => localStorage.getItem("dub-auto-align") === "1");
+  const [autoRegroup, setAutoRegroup] = useState<boolean>(() => localStorage.getItem("dub-auto-regroup") === "1");
   const setAutoAlignSaved = (v: boolean) => { setAutoAlign(v); localStorage.setItem("dub-auto-align", v ? "1" : "0"); };
+  const setAutoRegroupSaved = (v: boolean) => { setAutoRegroup(v); localStorage.setItem("dub-auto-regroup", v ? "1" : "0"); };
   const [keepOrig, setKeepOrig] = useState<boolean>(() => localStorage.getItem("dub-keep-orig") === "1");
   const [container, setContainer] = useState<"mp4" | "mkv">(() => (localStorage.getItem("dub-container") === "mkv" ? "mkv" : "mp4"));
   const setKeepOrigSaved = (v: boolean) => { setKeepOrig(v); localStorage.setItem("dub-keep-orig", v ? "1" : "0"); };
@@ -1585,7 +1588,7 @@ function DropZone() {
       const effCastingRef = effCasting ? castingRef : "";
       const effContentType = effCasting ? contentType : "real";
       const effNumSpeakers = audio === "transcribe" ? mainTranscribeSpeakers : 0;
-      const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers, audioOnly ? false : visionOn, autoAlign);
+      const { job_id } = await api.analyze(project_id, tgt, eMode, src, eSubs, eRewrite, eBurn, audioOnly ? false : detectText, !audioOnly && !!subsFile && subsTranslated, trStyleText, effCasting, effCastingRef, effContentType, effNumSpeakers, audioOnly ? false : visionOn, autoAlign, autoAlign && autoRegroup);
       await api.watchJob(job_id, (e) => { if (e.type === "progress") s.setProgress(e.stage || "", e.msg || "", e.pct ?? null); });
       if (audio === "voiceover") await api.patch(project_id, { op: "voiceover_gain", gain_db: voGain, mode: voDuckMode });   // громкость и режим дакинга со старта -> рендер ниже подхватит
       if (audio === "dub") await api.patch(project_id, { op: "dub_mix_mode", mode: dubMixMode });                             // режим сведения дубляжа (классический vs с эффектами)
@@ -2007,6 +2010,14 @@ function DropZone() {
                       Автовыравнивание по вокалу
                       <span title={t("align.hint")} onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
                     </label>
+                    {/* Пересборка фраз (авто-сплит по доказанной тишине после выравнивания; склейка только вручную). */}
+                    {autoAlign && (
+                      <label className="mt-1.5 ml-5 flex items-center gap-2 text-[12px] cursor-pointer select-none w-fit" title={t("regroup.hint")}>
+                        <input type="checkbox" checked={autoRegroup} onChange={(e) => setAutoRegroupSaved(e.target.checked)} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
+                        {t("regroup.auto")}
+                        <span title={t("regroup.hint")} onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
+                      </label>
+                    )}
                     {/* КАСТИНГ ПЕРСОНАЖЕЙ (#115): доп. проход по кадрам -> база персонажей (аватар/голос). Опц., дефолт ВЫКЛ. */}
                     {showCasting && (
                       <label className="mt-1.5 flex items-center gap-2 text-[12px] cursor-pointer select-none w-fit">
@@ -2181,7 +2192,7 @@ function DropZone() {
       <input ref={inputRef} type="file" accept={MEDIA_ACCEPT} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); }} />
       <input ref={batchRef} type="file" multiple accept={MEDIA_ACCEPT} className="hidden"
-        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.autoAlign = autoAlign; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.voDuckMode = voDuckMode; batchState.dubMixMode = dubMixMode; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; s.setStage("batch"); } }} />
+        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.autoAlign = autoAlign; batchState.autoRegroup = autoRegroup; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.voDuckMode = voDuckMode; batchState.dubMixMode = dubMixMode; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; s.setStage("batch"); } }} />
 
       {/* Модальное окно "Все проекты" со скроллом и поиском */}
       {allProjectsModal && (
@@ -4418,7 +4429,7 @@ const SubtitleCard = memo(function SubtitleCard({
                 ? "bg-emerald-500/25 text-emerald-300 border-emerald-400 font-extrabold shadow-sm"
                 : "bg-[var(--color-surface)] text-[var(--color-muted)] border-[var(--color-border)] opacity-70"
             }`}
-            title={`Фраза #${idx + 1}\nID: ${seg.id}\nКэш: seg_${seg.id}.wav${isRegen ? "\n✨ Перегенерирована вручную" : ""}`}
+            title={`Фраза #${idx + 1}\nID: ${seg.id}${isRegen ? "\n✨ Перегенерирована вручную" : ""}`}
           >
             #{idx + 1}
           </span>
@@ -4693,7 +4704,12 @@ function Editor() {
   const [blurSigmaDraft, setBlurSigmaDraft] = useState<number | null>(null); // черновик силы блюра
   const [blurAlphaDraft, setBlurAlphaDraft] = useState<number | null>(null); // черновик затемнения/прозрачности блюра
   const [isAligning, setIsAligning] = useState(false);               // индикатор автовыравнивания субтитров по вокалу
+  const projectOperation = useRef(false);
+  const [regroupError, setRegroupError] = useState<string | null>(null);
   const [alignProgress, setAlignProgress] = useState<number | null>(null);
+  const [isRegrouping, setIsRegrouping] = useState(false);           // индикатор пересборки фраз (сплит+склейка)
+  const [regroupProgress, setRegroupProgress] = useState<number | null>(null);
+  const [regroupModal, setRegroupModal] = useState<{ summary: import("./lib/api").RegroupSummary; texts: Record<string, string> } | null>(null);
   const [voiceMenuSeg, setVoiceMenuSeg] = useState<{ id: string; x: number; y: number } | null>(null); // всплывающее меню голоса/спикера фразы
   const [donorInput, setDonorInput] = useState<string>("");           // ввод номера фразы-донора для чистого клона
   const [showExportModal, setShowExportModal] = useState(false);
@@ -5454,7 +5470,8 @@ function Editor() {
     a.play().catch(() => setSoloPlayingId(null));
   }
   async function doAlignProject() {                                   // автовыравнивание субтитров по звуковой волне вокала
-    if (isAligning || regenId || !p) return;
+    if (projectOperation.current || regenId || rendering || !p) return;
+    projectOperation.current = true;
     setIsAligning(true);
     setAlignProgress(null);
     pushActivity(t("align.working"), "work");
@@ -5473,14 +5490,17 @@ function Editor() {
         language = selected.trim().toLowerCase();
       }
       const { job_id } = await api.alignProject(pid, language);
-      let summary: import("./lib/api").AlignmentSummary | undefined;
+      let result: import("./lib/api").ProjectJobResult<import("./lib/api").AlignmentSummary> | undefined;
       await api.watchJob(job_id, (event) => {
         if (event.type === "progress") setAlignProgress(event.pct ?? null);
-        if (event.type === "done") summary = (event.result as { summary?: import("./lib/api").AlignmentSummary } | undefined)?.summary;
+        if (event.type === "done") result = event.result as typeof result;
       });
-      const fresh = await api.getProject(pid);
-      pushHistory(snapshot);
-      setProject(fresh);
+      if (!result?.project || !result.before) throw new Error("ALIGN_INVALID_RESPONSE");
+      if (useStore.getState().pid !== pid) return;
+      const summary = result.summary;
+      pushHistory(result.before);
+      setProject(result.project);
+      setSelSegs(new Set());
       setRendered(false);
       bump();
       pushActivity(summary ? t("align.summary", { count: summary.changed, unchanged: summary.unchanged, skipped: summary.skipped, review: summary.review }) : t("align.none"), "done");
@@ -5491,7 +5511,67 @@ function Editor() {
       pushActivity(String(e), "error");
       playSfx("error");
     } finally {
+      projectOperation.current = false;
       setIsAligning(false);
+    }
+  }
+  // Пересборка фраз: авто-сплит по тишине -> модалка с предложениями склейки (решение на слух).
+  // applyMerges пуст при первом вызове (только сплит + собрать предложения); повторный вызов с выбранными парами.
+  async function doRegroupProject(applyMerges: [string, string][] = [], revision?: string) {
+    if (projectOperation.current || regenId || rendering || !p) return;
+    projectOperation.current = true;
+    setIsRegrouping(true);
+    setRegroupError(null);
+    setRegroupProgress(null);
+    pushActivity(t("regroup.working"), "work");
+    try {
+      await api.waitForEdits();
+      const snapshot = await api.getProject(pid);
+      let language = snapshot.meta.detected_src_lang || snapshot.meta.src_lang || "auto";
+      // Applying an approved proposal needs neither a model nor a language prompt.
+      if (applyMerges.length === 0 && language === "auto") {
+        const selected = window.prompt(t("align.languagePrompt"), "en");
+        if (!selected) return;
+        language = selected.trim().toLowerCase();
+      }
+      const { job_id } = await api.regroupProject(pid, applyMerges, language, revision);
+      let result: import("./lib/api").ProjectJobResult<import("./lib/api").RegroupSummary> | undefined;
+      await api.watchJob(job_id, (event) => {
+        if (event.type === "progress") setRegroupProgress(event.pct ?? null);
+        if (event.type === "done") result = event.result as typeof result;
+      });
+      if (!result?.project || !result.before) throw new Error("REGROUP_INVALID_RESPONSE");
+      if (useStore.getState().pid !== pid) return;
+      const fresh = result.project;
+      const summary = result.summary;
+      pushHistory(result.before);
+      setProject(fresh);
+      setSelSegs(new Set());
+      setRendered(false);
+      bump();
+      if (summary) {
+        pushActivity(t("regroup.summary", { split: summary.split, merged: summary.merged, suggestions: summary.suggestions.length }), "done");
+        if (summary.pending_translation) pushActivity(t("regroup.pendingTranslation", { count: summary.pending_translation }), "done");
+        if (summary.unaligned) pushActivity(t("regroup.unaligned", { count: summary.unaligned }), "done");
+        // Открыть модалку только если есть предложения склейки И мы их ещё не применяли (первый проход).
+        if (applyMerges.length === 0 && summary.suggestions.length > 0) {
+          const texts: Record<string, string> = {};
+          for (const s of fresh.segments) texts[s.id] = s.src_text;
+          setRegroupModal({ summary, texts });
+        } else setRegroupModal(null);
+      }
+      playSfx("notify");
+    } catch (e) {
+      console.error("Regroup error:", e);
+      setRegroupError(String(e));
+      pushActivity(String(e), "error");
+      if (String(e).includes("ALIGN_MODEL_MISSING")) {
+        if (window.confirm(t("align.installPrompt"))) window.dispatchEvent(new Event("dub-open-components"));
+      }
+      playSfx("error");
+    } finally {
+      projectOperation.current = false;
+      setIsRegrouping(false);
     }
   }
   function playFull() {                                               // bottom-bar Play: play the whole dub from the playhead
@@ -5551,8 +5631,23 @@ function Editor() {
     togglePlay: playFull, previewRef, setHelp: setShowHelp, vol, setVol: setVolK,
     blocked: blockedRef,   // стабильная ссылка — не пересоздаёт listeners каждый рендер
   });
-  async function doUndo() { const prev = undo(); if (prev) { setSelBlur(null); setSelTitle(null); setRendered(false); await api.putProject(pid, prev); bump(); } }
-  async function doRedo() { const next = redo(); if (next) { setSelBlur(null); setSelTitle(null); setRendered(false); await api.putProject(pid, next); bump(); } }
+  async function restoreHistory(direction: "undo" | "redo") {
+    if (projectOperation.current || useStore.getState().rendering || document.querySelector(".glass-scrim")) return;
+    projectOperation.current = true;
+    try {
+      await api.waitForEdits();
+      const state = useStore.getState();
+      const target = direction === "undo" ? state.past.at(-1) : state.future[0];
+      if (!target) return;
+      const restored = await api.putProject(pid, target);
+      if (direction === "undo") undo(); else redo();
+      setProject(restored);
+      setSelSegs(new Set()); setSelBlur(null); setSelTitle(null); setRendered(false); bump();
+    } catch (e) { pushActivity(String(e), "error"); }
+    finally { projectOperation.current = false; }
+  }
+  async function doUndo() { await restoreHistory("undo"); }
+  async function doRedo() { await restoreHistory("redo"); }
   useEffect(() => {                                                  // Cmd/Ctrl+Z / Shift+Z / Y (not while typing in a field)
     const h = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
@@ -5779,9 +5874,9 @@ function Editor() {
             );
           })()}
           <div className="flex-1" />
-          <button onClick={doUndo} disabled={!canUndo} title="Ctrl+Z"
+          <button onClick={doUndo} disabled={!canUndo || isAligning || isRegrouping || rendering || !!regroupModal} title="Ctrl+Z"
             className="p-1.5 rounded-md text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-30 transition-colors"><Undo2 size={16} /></button>
-          <button onClick={doRedo} disabled={!canRedo} title="Ctrl+Shift+Z"
+          <button onClick={doRedo} disabled={!canRedo || isAligning || isRegrouping || rendering || !!regroupModal} title="Ctrl+Shift+Z"
             className="p-1.5 rounded-md text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-30 transition-colors"><Redo2 size={16} /></button>
           {/* Экспорт-сплит: телепорт в TopBar (#editor-actions-slot). Основная кнопка — экспорт текущего; ▾ — «ещё языки». */}
           {(() => { const s = document.getElementById("editor-actions-slot"); return s ? createPortal(
@@ -6148,7 +6243,7 @@ function Editor() {
                 <button
                   type="button"
                   onClick={doAlignProject}
-                  disabled={isAligning || !!regenId}
+                  disabled={isAligning || isRegrouping || rendering || !!regenId}
                   title={t("align.hint")}
                   className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--color-surface-2)] border border-cyan-500/40 hover:border-cyan-400 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
                 >
@@ -6158,6 +6253,22 @@ function Editor() {
                     <Magnet size={12} className="text-cyan-400" />
                   )}
                   <span className="hidden xl:inline">{isAligning ? `${t("align.working")}${alignProgress === null ? "" : ` ${Math.round(alignProgress)}%`}` : t("align.btn")}</span>
+                </button>
+
+                {/* Кнопка «Пересборка фраз»: авто-сплит по тишине + модалка предложений склейки */}
+                <button
+                  type="button"
+                  onClick={() => doRegroupProject()}
+                  disabled={isRegrouping || isAligning || rendering || !!regenId}
+                  title={t("regroup.hint")}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--color-surface-2)] border border-violet-500/40 hover:border-violet-400 text-violet-400 hover:text-violet-300 hover:bg-violet-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
+                >
+                  {isRegrouping ? (
+                    <Loader2 size={12} className="animate-spin text-violet-400" />
+                  ) : (
+                    <Scissors size={12} className="text-violet-400" />
+                  )}
+                  <span className="hidden xl:inline">{isRegrouping ? `${t("regroup.working")}${regroupProgress === null ? "" : ` ${Math.round(regroupProgress)}%`}` : t("regroup.btn")}</span>
                 </button>
 
                 {/* Кнопка «Принять правки» со счётчиком перегенерированных фраз */}
@@ -7533,6 +7644,26 @@ function Editor() {
           onExport={handleConfirmExport}
         />
       )}
+      {regroupModal && (
+        <RegroupModal
+          pid={pid}
+          summary={regroupModal.summary}
+          texts={regroupModal.texts}
+          busy={isRegrouping}
+          error={regroupError}
+          onClose={() => setRegroupModal(null)}
+          onApply={(pairs) => { doRegroupProject(pairs, regroupModal.summary.revision); }}
+        />
+      )}
+      {(isAligning || isRegrouping) && (
+        <div className="fixed inset-0 z-[80] grid place-items-center glass-scrim" role="status" aria-live="polite">
+          <div className="glass-panel rounded-xl p-6 flex items-center gap-3">
+            <Loader2 className="animate-spin" size={20} />
+            {isAligning ? t("align.working") : t("regroup.working")}
+            {(isAligning ? alignProgress : regroupProgress) !== null && <span>{Math.round((isAligning ? alignProgress : regroupProgress) ?? 0)}%</span>}
+          </div>
+        </div>
+      )}
       {voiceMenuSeg && (() => {
         const targetSeg = p.segments.find((s) => s.id === voiceMenuSeg.id);
         if (!targetSeg) return null;
@@ -7992,6 +8123,135 @@ function CastActorsModal({
 }
 
 // Модальное окно экспорта готового видео (настройки контейнера и 2-й дорожки оригинала)
+// Пересборка фраз: модалка предложений склейки (сплит уже применён автоматически).
+// Голосовые гейты ненадёжны на плотном диалоге — решение принимает пользователь на слух.
+function RegroupModal({
+  pid,
+  summary,
+  texts,
+  busy,
+  error,
+  onClose,
+  onApply,
+}: {
+  pid: string;
+  summary: import("./lib/api").RegroupSummary;
+  texts: Record<string, string>;
+  busy: boolean;
+  error: string | null;
+  onClose: () => void;
+  onApply: (pairs: [string, string][]) => void;
+}) {
+  const { t } = useTranslation();
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playingKey, setPlayingKey] = useState<string | null>(null);
+
+  const key = mergeKey;
+  const selected = summary.suggestions.filter((s) => checked[key(s.a, s.b)]);
+  const tooLong = longestMergeChain(selected) > summary.max_merge_duration;
+
+  function playBoundary(s: import("./lib/api").RegroupSuggestion) {
+    const k = key(s.a, s.b);
+    releaseBoundaryAudio(audioRef.current);
+    audioRef.current = null;
+    if (playingKey === k) { setPlayingKey(null); return; }
+    const a = new Audio();
+    audioRef.current = a;
+    setPlayingKey(k);
+    const from = Math.max(0, s.boundary - 1.5);
+    const to = s.boundary + 1.5;
+    a.onloadedmetadata = () => {
+      if (audioRef.current !== a) return;
+      a.currentTime = from;
+      a.play().catch(() => { if (audioRef.current === a) setPlayingKey(null); });
+    };
+    const stop = () => { if (audioRef.current === a && a.currentTime >= to) { a.pause(); setPlayingKey(null); } };
+    a.ontimeupdate = stop;
+    a.onended = () => setPlayingKey(null);
+    a.onerror = () => setPlayingKey(null);
+    a.src = api.audioVocalsUrl(pid);
+  }
+  useEffect(() => () => { releaseBoundaryAudio(audioRef.current); audioRef.current = null; }, []);
+  useEffect(() => { if (busy) { releaseBoundaryAudio(audioRef.current); audioRef.current = null; } }, [busy]);
+
+  const setAll = (v: boolean) => {
+    const next: Record<string, boolean> = {};
+    if (v) for (const s of summary.suggestions) next[key(s.a, s.b)] = true;
+    setChecked(next);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center glass-scrim anim-fade" onClick={() => { if (!busy) onClose(); }}>
+      <div className="w-[min(94vw,640px)] max-h-[85vh] flex flex-col rounded-xl glass-panel anim-pop p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between pb-2 border-b border-[var(--color-border)]">
+          <div className="flex items-center gap-2">
+            <Scissors size={18} className="text-violet-400" />
+            <span className="font-semibold text-sm">{t("regroup.modalTitle")}</span>
+          </div>
+          <button onClick={onClose} className="text-[var(--color-muted)] hover:text-[var(--color-text)] transition"><X size={16} /></button>
+        </div>
+
+        {summary.split > 0 && (
+          <div className="text-[12px] text-[var(--color-muted)] rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] p-2.5">
+            {t("regroup.splitDone", { count: summary.split })}{" "}
+            {[...new Set(summary.splits.map((s) => s.id))].join(", ")}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between">
+          <span className="text-[12px] font-medium">{t("regroup.suggestions", { count: summary.suggestions.length })}</span>
+          <div className="flex gap-2 text-[11px]">
+            <button onClick={() => setAll(true)} className="px-2 py-0.5 rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)] transition">{t("regroup.selectAll")}</button>
+            <button onClick={() => setAll(false)} className="px-2 py-0.5 rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)] transition">{t("regroup.selectNone")}</button>
+          </div>
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
+          {summary.suggestions.map((s) => {
+            const k = key(s.a, s.b);
+            return (
+              <label key={k} className={`flex items-start gap-2.5 rounded-lg border p-2.5 cursor-pointer transition-colors ${checked[k] ? "border-violet-500/60 bg-violet-500/5" : "border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-muted)]"}`}>
+                <input type="checkbox" checked={!!checked[k]} onChange={(e) => setChecked({ ...checked, [k]: e.target.checked })} className="accent-violet-500 w-4 h-4 mt-0.5" />
+                <div className="flex-1 min-w-0 text-[12px]">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-[var(--color-accent-2)]">{s.a} + {s.b}</span>
+                    <span className="text-[10px] text-[var(--color-muted)] mono">{s.combined_dur.toFixed(2)}s · {s.combined_chars}ch</span>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); playBoundary(s); }}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[var(--color-border)] text-[10px] text-[var(--color-muted)] hover:text-[var(--color-text)] transition"
+                    >
+                      {playingKey === k ? <Pause size={10} /> : <Play size={10} />} {t("regroup.listen")}
+                    </button>
+                  </div>
+                  <div className="text-[var(--color-text)] mt-1 break-words">{texts[s.a] ?? ""}</div>
+                  <div className="text-[var(--color-muted)] break-words">↳ {texts[s.b] ?? ""}</div>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+
+        <div className="text-[12px] text-[var(--color-muted)]">{t("regroup.inheritance")}</div>
+        {summary.pending_translation > 0 && <div className="text-[12px] text-amber-400">{t("regroup.pendingTranslation", { count: summary.pending_translation })}</div>}
+        {tooLong && <div role="alert" className="text-[12px] text-amber-400">{t("regroup.chainTooLong", { limit: summary.max_merge_duration })}</div>}
+        {error && <div role="alert" className="text-[12px] text-red-400 break-words">{error}</div>}
+        <div className="flex justify-end gap-2 pt-2 border-t border-[var(--color-border)]">
+          <button onClick={onClose} className="px-3 py-1.5 rounded-lg border border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] transition">{t("regroup.close")}</button>
+          <button
+            onClick={() => onApply(selected.map((s) => [s.a, s.b] as [string, string]))}
+            disabled={busy || selected.length === 0 || tooLong}
+            className="px-3 py-1.5 rounded-lg bg-violet-500/90 hover:bg-violet-500 text-white font-semibold text-[12px] transition disabled:opacity-40"
+          >
+            {t("regroup.apply", { count: selected.length })}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ExportModal({
   p,
   rendering,
@@ -8714,8 +8974,8 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
 }
 
 // Пакетная обработка: DropZone кладёт выбранные файлы + настройки сюда, BatchView читает (без раздувания стора).
-const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; autoAlign: boolean; funnyOn: boolean; funny: string; voGain: number; voDuckMode: string; dubMixMode: string; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
-  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") === "1" : false, autoAlign: typeof window !== "undefined" ? localStorage.getItem("dub-auto-align") === "1" : false, funnyOn: false, funny: "", voGain: -12, voDuckMode: "dynamic", dubMixMode: "separated", trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
+const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; autoAlign: boolean; autoRegroup: boolean; funnyOn: boolean; funny: string; voGain: number; voDuckMode: string; dubMixMode: string; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
+  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") === "1" : false, autoAlign: typeof window !== "undefined" ? localStorage.getItem("dub-auto-align") === "1" : false, autoRegroup: typeof window !== "undefined" ? localStorage.getItem("dub-auto-regroup") === "1" : false, funnyOn: false, funny: "", voGain: -12, voDuckMode: "dynamic", dubMixMode: "separated", trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
 
 type BatchItem = {
   name: string;
@@ -8734,11 +8994,12 @@ function BatchView() {
   const { t } = useTranslation();
   const setStage = useStore((s) => s.setStage);
   const filesRef = useRef<File[]>(batchState.files);
-  const { tgt, src, audio, subs, burn, detectText, subBlur, autoAlign, funnyOn, funny, voGain, voDuckMode, dubMixMode, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
+  const { tgt, src, audio, subs, burn, detectText, subBlur, autoAlign, autoRegroup, funnyOn, funny, voGain, voDuckMode, dubMixMode, trStyle, keepOrig, container, voiceSrc, slotsM, slotsF, transcribeSpeakers } = batchState;
   const visionOn = useStore((s) => s.visionOn);
   const setVisionOn = useStore((s) => s.setVisionOn);
   const [batchSubBlur, setBatchSubBlur] = useState(subBlur);
   const [batchAutoAlign, setBatchAutoAlign] = useState(autoAlign);
+  const [batchAutoRegroup, setBatchAutoRegroup] = useState(autoRegroup);
   const [items, setItems] = useState<BatchItem[]>(() => filesRef.current.map((f) => ({ name: f.name, status: "queued", pid: null, pct: 0, subsFile: null })));
   const [running, setRunning] = useState(false);
   const [doneN, setDoneN] = useState(0);
@@ -8779,7 +9040,7 @@ function BatchView() {
         // Загруженные субтитры считаются уже переведёнными -> пропускаем MT-перевод
         const importTranslated = !ao && !!curItem?.subsFile;
         // Стиль перевода (#112) — параметром analyze (patch до analyze невозможен: project.json ещё нет).
-        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, importTranslated, trStyle, false, "", "auto", effNumSpeakers, ao ? false : visionOn, batchAutoAlign);
+        const { job_id } = await api.analyze(project_id, tgt, eMode, src, fSubs, eRewrite, fBurn, ao ? false : detectText, importTranslated, trStyle, false, "", "auto", effNumSpeakers, ao ? false : visionOn, batchAutoAlign, batchAutoAlign && batchAutoRegroup);
         await api.watchJob(job_id, (e) => {
           if (e.type === "progress") {
             const stepText = stageLabel(e.stage, t) || e.msg || e.stage || "";
@@ -8857,6 +9118,16 @@ function BatchView() {
                   {batchAutoAlign ? "ВКЛ" : "ВЫКЛ"}
                 </span>
               </label>
+            {/* Пересборка (авто-сплит) — только при включённом выравнивании. */}
+            {batchAutoAlign && (
+              <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title={t("regroup.hint")}>
+                <input type="checkbox" checked={batchAutoRegroup} disabled={running} onChange={(e) => { setBatchAutoRegroup(e.target.checked); batchState.autoRegroup = e.target.checked; }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
+                <span>Пересборка</span>
+                <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${batchAutoRegroup ? "bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]" : "bg-[var(--color-surface-2)] text-[var(--color-muted)]"}`}>
+                  {batchAutoRegroup ? "ВКЛ" : "ВЫКЛ"}
+                </span>
+              </label>
+            )}
             {/* Тумблер блюр-подложки */}
             <label className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)] hover:text-[var(--color-text)] cursor-pointer select-none whitespace-nowrap" title="Размытая подложка под субтитрами. Выкл = чистый текст без блюра видеоряда.">
               <input type="checkbox" checked={batchSubBlur} disabled={running} onChange={(e) => { setBatchSubBlur(e.target.checked); batchState.subBlur = e.target.checked; }} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
@@ -9216,37 +9487,42 @@ function TranscriptView() {
     if (reanalyzing) return;
     setReanalyzing(true);
     const mode = "dub";
-    const tgt = (i18n.language as string) || p.tgt_lang || "ru";
+    const tgt = p.tgt_lang || (i18n.resolvedLanguage as string) || "ru";
     setJobSteps(["translating"]);
     setAudioOnly(trAudioOnly);
     setProgress("", "", null);
     setStage("analyzing");
     try {
+      await api.waitForEdits();
+      let result: import("./lib/api").ProjectJobResult<unknown> | undefined;
       const { job_id } = await api.retranslate(pid, tgt, mode);
       await api.watchJob(job_id, (e) => {
+        if (e.type === "done") result = e.result as typeof result;
         if (e.type === "progress") {
           if (e.msg) useStore.getState().pushActivity(e.msg, "work");
           setProgress(e.stage || "", e.msg || "", e.pct ?? null);
         }
       });
-      const updated = await api.getProject(pid);
-      if (updated.mode === "transcribe") {
-        const patched = await api.patch(pid, { op: "mode", value: mode });
-        setProject(patched);
-      } else {
-        setProject(updated);
+      if (!result?.project || !result.before) throw new Error("TRANSLATE_INVALID_RESPONSE");
+      if (useStore.getState().pid !== pid) {   // проект переключили — не применяем чужой снимок
+        setProgress("", "", null); setJobSteps(null);
+        return;
       }
+      useStore.getState().pushHistory(result.before);
+      setProject(result.project);
+      useStore.getState().setRendered(false);
+      useStore.getState().bump();
       setProgress("", "", null);
       setJobSteps(null);
       setStage("editor");
     } catch (err) {
       console.error("retranslate error", err);
-      try {
-        const patched = await api.patch(pid, { op: "mode", value: mode });
-        setProject(patched);
-      } catch {
-        setProject({ ...p, mode });
+      if (useStore.getState().pid !== pid) {   // старый проект закрыт — не трогаем новый
+        setProgress("", "", null); setJobSteps(null);
+        return;
       }
+      try { setProject(await api.getProject(pid)); } catch { /* preserve current project offline */ }
+      useStore.getState().pushActivity(String(err), "error");
       setProgress("error", String(err), null);
       setJobSteps(null);
       setStage("editor");
@@ -9322,7 +9598,7 @@ function TranscriptView() {
   });
   // пословные тайминги ASR (лежат в extra.words) — для караоке внутри активной фразы
   const wordsOf = (s: Project["segments"][number]) =>
-    (((s as unknown as { extra?: { words?: Array<{ word: string; start: number; end: number }> } }).extra?.words) || []);
+    s.words ?? ((s.extra?.words as Array<{ word: string; start: number; end: number }> | undefined) ?? []);
 
   const rows = p.segments.filter((s) => (s.src_text || "").trim());
   const speakers = [...new Set(p.segments.map((s) => s.speaker ?? "0"))].sort();

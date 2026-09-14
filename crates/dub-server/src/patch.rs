@@ -43,10 +43,11 @@ fn idxs_desc(edit: &Value) -> Vec<usize> {
     set.iter().rev().filter_map(|&x| usize::try_from(x).ok()).collect::<Vec<_>>()
 }
 
-/// Пометить все сегменты dirty (после смены режима/перевода re-gen на render).
-fn mark_all_dirty(p: &mut Project) {
+/// Новая аудио-версия у ВСЕХ сегментов: перевод/стиль/голос поменялись -> рендер синтезирует новый TTS
+/// в новых именах кэша, а Undo (PUT старого снимка) вернёт именно свои WAV (segment_cache::audio_key).
+fn invalidate_all_audio(p: &mut Project) {
     for seg in &mut p.segments {
-        seg.dirty = true;
+        crate::segment_cache::invalidate_audio(seg);
     }
 }
 
@@ -84,6 +85,7 @@ fn del_one<T>(v: &mut Vec<T>, edit: &Value, what: &str) -> PatchResult {
 fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
     let timing_changed = edit.get("start").is_some() || edit.get("end").is_some();
     let seg = seg_by_id(p, edit)?;
+    let old_source = (seg.src_text.clone(), seg.start, seg.end);
     if let Some(t) = edit.get("tgt_text").and_then(|x| x.as_str()) {
         seg.tgt_text = t.to_string();
     }
@@ -110,6 +112,7 @@ fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
     // индивидуальный голос фразы (override): имя из voices/ или "clone:ID" / "donor:ID" или None
     if let Some(v) = edit.get("voice") {
         seg.voice = v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        seg.extra.remove("donor_anchor");
     }
     // hidden / keep_original / lane / gain_db / temp — хранятся в extra (dub-core Segment их не типизирует, но проносит).
     if let Some(h) = edit.get("hidden").and_then(|x| x.as_bool()) {
@@ -160,7 +163,13 @@ fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
         || edit.get("voice").is_some()
         || temp_changed;
     if text_or_synth_changed {
-        seg.dirty = true;
+        crate::segment_cache::invalidate_audio(seg);
+    }
+    if old_source != (seg.src_text.clone(), seg.start, seg.end) {
+        crate::alignment::invalidate_words(seg);
+    }
+    if !seg.tgt_text.trim().is_empty() {
+        seg.extra.remove("translation_pending");
     }
     // Правка тайминга могла нарушить монотонность списка по времени, а render считает слот озвучки по
     // ИНДЕКСУ списка (nxt = segments[i+1].start) — поэтому пересортируем по start (как op_add_segment).
@@ -227,7 +236,7 @@ fn op_mode(p: &mut Project, edit: &Value) -> PatchResult {
             set_subs(p, "translate");
             if p.audio.rewrite.is_none() {
                 p.audio.rewrite = Some("make it a funny, playful dub".into());
-                mark_all_dirty(p);
+                invalidate_all_audio(p);
             }
         }
         other => return Err((400, format!("unknown mode {other:?}"))),
@@ -283,7 +292,7 @@ fn op_translate(p: &mut Project, edit: &Value) -> PatchResult {
     if s(edit, "mode").as_deref() == Some("funny") {
         p.audio.rewrite = Some("make it a funny, playful dub".into());
     }
-    mark_all_dirty(p);
+    invalidate_all_audio(p);
     Ok(())
 }
 
@@ -296,7 +305,7 @@ fn op_rewrite(p: &mut Project, edit: &Value) -> PatchResult {
     }
     p.audio.rewrite = Some(instr);
     p.mode = "dub".into();
-    mark_all_dirty(p);
+    invalidate_all_audio(p);
     Ok(())
 }
 
@@ -311,7 +320,7 @@ fn op_translate_style(p: &mut Project, edit: &Value) -> PatchResult {
     // схлопнуть любые переводы строк/табы в одиночные пробелы, затем trim; кап 500 символов по границам char.
     let flat: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     p.audio.translate_style = flat.chars().take(500).collect();
-    mark_all_dirty(p);
+    invalidate_all_audio(p);
     Ok(())
 }
 
@@ -333,17 +342,18 @@ fn op_recast(p: &mut Project, edit: &Value) -> PatchResult {
         }
     }
 
-    mark_all_dirty(p);
+    invalidate_all_audio(p);
     Ok(())
 }
 
-/// regen — пометить ОДИН сегмент dirty, а ВСЕ ДРУГИЕ сегменты — NOT dirty (ре-TTS только его на /render).
+/// regen — пометить ОДИН сегмент dirty (+новая аудио-версия), а ВСЕ ДРУГИЕ сегменты — NOT dirty
+/// (ре-TTS только его на /render; Undo вернёт прежний WAV этого сегмента).
 fn op_regen(p: &mut Project, edit: &Value) -> PatchResult {
     let target_id = s(edit, "id").ok_or((400, "missing segment id".into()))?;
     let mut found = false;
     for s in &mut p.segments {
         if s.id == target_id {
-            s.dirty = true;
+            crate::segment_cache::invalidate_audio(s);
             s.extra.insert("regenerated".into(), Value::Bool(true));
             found = true;
         } else {
@@ -357,7 +367,7 @@ fn op_regen(p: &mut Project, edit: &Value) -> PatchResult {
     Ok(())
 }
 
-/// regen_multi — пометить НЕСКОЛЬКО сегментов dirty, а ВСЕ ДРУГИЕ сегменты — NOT dirty.
+/// regen_multi — пометить НЕСКОЛЬКО сегментов dirty (+новые аудио-версии), а ВСЕ ДРУГИЕ — NOT dirty.
 fn op_regen_multi(p: &mut Project, edit: &Value) -> PatchResult {
     let target_ids = ids(edit);
     if target_ids.is_empty() {
@@ -365,18 +375,21 @@ fn op_regen_multi(p: &mut Project, edit: &Value) -> PatchResult {
     }
     for s in &mut p.segments {
         let is_target = target_ids.contains(&s.id);
-        s.dirty = is_target;
         if is_target {
+            crate::segment_cache::invalidate_audio(s);
             s.extra.insert("regenerated".into(), Value::Bool(true));
+        } else {
+            s.dirty = false;
         }
     }
     p.audio.mix_dirty = true;
     Ok(())
 }
 
-/// regen_all — пометить ВСЕ сегменты dirty (ре-TTS всего дубляжа). Порт app.py op=="regen_all".
+/// regen_all — пометить ВСЕ сегменты dirty (+новые аудио-версии; ре-TTS всего дубляжа, Undo вернёт
+/// прежние WAV). Порт app.py op=="regen_all".
 fn op_regen_all(p: &mut Project, _edit: &Value) -> PatchResult {
-    mark_all_dirty(p);
+    invalidate_all_audio(p);
     for s in &mut p.segments {
         s.extra.remove("regenerated");
     }
@@ -674,22 +687,25 @@ fn op_hide_segments(p: &mut Project, edit: &Value) -> PatchResult {
 }
 
 /// keep_segment — тоггл keep_original (в extra). Порт app.py op=="keep_segment".
+/// Ротация аудио-версии обязательна: keep-ветка рендера кладёт ОРИГИНАЛЬНУЮ речь в тот же seg-файл —
+/// без новой ревизии Undo (снявший keep_original) играл бы оригинал вместо дубля.
 fn op_keep_segment(p: &mut Project, edit: &Value) -> PatchResult {
     let seg = seg_by_id(p, edit)?;
     let cur = seg.extra.get("keep_original").and_then(|v| v.as_bool()).unwrap_or(false);
     let new = b(edit, "keep").unwrap_or(!cur);
     seg.extra.insert("keep_original".into(), Value::Bool(new));
-    seg.dirty = true;
+    crate::segment_cache::invalidate_audio(seg);
     Ok(())
 }
 
 /// keep_segments — массовый keep_original (явный флаг). Порт app.py op=="keep_segments".
+/// Ротация аудио-версии — как в op_keep_segment (keep-ветка рендера пишет оригинал в seg-файл).
 fn op_keep_segments(p: &mut Project, edit: &Value) -> PatchResult {
     let kp = b(edit, "keep").unwrap_or(true);
     for sid in ids(edit) {
         if let Some(seg) = p.segments.iter_mut().find(|x| x.id == sid) {
             seg.extra.insert("keep_original".into(), Value::Bool(kp));
-            seg.dirty = true;
+            crate::segment_cache::invalidate_audio(seg);
         }
     }
     Ok(())
@@ -1016,6 +1032,25 @@ mod tests {
         assert_eq!(e.0, 400);
     }
 
+    #[test]
+    fn tts_ops_rotate_audio_revision_for_undo() {
+        let mut p = proj_with_seg();
+        apply(&mut p, &json!({"op":"regen","id":"s0"})).unwrap();
+        let rev = p.segments[0].extra.get("audio_revision").cloned();
+        assert!(rev.is_some(), "regen должен дать новую аудио-версию");
+        assert!(p.segments[0].dirty && p.segments[0].ckpt.is_none());
+        // смена языка/стиля/инструкции меняет аудио-версию ещё раз (Undo вернёт прежний WAV)
+        for op in [
+            json!({"op":"translate","lang":"de"}),
+            json!({"op":"translate_style","style":"formal"}),
+            json!({"op":"rewrite","instruction":"as a pirate"}),
+            json!({"op":"recast","voice_mode":"clone"}),
+        ] {
+            apply(&mut p, &op).unwrap();
+            assert_ne!(p.segments[0].extra.get("audio_revision"), rev.as_ref(), "{op}");
+        }
+    }
+
     // ── PATCH-хвост (раунд 5) ────────────────────────────────────────────────
 
     #[test]
@@ -1210,5 +1245,3 @@ mod tests {
         assert_eq!(p.segments[1].extra.get("regenerated"), None);
     }
 }
-
-

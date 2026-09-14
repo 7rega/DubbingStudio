@@ -294,6 +294,25 @@
     "languagePrompt": "Source language was not detected. Specify the language of the source lines (supported: en):",
     "working": "Aligning..."
   },
+  "regroup": {
+    "btn": "Regroup",
+    "auto": "Regroup phrases",
+    "hint": "Split long phrases at proven silence (auto) and suggest merging adjacent lines (decide by ear)",
+    "working": "Regrouping...",
+    "summary": "Regroup: split {{split}}, merged {{merged}}, merge suggestions {{suggestions}}",
+    "modalTitle": "Regroup Phrases",
+    "splitDone": "Split at silence: {{count}} —",
+    "suggestions": "Merge suggestions ({{count}})",
+    "listen": "Boundary",
+    "selectAll": "All",
+    "selectNone": "None",
+    "close": "Close",
+    "apply": "Merge selected ({{count}})",
+    "pendingTranslation": "Pending translation: {{count}}.",
+    "unaligned": "Without current alignment: {{count}}. These lines were not split.",
+    "chainTooLong": "A selected chain exceeds {{limit}} seconds. Uncheck some pairs.",
+    "inheritance": "Merged lines inherit the first line's voice and settings. Different speaker labels do not block merging."
+  },
   "files": {
     "title": "Files",
     "download": "Save",

@@ -20,6 +20,7 @@ fn emit(progress: &Progress, stage: &str, msg: &str) {
 fn copy_src_to_tgt(proj: &mut Project) {
     for s in &mut proj.segments {
         s.tgt_text = s.src_text.clone();
+        s.extra.remove("translation_pending");
     }
 }
 
@@ -204,6 +205,7 @@ pub fn stage(
     // переносим строки перемещением (zip по равной длине, без клонов).
     for (s, sg) in proj.segments.iter_mut().zip(segs) {
         s.tgt_text = sg.tgt;
+        if !s.tgt_text.trim().is_empty() { s.extra.remove("translation_pending"); }
     }
 
     // Замапить extra -> типизированные поля Project + сохранить сырой ctx (byte-identical passthrough,

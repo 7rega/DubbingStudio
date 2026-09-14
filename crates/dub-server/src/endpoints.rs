@@ -228,10 +228,13 @@ pub async fn put_project(
         Ok(d) => d,
         Err(resp) => return resp,
     };
-    let proj: Project = match serde_json::from_value(body) {
+    let mut proj: Project = match serde_json::from_value(body) {
         Ok(p) => p,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad project: {e}")).into_response(),
     };
+    // The restored segment WAVs have their own audio revisions, but the mixed
+    // master on disk still belongs to the state we are undoing.
+    proj.audio.mix_dirty = true;
     if let Err(e) = save_project_atomic(&dir, &proj) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
     }
@@ -400,9 +403,12 @@ pub async fn remix_project(
                     s.tgt_text = sg.tgt.clone();
                 }
             }
-            s.dirty = true;
+            // Ротация аудио-версии (не только dirty): ремикс перезаписал бы seg-файл на месте,
+            // и Undo (PUT снимка до ремикса) проиграл бы новый текст под старым именем.
+            crate::segment_cache::invalidate_audio(s);
         }
         p.audio.rewrite = Some(instr.clone());
+        p.audio.mix_dirty = true;
         save_project_atomic(&dir_for_job, &p)?;
         serde_json::to_value(&p).map_err(|e| e.to_string())
     });

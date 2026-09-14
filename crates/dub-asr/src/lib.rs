@@ -9,7 +9,7 @@
 
 mod align;
 pub mod forced;
-mod speech_edges;
+pub mod speech_edges;
 mod reconcile;
 mod segment;
 mod speaker_global;

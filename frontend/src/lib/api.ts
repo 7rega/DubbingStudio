@@ -16,6 +16,8 @@ export type Segment = {
   volume?: number;
   gain_db?: number;
   temp?: number;
+  words?: { word: string; start: number; end: number; score?: number }[];
+  translation_pending?: boolean;
   extra?: Record<string, unknown>;
 };
 export type BlurBox = { x: number; y: number; w: number; h: number; t0: number; t1: number; hidden?: boolean; fill?: string | null };
@@ -56,6 +58,10 @@ export type Capabilities = {
 };
 export type JobEvent = { type: "progress" | "done" | "error"; stage?: string; pct?: number; msg?: string; result?: unknown; error?: string; component?: string; downloaded?: number; total?: number; parts?: { component: string; pct: number }[] };
 export type AlignmentSummary = { changed: number; unchanged: number; skipped: number; review: number; cached: boolean; details: { id: string; reason: string }[] };
+export type RegroupSplitOp = { id: string; gap: number; left: [number, number]; right: [number, number] };
+export type RegroupSuggestion = { a: string; b: string; boundary: number; start: number; end: number; combined_dur: number; combined_chars: number };
+export type RegroupSummary = { aligned_first: boolean; split: number; merged: number; splits: RegroupSplitOp[]; suggestions: RegroupSuggestion[]; unaligned: number; pending_translation: number; max_merge_duration: number; revision: string };
+export type ProjectJobResult<S> = { project_id: string; before: Project; project: Project; summary: S };
 
 // Кастинг персонажей (#115): бэк детектит лица (SCRFD)+эмбеддинги (LVFace)+active-speaker (LR-ASD),
 // кластеризует в персонажей. GET отдаёт список; POST сохраняет имя/заметку о речи/голос дубляжа.
@@ -163,8 +169,8 @@ export const api = {
     if (subs) fd.append("subs", subs);   // готовые субтитры (SRT/ASS) -> analyze возьмёт текст+тайминг вместо ASR
     return fetch(`${BASE}/projects`, { method: "POST", body: fd }).then(j<{ project_id: string; imported_subs?: boolean }>);
   },
-  analyze: (pid: string, tgt_lang: string, mode = "auto", src_lang = "auto", subs = "auto", rewrite = "", burn = true, detect = true, importTranslated = false, translateStyle = "", casting = false, castingRef = "", contentType = "auto", numSpeakers = 0, vision = true, autoAlign = false) =>
-    fetch(`${BASE}/projects/${pid}/analyze?tgt_lang=${tgt_lang}&mode=${mode}&src_lang=${src_lang}&subs=${subs}&rewrite=${encodeURIComponent(rewrite)}&burn=${burn ? 1 : 0}&detect=${detect ? 1 : 0}&import_translated=${importTranslated ? 1 : 0}&translate_style=${encodeURIComponent(translateStyle)}&casting=${casting ? 1 : 0}&casting_ref=${encodeURIComponent(castingRef)}&content_type=${encodeURIComponent(contentType)}${numSpeakers > 0 ? `&num_speakers=${numSpeakers}` : ""}&vision=${vision ? 1 : 0}&auto_align=${autoAlign ? 1 : 0}`, { method: "POST" }).then(j<{ job_id: string }>),
+  analyze: (pid: string, tgt_lang: string, mode = "auto", src_lang = "auto", subs = "auto", rewrite = "", burn = true, detect = true, importTranslated = false, translateStyle = "", casting = false, castingRef = "", contentType = "auto", numSpeakers = 0, vision = true, autoAlign = false, regroup = false) =>
+    fetch(`${BASE}/projects/${pid}/analyze?tgt_lang=${tgt_lang}&mode=${mode}&src_lang=${src_lang}&subs=${subs}&rewrite=${encodeURIComponent(rewrite)}&burn=${burn ? 1 : 0}&detect=${detect ? 1 : 0}&import_translated=${importTranslated ? 1 : 0}&translate_style=${encodeURIComponent(translateStyle)}&casting=${casting ? 1 : 0}&casting_ref=${encodeURIComponent(castingRef)}&content_type=${encodeURIComponent(contentType)}${numSpeakers > 0 ? `&num_speakers=${numSpeakers}` : ""}&vision=${vision ? 1 : 0}&auto_align=${autoAlign ? 1 : 0}&regroup=${regroup ? 1 : 0}`, { method: "POST" }).then(j<{ job_id: string }>),
   // Кастинг персонажей (#115): список найденных персонажей (аватар+пол+голос+реплики) / сохранение правок.
   casting: (pid: string) => getJson<{ characters: Character[] }>(`/projects/${pid}/casting`),
   castingAvatarUrl: (pid: string, id: string) => `${BASE}/projects/${pid}/casting/avatar?id=${encodeURIComponent(id)}`,
@@ -186,8 +192,11 @@ export const api = {
     _chain(() => fetch(`${BASE}/projects/${pid}`, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(project) }).then(j<Project>)),
   patch: (pid: string, edit: Record<string, unknown>) =>   // run after the previous patch settles (ok or failed)
     _chain(() => fetch(`${BASE}/projects/${pid}`, { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify(edit) }).then(j<Project>)),
-  waitForEdits: () => _patchChain.then(() => undefined),
+  waitForEdits: () => _patchChain.then(() => undefined, () => undefined),
   alignProject: (pid: string, language?: string) => _chain(() => postJson<{ job_id: string }>(`/projects/${pid}/align`, { language })),
+  // Пересборка фраз: авто-сплит по тишине + (опционально) применение выбранных пользователем склеек.
+  regroupProject: (pid: string, applyMerges: [string, string][], language?: string, revision?: string) =>
+    _chain(() => postJson<{ job_id: string }>(`/projects/${pid}/regroup`, { apply_merges: applyMerges, language, revision })),
   render: (pid: string) => fetch(`${BASE}/projects/${pid}/render`, { method: "POST" }).then(j<{ job_id: string }>),
   // Экспорт-уровень мультиязыка: клон отредактированного проекта на язык lang (наследует раскладку/стиль/
   // блюр/титры + клон голоса), ре-перевод текста + рендер одним джобом. -> новый project_id + job_id.

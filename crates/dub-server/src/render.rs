@@ -775,8 +775,7 @@ fn build_dub(
             if seg_keep(s) || s.tgt_text.trim().is_empty() {
                 return false;
             }
-            let sid: String = s.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-            let sid = if sid.is_empty() { format!("i{}", s.id) } else { sid };
+            let sid = crate::segment_cache::audio_key(s);
             let raw = wd.join(format!("seg_{sid}.wav"));
             (regen_dub && s.dirty) || !raw.is_file()
         })
@@ -1233,7 +1232,7 @@ fn build_dub(
     if cloud_tts_on {
         let conc = crate::models::openrouter_concurrency(&paths.models_root);
         let mut jobs: Vec<(PathBuf, String, String)> = Vec::new();
-        for &(fi, s) in segs.iter() {
+        for &(_fi, s) in segs.iter() {
             if seg_keep(s) {
                 continue;
             }
@@ -1241,8 +1240,7 @@ fn build_dub(
             if tgt.is_empty() {
                 continue;
             }
-            let sid: String = s.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-            let sid = if sid.is_empty() { format!("i{fi}") } else { sid };
+            let sid = crate::segment_cache::audio_key(s);
             let raw = wd.join(format!("seg_{sid}.wav"));
             if !((regen_dub && s.dirty) || !raw.is_file()) {
                 continue; // уже в кэше
@@ -1266,8 +1264,7 @@ fn build_dub(
         // и чистый сегмент подхватил бы seg_{fi}.wav ПРЕДЫДУЩЕГО жильца индекса => чужая речь/длительность =
         // ДРИФТ дубляжа (регресс кэша порта; питон синтезил заново каждый рендер). ID стабилен -> кэш привязан
         // к контенту. Слот next.start (nxt) остаётся по индексу — это про таймлайн-позицию, не про кэш.
-        let sid: String = s.id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-        let sid = if sid.is_empty() { format!("i{fi}") } else { sid };
+        let sid = crate::segment_cache::audio_key(s);
         let raw = wd.join(format!("seg_{sid}.wav"));
         let fitp = wd.join(format!("seg_{sid}_fit.wav"));
         // 'оставить оригинал': вырезаем ИСХОДНУЮ речь сюда, без TTS и без atempo-подгонки (порт _build_dub keep-ветки).
@@ -1294,13 +1291,12 @@ fn build_dub(
 
         // Референс голоса для сегмента: custom_ref (голос из пака или донор) -> emo_ref -> identity-реф
         let custom_ref: Option<(PathBuf, Option<String>)> = if let Some(v) = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-            if let Some(cached) = custom_ref_cache.get(v) {
+            let cache_key = serde_json::json!([v, s.extra.get("donor_anchor")]).to_string();
+            if let Some(cached) = custom_ref_cache.get(&cache_key) {
                 Some(cached.clone())
-            } else if let Some(donor_spec) = v.strip_prefix("donor:").or_else(|| v.strip_prefix("clone:")) {
+            } else if v.starts_with("donor:") || v.starts_with("clone:") {
                 // Донорский клон из конкретного сегмента (по ID или по индексу #N)
-                let donor_seg = proj.segments.iter().find(|ds| ds.id == donor_spec).or_else(|| {
-                    donor_spec.parse::<usize>().ok().and_then(|idx| if idx > 0 { proj.segments.get(idx - 1) } else { proj.segments.get(0) })
-                });
+                let donor_seg = crate::segment_cache::donor(proj, s);
                 if let Some(ds) = donor_seg {
                     let out = wd.join(format!("ref_donor_{sid}.wav"));
                     let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
@@ -1313,7 +1309,7 @@ fn build_dub(
                     if trim_ok && out.is_file() {
                         let t = ds.src_text.trim();
                         let res = (out, if t.is_empty() { None } else { Some(t.to_string()) });
-                        custom_ref_cache.insert(v.to_string(), res.clone());
+                        custom_ref_cache.insert(cache_key, res.clone());
                         Some(res)
                     } else {
                         None
@@ -1360,7 +1356,7 @@ fn build_dub(
                                 .filter(|s| !s.is_empty())
                         };
                         let res = (out, txt_content);
-                        custom_ref_cache.insert(v.to_string(), res.clone());
+                        custom_ref_cache.insert(cache_key, res.clone());
                         Some(res)
                     } else {
                         None
@@ -3524,4 +3520,3 @@ mod tests {
         assert!(res.is_none(), "sandwiched phrase < 0.5s must safely return None");
     }
 }
-

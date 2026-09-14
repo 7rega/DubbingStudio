@@ -282,6 +282,11 @@ pub struct AnalyzeArgs {
     pub num_speakers: usize,     // 0 = авто, 1..=8 = заданное число спикеров через WeSpeaker кластеризацию
     pub vision: bool,            // true = полный vision; false = fast text mode (без видеокадров)
     pub auto_align: bool,
+    /// Пересборка фраз в авто-потоке: авто-сплит по доказанной тишине ПОСЛЕ выравнивания, ДО перевода
+    /// (разбитые части получают пустой tgt_text и переводятся этим же прогоном). Склейка в авто-режиме
+    /// НЕ выполняется никогда (нужно решение пользователя на слух) — лишь пишутся предложения в extra.
+    /// Эффективна только при auto_align (нужны выровненные слова).
+    pub regroup: bool,
 }
 
 /// Пути к моделям/входу для одной джобы analyze.
@@ -958,8 +963,18 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     if args.auto_align {
         bench.stage("aligning");
         // Fail-safe: сбой выравнивания не блокирует analyze (перевод/дубляж продолжаются).
+        let mut aligned_ok = true;
         if let Err(e) = crate::alignment::run(&mut proj, &paths.work_dir, &paths.models_root, Some(&args.src_lang), progress) {
+            aligned_ok = false;
             progress(json!({ "stage": "aligning", "pct": 100, "msg": format!("Выравнивание пропущено: {e}") }));
+        }
+        // Пересборка (авто): сплит по доказанной тишине ДО перевода — разбитые части переводятся этим
+        // же прогоном. Склейка в авто-потоке не выполняется (решение пользователя, см. regroup.rs).
+        if args.regroup && aligned_ok {
+            bench.stage("regroup");
+            if let Err(e) = crate::regroup::auto_split(&mut proj, &paths.work_dir, progress) {
+                progress(json!({ "stage": "regroup", "msg": format!("Пересборка пропущена: {e}") }));
+            }
         }
     }
     bench.stage("translate");

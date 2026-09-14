@@ -30,6 +30,8 @@ mod models;
 mod ocr;
 mod patch;
 mod record;
+mod regroup;
+mod segment_cache;
 mod render;
 mod setup;
 mod spa;
@@ -143,6 +145,7 @@ pub fn verify_captions_e2e(
         num_speakers: 0,
         vision: models::vision_enabled(&mroot),
         auto_align: false,
+        regroup: false,
     };
     let sel = models::load_selection(&mroot);
     let (mt_model, mmproj) = models::resolve_mt(&mroot, &sel);
@@ -434,6 +437,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/projects/{pid}/analyze", post(analyze_project))
         .route("/projects/{pid}/align", post(alignment::handle))
+        .route("/projects/{pid}/regroup", post(regroup::handle))
         .route("/projects/{pid}/remix", post(endpoints::remix_project))
         .route("/projects/{pid}/render", post(render_project))
         .route("/projects/{pid}/export-lang", post(export_lang))   // клон+ре-перевод+рендер на другом языке (экспорт-уровень мультиязыка)
@@ -1724,6 +1728,8 @@ async fn analyze_project(
             .map(|v| v != "0")
             .unwrap_or_else(|| models::vision_enabled(&st.models_root)),
         auto_align: qget("auto_align", "0") == "1",
+        // Пересборка (авто-сплит) только вместе с auto_align: нужны выровненные слова.
+        regroup: qget("auto_align", "0") == "1" && qget("regroup", "0") == "1",
     };
     if args.auto_align {
         if let Err(e) = alignment::preflight(&st.models_root) {
@@ -1821,22 +1827,26 @@ async fn patch_project(
 
 // ─── POST /projects/{pid}/render ────────────────────────────────────────────
 
-/// Сбросить dirty у сегментов, чьи правки уже запечены в дубляж/рендер. Перечитываем project.json с
-/// диска (а не пишем захваченный proj), чтобы не затереть правки, пришедшие во время job. Общий хвост
-/// render_project и dub_audio_project (был байт-в-байт продублирован).
-fn reset_baked_dirty(proj: &Project, proj_path: &Path, dir_for_job: &Path) {
-    let baked: std::collections::HashMap<&str, &str> =
-        proj.segments.iter().map(|s| (s.id.as_str(), s.tgt_text.as_str())).collect();
-    if let Ok(t2) = std::fs::read_to_string(proj_path) {
-        if let Ok(mut cur) = Project::from_json(&t2) {
-            for s in &mut cur.segments {
-                if baked.get(s.id.as_str()).copied() == Some(s.tgt_text.as_str()) {
-                    s.dirty = false;
-                }
+/// Сбросить dirty у сегментов, чьи правки уже запечены в дубляж/рендер, и выставить mix_dirty.
+/// Перечитываем project.json с диска (а не пишем захваченный proj), чтобы не затереть правки, пришедшие
+/// во время job. Весь read-modify-write — под PROJECT_WRITE_LOCK: прежний mix_dirty-хвост делал его
+/// БЕЗ блокировки и мог затереть конкурентный PATCH/PUT между чтением и записью.
+/// Общий хвост render_project / dub_audio_project / synth_segments_project.
+fn bake_render_result(baked: Option<&Project>, proj_path: &Path, dir_for_job: &Path, mix_dirty: bool) {
+    let Ok(_guard) = PROJECT_WRITE_LOCK.lock() else { return; };
+    let Ok(text) = std::fs::read_to_string(proj_path) else { return; };
+    let Ok(mut cur) = Project::from_json(&text) else { return; };
+    if let Some(proj) = baked {
+        let baked_map: std::collections::HashMap<&str, (&str, String)> = proj.segments.iter()
+            .map(|s| (s.id.as_str(), (s.tgt_text.as_str(), segment_cache::audio_key(s)))).collect();
+        for s in &mut cur.segments {
+            if baked_map.get(s.id.as_str()).is_some_and(|(text, key)| *text == s.tgt_text && *key == segment_cache::audio_key(s)) {
+                s.dirty = false;
             }
-            let _ = save_project_atomic(dir_for_job, &cur);
         }
     }
+    cur.audio.mix_dirty = mix_dirty;
+    let _ = save_project_unlocked(dir_for_job, &cur);
 }
 
 async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>) -> Response {
@@ -1910,16 +1920,8 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
                 cb(json!({ "stage": "cost", "msg": format!("OpenRouter: потрачено ${spent:.4} за прогон (всего использовано ${a:.2})") }));
             }
         }
-        // Правки запечены в дубляж -> сбросить dirty (перечитать, чтобы не затереть правки во время рендера).
-        if regen {
-            reset_baked_dirty(&proj, &proj_path, &dir_for_job);
-        }
-        if let Ok(fresh_text) = std::fs::read_to_string(&proj_path) {
-            if let Ok(mut fresh_proj) = Project::from_json(&fresh_text) {
-                fresh_proj.audio.mix_dirty = false;
-                let _ = save_project_atomic(&dir_for_job, &fresh_proj);
-            }
-        }
+        // Правки запечены в дубляж -> сбросить dirty; микс сведён -> mix_dirty=false (под локом).
+        bake_render_result(regen.then_some(&proj), &proj_path, &dir_for_job, false);
         Ok(json!({ "output": out_for_result.to_string_lossy() }))
     });
     let job_id = st.jobs.enqueue(job).await;
@@ -2140,15 +2142,18 @@ async fn retranslate_project(
         let pj = dir_for_job.join("project.json");
         let text = std::fs::read_to_string(&pj).map_err(|e| e.to_string())?;
         let mut p = Project::from_json(&text).map_err(|e| e.to_string())?;
+        let before = p.clone();
+        let expected = alignment::fingerprint(&before)?;
         p.tgt_lang = lang_c.clone();
         p.mode = mode.clone();
+        p.subs.mode = "translate".into();
         // Закадр/субтитры не переписывают текст «смешно» — сбрасываем rewrite, чтобы derived-режим во фронте
         // не показал «funny» после перехода в dub/nodub/voiceover из транскрипта.
         p.audio.rewrite = None;
         let spoken = matches!(p.mode.as_str(), "dub" | "voiceover");
         progress(json!({ "type": "progress", "stage": "translate",
             "msg": format!("Перевод {} строк → {}", p.segments.len(), lang_c) }));
-        let prov = match crate::llm_provider::open(
+        let prov = crate::llm_provider::open(
             &crate::llm_provider::LlmOpen {
                 llama_bin: &llama_bin,
                 mt_model: &mt_model,
@@ -2156,23 +2161,7 @@ async fn retranslate_project(
                 models_root: &models_root_xl,
             },
             crate::llm_provider::LlmMode::Text,
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                // Если LLM недоступен для перевода, мы ВСЁ РАВНО обновляем p.mode и сохраняем проект,
-                // чтобы переход из «Транскрипта» в Дубляж/Закадр/Субтитры происходил успешно.
-                p.mode = mode.clone();
-                for s in &mut p.segments {
-                    if s.tgt_text.trim().is_empty() {
-                        s.tgt_text = s.src_text.clone();
-                    }
-                }
-                progress(json!({ "type": "progress", "stage": "translate",
-                    "msg": format!("⚠ LLM недоступен ({e}) — режим изменен на {}, текстом оставлен исходный", mode) }));
-                save_project_atomic(&dir_for_job, &p)?;
-                return Ok(json!({ "project_id": pid_res, "ok": true }));
-            }
-        };
+        ).map_err(|e| format!("TRANSLATE_UNAVAILABLE: {e}"))?;
         let client = prov.client();
         // src_text -> Lx (тайминги/спикеры/раскладка остаются от транскрипта). Вручную добавленные фразы
         // (пустой src_text) переводим из текущего tgt_text (как в export_lang).
@@ -2188,10 +2177,14 @@ async fn retranslate_project(
         flat_run(client, &mut segs, "auto", &lang_c, spoken, &p.audio.translate_style)
             .map_err(|e| format!("translate: {e}"))?;
         for (s, sg) in p.segments.iter_mut().zip(segs) {
+            if sg.tgt.trim().is_empty() && (!s.src_text.trim().is_empty() || !s.tgt_text.trim().is_empty()) {
+                return Err(format!("TRANSLATE_INCOMPLETE: {}. Повторите перевод.", s.id));
+            }
             if !sg.tgt.trim().is_empty() {
                 s.tgt_text = sg.tgt;
             }
-            s.dirty = true; // новый язык -> ре-TTS при рендере/озвучке
+            s.extra.remove("translation_pending");
+            segment_cache::invalidate_audio(s);
         }
         // Титры: text -> Lx (позиции/стиль остаются). Сбой перевода -> чистим tgt (рендер покажет исходный).
         if !p.captions.titles.is_empty() {
@@ -2202,8 +2195,14 @@ async fn retranslate_project(
             }
         }
         drop(prov);
-        save_project_atomic(&dir_for_job, &p)?;
-        Ok(json!({ "project_id": pid_res, "ok": true }))
+        let _guard = PROJECT_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
+        let current = Project::from_json(&std::fs::read_to_string(&pj).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        if alignment::fingerprint(&current)? != expected {
+            return Err("TRANSLATE_PROJECT_CHANGED: Проект изменён во время перевода. Повторите запуск.".into());
+        }
+        p.audio.mix_dirty = true;
+        save_project_unlocked(&dir_for_job, &p)?;
+        Ok(json!({ "project_id": pid_res, "ok": true, "before":before, "project":p }))
     });
     let job_id = st.jobs.enqueue(job).await;
     Json(json!({ "job_id": job_id, "project_id": pid })).into_response()
@@ -2255,16 +2254,8 @@ async fn dub_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         let proj = Project::from_json(&text).map_err(|e| e.to_string())?;
         let regen = proj.segments.iter().any(|s| s.dirty);
         let out = render::dub_audio(&proj, &paths, regen, false, &cb)?;
-        if regen {
-            reset_baked_dirty(&proj, &proj_path, &dir_for_job);
-        }
-        // Сбросить mix_dirty, так как полный микс успешно сведён
-        if let Ok(fresh_text) = std::fs::read_to_string(&proj_path) {
-            if let Ok(mut fresh_proj) = Project::from_json(&fresh_text) {
-                fresh_proj.audio.mix_dirty = false;
-                let _ = save_project_atomic(&dir_for_job, &fresh_proj);
-            }
-        }
+        // Полный микс сведён: сбросить dirty запечённых фраз и mix_dirty (под локом).
+        bake_render_result(regen.then_some(&proj), &proj_path, &dir_for_job, false);
         Ok(json!({ "audio": out.to_string_lossy() }))
     });
     let job_id = st.jobs.enqueue(job).await;
@@ -2316,14 +2307,8 @@ async fn synth_segments_project(State(st): State<AppState>, AxPath(pid): AxPath<
         let regen = proj.segments.iter().any(|s| s.dirty);
         let out = render::dub_audio(&proj, &paths, regen, true, &cb)?;
         if regen {
-            reset_baked_dirty(&proj, &proj_path, &dir_for_job);
-            // Сохраняем mix_dirty = true (есть несведенные изменения)
-            if let Ok(fresh_text) = std::fs::read_to_string(&proj_path) {
-                if let Ok(mut fresh_proj) = Project::from_json(&fresh_text) {
-                    fresh_proj.audio.mix_dirty = true;
-                    let _ = save_project_atomic(&dir_for_job, &fresh_proj);
-                }
-            }
+            // Сбросить dirty запечённых фраз; mix_dirty=true — есть несведённые изменения (под локом).
+            bake_render_result(Some(&proj), &proj_path, &dir_for_job, true);
         }
         Ok(json!({ "mode": "synth", "audio": out.to_string_lossy() }))
     });
@@ -2346,8 +2331,11 @@ async fn segment_audio(
         Ok(d) => d,
         Err(resp) => return resp,
     };
-    let sid: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-    let sid = if sid.is_empty() { format!("i{id}") } else { sid };
+    let project = match st.load_project(&pid) { Ok(p) => p, Err(e) => return e };
+    let Some(segment) = project.segments.iter().find(|s| s.id == id) else {
+        return (StatusCode::NOT_FOUND, "segment not found").into_response();
+    };
+    let sid = segment_cache::audio_key(segment);
     let fit_p = dir.join(format!("seg_{sid}_fit.wav"));
     let raw_p = dir.join(format!("seg_{sid}.wav"));
     let f = match (fit_p.is_file(), raw_p.is_file()) {
