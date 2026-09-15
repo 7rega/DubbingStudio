@@ -367,6 +367,8 @@ pub async fn remix_project(
         if p.segments.is_empty() {
             return Err("no transcript to remix — analyze first".into());
         }
+        let before = p.clone();
+        let expected = crate::alignment::fingerprint(&before)?;
         progress(json!({ "type": "progress",
             "msg": format!("ремикс {} строк → {}", p.segments.len(),
                            &instr[..instr.len().min(60)]) }));
@@ -409,7 +411,13 @@ pub async fn remix_project(
         }
         p.audio.rewrite = Some(instr.clone());
         p.audio.mix_dirty = true;
-        save_project_atomic(&dir_for_job, &p)?;
+        let _guard = crate::PROJECT_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
+        let current_text = std::fs::read_to_string(&proj_path).map_err(|e| e.to_string())?;
+        let current = Project::from_json(&current_text).map_err(|e| e.to_string())?;
+        if crate::alignment::fingerprint(&current)? != expected {
+            return Err("REMIX_PROJECT_CHANGED: Проект изменён во время ремикса. Повторите запуск.".into());
+        }
+        crate::save_project_unlocked(&dir_for_job, &p)?;
         serde_json::to_value(&p).map_err(|e| e.to_string())
     });
     let job_id = st.jobs.enqueue(job).await;

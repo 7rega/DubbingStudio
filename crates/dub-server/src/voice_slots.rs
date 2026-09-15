@@ -199,9 +199,9 @@ pub fn assign(proj: &mut Project, vocals: &Path, wd: &Path, slots: &Slots) -> Ve
         .collect();
     proj.audio.voice.mode = "voice".to_string();
     proj.audio.voice.name = Some(csv.join(","));
-    // Смена голоса -> ре-синтез: метим все сегменты dirty (как op_recast/ручная смена голоса).
+    // Смена голоса -> ре-синтез: обновляем аудио-ревизию всех сегментов (ротация версий для Undo).
     for seg in &mut proj.segments {
-        seg.dirty = true;
+        crate::segment_cache::invalidate_audio(seg);
     }
     infos
 }

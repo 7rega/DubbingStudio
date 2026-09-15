@@ -298,9 +298,11 @@ pub fn apply_merges(segments: Vec<Segment>, pairs: &[(String, String)]) -> Resul
         m.end = group.last().unwrap().end;
         m.src_text = group.iter().map(|s| s.src_text.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
         m.tgt_text = group.iter().map(|s| s.tgt_text.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
-        if group.iter().any(|s| !s.src_text.trim().is_empty() && s.tgt_text.trim().is_empty()) {
+        if group.iter().any(|s| !s.src_text.trim().is_empty() && s.tgt_text.trim().is_empty()) || m.tgt_text.trim().is_empty() {
             m.tgt_text.clear(); // a partial translation must not masquerade as a complete merged line
             m.extra.insert("translation_pending".into(), json!(true));
+        } else {
+            m.extra.remove("translation_pending");
         }
         m.dirty = true;
         m.ckpt = None;
@@ -512,6 +514,7 @@ mod tests {
         let mut a = seg("a", &[(0.0, 5.0)]);
         a.speaker = Some("wrong-label-a".into());
         a.voice = Some("actor".into());
+        a.extra.insert("translation_pending".into(), json!(true));
         let mut b = seg("b", &[(5.0, 10.0)]);
         b.speaker = Some("wrong-label-b".into());
         let c = seg("c", &[(10.0, 15.0)]);
@@ -522,6 +525,7 @@ mod tests {
         assert_eq!(out[0].end, 15.0);
         assert_eq!(out[0].voice, a.voice);
         assert_eq!(out[0].tgt_text, "translation a translation b translation c");
+        assert!(!out[0].extra.contains_key("translation_pending"));
         assert_eq!(words(&out[0]).len(), 3);
         let mut too_long = pairs;
         too_long.push(("c".into(), "d".into()));

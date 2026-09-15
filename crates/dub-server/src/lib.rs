@@ -60,7 +60,7 @@ pub use jobs::JobQueue;
 
 pub type TtsCache = Arc<Mutex<Option<(render::EngineKey, Arc<audiocpp::AudiocppEngine>)>>>;
 static GLOBAL_TTS_CACHE: OnceLock<TtsCache> = OnceLock::new();
-static PROJECT_WRITE_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static PROJECT_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 static TITLE_HOOK: std::sync::RwLock<Option<Box<dyn Fn(&str) + Send + Sync>>> = std::sync::RwLock::new(None);
 
@@ -368,7 +368,7 @@ fn save_project_atomic(dir: &Path, proj: &Project) -> Result<(), String> {
     save_project_unlocked(dir, proj)
 }
 
-fn save_project_unlocked(dir: &Path, proj: &Project) -> Result<(), String> {
+pub(crate) fn save_project_unlocked(dir: &Path, proj: &Project) -> Result<(), String> {
     let json = proj
         .to_json_pretty()
         .map_err(|e| format!("сериализация project.json: {e}"))?;
@@ -1287,10 +1287,10 @@ async fn casting_save(
         let csv = casting::merge_voice_csv(&spk_ids, &vmap, old_name.as_deref(), old_is_voice);
         proj.audio.voice.mode = "voice".to_string();
         proj.audio.voice.name = Some(csv);
-        // Смена голосов -> ре-синтез: метим сегменты dirty (как voice_slots).
+        // Смена голосов -> ре-синтез: обновляем аудио-ревизию (ротация версий для Undo).
         if proj.audio.voice.name != old_name {
             for seg in &mut proj.segments {
-                seg.dirty = true;
+                segment_cache::invalidate_audio(seg);
             }
         }
     }

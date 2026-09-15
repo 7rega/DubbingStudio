@@ -5239,7 +5239,9 @@ function Editor() {
       await api.patch(pid, { op: "regen", id: segId });
       const { job_id } = await api.synthSegments(pid);                // быстрый синтез без сборки и тяжелого микса всего фильма
       await watchDub(job_id);
+      if (useStore.getState().pid !== pid) return;
       const fresh = await api.getProject(pid);
+      if (useStore.getState().pid !== pid) return;
       const updated = {
         ...fresh,
         audio: { ...fresh.audio, mix_dirty: true },
@@ -5297,7 +5299,9 @@ function Editor() {
       await api.patch(pid, { op: "regen_multi", ids });
       const { job_id } = await api.synthSegments(pid);                // быстрый синтез группы фраз
       await watchDub(job_id);
+      if (useStore.getState().pid !== pid) return;
       const fresh = await api.getProject(pid);
+      if (useStore.getState().pid !== pid) return;
       const updated = {
         ...fresh,
         audio: { ...fresh.audio, mix_dirty: true },
@@ -5438,6 +5442,7 @@ function Editor() {
       await api.patch(pid, { op: "regen_all" });                    // mark every segment dirty
       const { job_id } = await api.dubAudio(pid);                   // ре-TTS всех сегментов -> свежая озвучка (видео на Экспорте)
       await watchDub(job_id);
+      if (useStore.getState().pid !== pid) return;
       setProject(await api.getProject(pid)); setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify");   // покадровое превью; /dub обновлён -> плей играет новый дуб
     } catch (e) { await surfaceErr(e); }
     finally { setRegenId(null); }
@@ -5448,7 +5453,9 @@ function Editor() {
     try {
       const { job_id } = await api.mixAudio(pid);
       await watchDub(job_id);
+      if (useStore.getState().pid !== pid) return;
       const fresh = await api.getProject(pid);
+      if (useStore.getState().pid !== pid) return;
       setProject({ ...fresh, audio: { ...fresh.audio, mix_dirty: false } });
       setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify");
     } catch (e) { await surfaceErr(e); }
@@ -5735,8 +5742,11 @@ function Editor() {
       pushHistory(p);
       const { job_id } = await api.remix(pid, remixText.trim());
       await api.watchJob(job_id, (e) => { if (e.type === "progress") useStore.getState().setProgress(e.stage || "remix", e.msg || t("remix.apply"), e.pct ?? null); });
+      if (useStore.getState().pid !== pid) return;
+      const fresh = await api.getProject(pid);
+      if (useStore.getState().pid !== pid) return;
       setRendered(false);
-      setProject(await api.getProject(pid));                            // rewritten transcript -> shows in the lane
+      setProject(fresh);                            // rewritten transcript -> shows in the lane
       bump(); setLane("subs");                                          // показать переписанный текст сразу
       useStore.getState().setProgress("done", t("remix.apply"), null); // done-строка в журнале
     } catch (err) { await surfaceErr(err); }                           // было: тихий console.error -> провал не был виден

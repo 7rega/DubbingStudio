@@ -293,6 +293,7 @@ fn op_translate(p: &mut Project, edit: &Value) -> PatchResult {
         p.audio.rewrite = Some("make it a funny, playful dub".into());
     }
     invalidate_all_audio(p);
+    p.audio.mix_dirty = true;
     Ok(())
 }
 
@@ -306,6 +307,7 @@ fn op_rewrite(p: &mut Project, edit: &Value) -> PatchResult {
     p.audio.rewrite = Some(instr);
     p.mode = "dub".into();
     invalidate_all_audio(p);
+    p.audio.mix_dirty = true;
     Ok(())
 }
 
@@ -321,6 +323,7 @@ fn op_translate_style(p: &mut Project, edit: &Value) -> PatchResult {
     let flat: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     p.audio.translate_style = flat.chars().take(500).collect();
     invalidate_all_audio(p);
+    p.audio.mix_dirty = true;
     Ok(())
 }
 
