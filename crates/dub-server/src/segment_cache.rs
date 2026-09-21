@@ -28,27 +28,24 @@ pub fn invalidate_audio(segment: &mut Segment) {
 pub fn donor(project: &Project, segment: &Segment) -> Option<Segment> {
     let voice = segment.voice.as_deref()?.trim();
     let spec = voice.strip_prefix("donor:").or_else(|| voice.strip_prefix("clone:"))?;
-    // Сначала ищем актуальный живой сегмент в проекте (для доступа к русскому tgt_text и файлам озвучки)
-    if let Some(s) = project.segments.iter().find(|s| s.id == spec).or_else(|| {
-        spec.parse::<usize>().ok().and_then(|i| project.segments.get(i.saturating_sub(1)))
-    }) {
-        return Some(s.clone());
-    }
     if let Some(anchor) = segment.extra.get("donor_anchor") {
         if anchor.get("voice").and_then(Value::as_str) == Some(voice) {
             let start = anchor.get("start")?.as_f64()?;
             let end = anchor.get("end")?.as_f64()?;
             if start.is_finite() && end.is_finite() && start >= 0.0 && end > start {
+                let live_tgt = project.segments.iter().find(|s| s.id == spec).map(|s| s.tgt_text.clone());
                 return Some(Segment {
                     id: spec.into(), start, end,
-                    src_text: anchor.get("src_text").and_then(Value::as_str).unwrap_or("").into(),
-                    tgt_text: anchor.get("tgt_text").and_then(Value::as_str).unwrap_or("").into(),
+                    src_text: anchor.get("src_text")?.as_str()?.into(),
+                    tgt_text: live_tgt.unwrap_or_else(|| anchor.get("tgt_text").and_then(Value::as_str).unwrap_or("").into()),
                     ..Default::default()
                 });
             }
         }
     }
-    None
+    project.segments.iter().find(|s| s.id == spec).or_else(|| {
+        spec.parse::<usize>().ok().and_then(|i| project.segments.get(i.saturating_sub(1)))
+    }).cloned()
 }
 
 pub fn preserve_donors(before: &Project, after: &mut [Segment]) {
