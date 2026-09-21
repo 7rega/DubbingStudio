@@ -43,8 +43,7 @@ fn idxs_desc(edit: &Value) -> Vec<usize> {
     set.iter().rev().filter_map(|&x| usize::try_from(x).ok()).collect::<Vec<_>>()
 }
 
-/// Новая аудио-версия у ВСЕХ сегментов: перевод/стиль/голос поменялись -> рендер синтезирует новый TTS
-/// в новых именах кэша, а Undo (PUT старого снимка) вернёт именно свои WAV (segment_cache::audio_key).
+/// Инвалидация аудио у ВСЕХ сегментов: перевод/стиль/голос поменялись -> сброс ckpt и пометка dirty для ре-синтеза.
 fn invalidate_all_audio(p: &mut Project) {
     for seg in &mut p.segments {
         crate::segment_cache::invalidate_audio(seg);
@@ -1036,21 +1035,19 @@ mod tests {
     }
 
     #[test]
-    fn tts_ops_rotate_audio_revision_for_undo() {
+    fn tts_ops_mark_dirty() {
         let mut p = proj_with_seg();
         apply(&mut p, &json!({"op":"regen","id":"s0"})).unwrap();
-        let rev = p.segments[0].extra.get("audio_revision").cloned();
-        assert!(rev.is_some(), "regen должен дать новую аудио-версию");
         assert!(p.segments[0].dirty && p.segments[0].ckpt.is_none());
-        // смена языка/стиля/инструкции меняет аудио-версию ещё раз (Undo вернёт прежний WAV)
         for op in [
             json!({"op":"translate","lang":"de"}),
             json!({"op":"translate_style","style":"formal"}),
             json!({"op":"rewrite","instruction":"as a pirate"}),
             json!({"op":"recast","voice_mode":"clone"}),
         ] {
+            p.segments[0].dirty = false;
             apply(&mut p, &op).unwrap();
-            assert_ne!(p.segments[0].extra.get("audio_revision"), rev.as_ref(), "{op}");
+            assert!(p.segments[0].dirty, "{op}");
         }
     }
 

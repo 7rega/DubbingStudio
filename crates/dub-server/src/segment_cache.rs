@@ -11,18 +11,14 @@ pub fn key(id: &str) -> String {
     }
 }
 
-/// Audio versions are part of the project snapshot. Undo can reuse an approved
-/// take instead of reading a WAV overwritten by a later alignment/edit.
+/// Audio key for a segment: direct, clean name based on segment ID.
+/// Keeps filenames human-readable (seg_s1.wav, seg_s1_fit.wav) and avoids garbage accumulation.
 pub fn audio_key(segment: &Segment) -> String {
-    let base = key(&segment.id);
-    match segment.extra.get("audio_revision").and_then(Value::as_str) {
-        Some(revision) => format!("{base}-rev-{}", blake3::hash(revision.as_bytes()).to_hex()),
-        None => base,
-    }
+    key(&segment.id)
 }
 
 pub fn invalidate_audio(segment: &mut Segment) {
-    segment.extra.insert("audio_revision".into(), json!(uuid::Uuid::new_v4().simple().to_string()));
+    segment.extra.remove("audio_revision");
     segment.ckpt = None;
     segment.dirty = true;
 }
@@ -32,6 +28,12 @@ pub fn invalidate_audio(segment: &mut Segment) {
 pub fn donor(project: &Project, segment: &Segment) -> Option<Segment> {
     let voice = segment.voice.as_deref()?.trim();
     let spec = voice.strip_prefix("donor:").or_else(|| voice.strip_prefix("clone:"))?;
+    // Сначала ищем актуальный живой сегмент в проекте (для доступа к русскому tgt_text и файлам озвучки)
+    if let Some(s) = project.segments.iter().find(|s| s.id == spec).or_else(|| {
+        spec.parse::<usize>().ok().and_then(|i| project.segments.get(i.saturating_sub(1)))
+    }) {
+        return Some(s.clone());
+    }
     if let Some(anchor) = segment.extra.get("donor_anchor") {
         if anchor.get("voice").and_then(Value::as_str) == Some(voice) {
             let start = anchor.get("start")?.as_f64()?;
@@ -39,15 +41,14 @@ pub fn donor(project: &Project, segment: &Segment) -> Option<Segment> {
             if start.is_finite() && end.is_finite() && start >= 0.0 && end > start {
                 return Some(Segment {
                     id: spec.into(), start, end,
-                    src_text: anchor.get("src_text")?.as_str()?.into(),
+                    src_text: anchor.get("src_text").and_then(Value::as_str).unwrap_or("").into(),
+                    tgt_text: anchor.get("tgt_text").and_then(Value::as_str).unwrap_or("").into(),
                     ..Default::default()
                 });
             }
         }
     }
-    project.segments.iter().find(|s| s.id == spec).or_else(|| {
-        spec.parse::<usize>().ok().and_then(|i| project.segments.get(i.saturating_sub(1)))
-    }).cloned()
+    None
 }
 
 pub fn preserve_donors(before: &Project, after: &mut [Segment]) {
@@ -55,7 +56,8 @@ pub fn preserve_donors(before: &Project, after: &mut [Segment]) {
         if let Some(source) = donor(before, segment) {
             segment.extra.insert("donor_anchor".into(), json!({
                 "voice": segment.voice.as_deref().unwrap_or_default().trim(),
-                "start": source.start, "end": source.end, "src_text": source.src_text,
+                "start": source.start, "end": source.end,
+                "src_text": source.src_text, "tgt_text": source.tgt_text,
             }));
         }
     }
@@ -92,15 +94,11 @@ mod tests {
     }
 
     #[test]
-    fn restoring_snapshot_restores_its_audio_namespace() {
-        let original = Segment { id: "s0".into(), ..Default::default() };
-        let mut changed = original.clone();
-        invalidate_audio(&mut changed);
-        assert_ne!(audio_key(&original), audio_key(&changed));
-        let first_edit = changed.clone();
-        invalidate_audio(&mut changed);
-        assert_ne!(audio_key(&first_edit), audio_key(&changed));
-        let restored: Segment = serde_json::from_value(serde_json::to_value(first_edit.clone()).unwrap()).unwrap();
-        assert_eq!(audio_key(&restored), audio_key(&first_edit));
+    fn audio_key_is_stable_and_clean() {
+        let mut original = Segment { id: "s0".into(), ..Default::default() };
+        assert_eq!(audio_key(&original), "s0");
+        invalidate_audio(&mut original);
+        assert!(original.dirty);
+        assert_eq!(audio_key(&original), "s0");
     }
 }

@@ -1300,17 +1300,63 @@ fn build_dub(
                 if let Some(ds) = donor_seg {
                     let out = wd.join(format!("ref_donor_{sid}.wav"));
                     let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
-                    let end = ds.end.min(ds.start + cap);
-                    let trim_ok = if smart_ref_on && (ds.end - ds.start > cap + 0.1) {
-                        media::trim_smart_ref(&vocals16, &out, ds.start, cap).is_ok()
+
+                    // 1. Проверяем, есть ли уже озвученная русская фраза-донор
+                    let donor_sid = crate::segment_cache::audio_key(&ds);
+                    let donor_fit = wd.join(format!("seg_{donor_sid}_fit.wav"));
+                    let donor_raw = wd.join(format!("seg_{donor_sid}.wav"));
+                    let donor_wav = if donor_fit.is_file() {
+                        Some(donor_fit)
+                    } else if donor_raw.is_file() {
+                        Some(donor_raw)
                     } else {
-                        media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok()
+                        let direct_fit = wd.join(format!("seg_{}_fit.wav", ds.id));
+                        let direct_raw = wd.join(format!("seg_{}.wav", ds.id));
+                        if direct_fit.is_file() {
+                            Some(direct_fit)
+                        } else if direct_raw.is_file() {
+                            Some(direct_raw)
+                        } else {
+                            None
+                        }
                     };
-                    if trim_ok && out.is_file() {
-                        let t = ds.src_text.trim();
-                        let res = (out, if t.is_empty() { None } else { Some(t.to_string()) });
-                        custom_ref_cache.insert(cache_key, res.clone());
-                        Some(res)
+
+                    let res = if let Some(ref dwav) = donor_wav {
+                        // Озвученная русская фраза найдена — берём готовый русский голос!
+                        let dur = media::duration(dwav).unwrap_or(0.0);
+                        let trim_end = if dur > 0.0 { dur.min(cap) } else { cap };
+                        let trim_ok = media::trim(dwav, &out, 0.0, trim_end, 16_000).is_ok();
+                        if trim_ok && out.is_file() {
+                            let t = ds.tgt_text.trim();
+                            let text = if !t.is_empty() {
+                                Some(t.to_string())
+                            } else {
+                                let st = ds.src_text.trim();
+                                if !st.is_empty() { Some(st.to_string()) } else { None }
+                            };
+                            Some((out, text))
+                        } else {
+                            None
+                        }
+                    } else {
+                        // Фраза-донор ещё не озвучена на русском: фоллбэк на вокал оригинала
+                        let end = ds.end.min(ds.start + cap);
+                        let trim_ok = if smart_ref_on && (ds.end - ds.start > cap + 0.1) {
+                            media::trim_smart_ref(&vocals16, &out, ds.start, cap).is_ok()
+                        } else {
+                            media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok()
+                        };
+                        if trim_ok && out.is_file() {
+                            let t = ds.src_text.trim();
+                            Some((out, if t.is_empty() { None } else { Some(t.to_string()) }))
+                        } else {
+                            None
+                        }
+                    };
+
+                    if let Some(r) = res {
+                        custom_ref_cache.insert(cache_key, r.clone());
+                        Some(r)
                     } else {
                         None
                     }
