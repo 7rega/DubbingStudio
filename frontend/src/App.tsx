@@ -3242,7 +3242,8 @@ function MultiTrackTimeline({
   loopSegId,
   setLoopSegId: _setLoopSegId,
   dubRev,
-  activeTtsEngine,
+  activeTtsEngine: _activeTtsEngine,
+  isHighTemp = false,
 }: {
   pid: string;
   duration: number;
@@ -3258,6 +3259,7 @@ function MultiTrackTimeline({
   setLoopSegId?: (id: string | null) => void;
   dubRev?: number;
   activeTtsEngine?: string;
+  isHighTemp?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -3754,9 +3756,9 @@ function MultiTrackTimeline({
 
   const handlePromptTemp = (seg: Project["segments"][number]) => {
     const cur = typeof seg.temp === "number" ? seg.temp : (seg.extra && typeof seg.extra.temp === "number" ? seg.extra.temp : null);
-    const isHighTemp = activeTtsEngine === "higgs";
     const defHint = isHighTemp ? "0.80" : "0.20";
-    const input = window.prompt("Температура сэмплинга (от 0.05 до 2.00, или 'auto' для сброса):", cur !== null ? String(cur) : defHint);
+    const rangeHint = isHighTemp ? "от 0.10 до 2.00" : "от 0.05 до 0.50";
+    const input = window.prompt(`Температура сэмплинга (${rangeHint}, или 'auto' для сброса):`, cur !== null ? String(cur) : defHint);
     if (input !== null) {
       const trimmed = input.trim().toLowerCase();
       if (trimmed === "auto" || trimmed === "" || trimmed === "null") {
@@ -4297,15 +4299,15 @@ function MultiTrackTimeline({
                   </button>
                 </div>
                 <div className="grid grid-cols-5 gap-1 px-1 pb-0.5">
-                  {(activeTtsEngine === "higgs" ? [
+                  {(isHighTemp ? [
                     { label: "Авто", val: null, title: "По умолчанию (0.80)" },
                     { label: "0.60", val: 0.60, title: "Мягкий тон" },
                     { label: "0.80", val: 0.80, title: "Нормальная речь (дефолт)" },
                     { label: "1.00", val: 1.00, title: "Выразительно" },
                   ] : [
-                    { label: "Авто", val: null, title: "По умолчанию" },
+                    { label: "Авто", val: null, title: "По умолчанию (0.20)" },
                     { label: "0.10", val: 0.10, title: "Спокойно / Стабильно" },
-                    { label: "0.20", val: 0.20, title: "Нормальная речь" },
+                    { label: "0.20", val: 0.20, title: "Нормальная речь (дефолт)" },
                     { label: "0.35", val: 0.35, title: "Эмоционально" },
                   ]).map((item) => (
                     <button
@@ -4927,12 +4929,30 @@ function Editor() {
   const [autoCastBusy, setAutoCastBusy] = useState(false);
   const autoCastOn = useStore((s) => s.autoCastOn);
   const [activeTtsEngine, setActiveTtsEngine] = useState<string>("higgs");
-  useEffect(() => {
+  const [higgsExecution, setHiggsExecution] = useState<string>("server");
+  const [ttsQuant, setTtsQuant] = useState<string>("bf16");
+  const refreshCap = useCallback(() => {
     api.capabilities().then((c) => {
       setDuckOn(c.selection?.duck_on === "1");
       if (c.selection?.tts_engine) setActiveTtsEngine(c.selection.tts_engine);
+      if (c.selection?.higgs_execution) setHiggsExecution(c.selection.higgs_execution);
+      if (c.selection?.tts) setTtsQuant(c.selection.tts);
     }).catch(() => {});
-  }, [editorTab]);
+  }, []);
+  useEffect(() => {
+    refreshCap();
+  }, [editorTab, refreshCap]);
+  useEffect(() => {
+    const onFocus = () => refreshCap();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshCap]);
+
+  const isHiggsServer =
+    activeTtsEngine === "higgs" &&
+    higgsExecution !== "dll" &&
+    ttsQuant !== "q6_k" &&
+    ttsQuant !== "q4_k_m";
   const setDuckSaved = (v: boolean) => { setDuckOn(v); api.setSelection("duck_on", v ? "1" : "0").catch(() => {}); };
   const [presets, setPresets] = useState<Record<string, Record<string, unknown>>>({});
   useEffect(() => { api.fonts().then((r) => setFonts(r.fonts)).catch(() => {}); }, []);   // bundled caption fonts
@@ -6660,6 +6680,7 @@ function Editor() {
                 setLoopSegId={setLoopSegId}
                 dubRev={dubRev}
                 activeTtsEngine={activeTtsEngine}
+                isHighTemp={isHiggsServer}
               />
             </div>
           )}
@@ -7548,7 +7569,7 @@ function Editor() {
                         <Settings2 size={11} className={activeTtsEngine === "higgs" ? "text-[var(--color-accent)]" : "text-[var(--color-muted)]"} />
                       </div>
                       <div className="text-[9px] text-[var(--color-muted)] truncate w-full mt-0.5">
-                        {`t: ${(p.audio.higgs_temp ?? 0.8).toFixed(2)}${p.audio.higgs_seed != null ? " • сид" : ""}`}
+                        {`t: ${(p.audio.higgs_temp ?? (isHiggsServer ? 0.8 : 0.2)).toFixed(2)}${p.audio.higgs_seed != null ? " • сид" : ""}`}
                       </div>
                     </button>
 
@@ -8118,6 +8139,7 @@ function Editor() {
       {showHiggsModal && (
         <HiggsAudioModal
           p={p}
+          isServer={isHiggsServer}
           onSave={async (settings, maxTokens) => {
             await branch("tts_settings", settings);
             if (maxTokens) {
@@ -8355,10 +8377,12 @@ function CastActorsModal({
 // Модальное окно настроек Higgs Audio v3
 function HiggsAudioModal({
   p,
+  isServer = true,
   onSave,
   onClose,
 }: {
   p: Project;
+  isServer?: boolean;
   onSave: (
     settings: {
       higgs_temp: number;
@@ -8369,7 +8393,8 @@ function HiggsAudioModal({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const [temp, setTemp] = useState<number>(p.audio.higgs_temp ?? 0.8);
+  const defTemp = isServer ? 0.8 : 0.2;
+  const [temp, setTemp] = useState<number>(p.audio.higgs_temp ?? defTemp);
   const [seedFixed, setSeedFixed] = useState<boolean>(p.audio.higgs_seed != null);
   const [seed, setSeed] = useState<number>(p.audio.higgs_seed ?? 42);
   const [maxTokens, setMaxTokens] = useState<string>("default");
@@ -8463,13 +8488,13 @@ function HiggsAudioModal({
                 {t("voice.higgsTempLabel", "Температура сэмплинга")}
               </span>
               <div className="flex items-center gap-2">
-                {Math.abs(temp - 0.8) > 0.001 && (
+                {Math.abs(temp - defTemp) > 0.001 && (
                   <button
                     type="button"
-                    onClick={() => setTemp(0.8)}
+                    onClick={() => setTemp(defTemp)}
                     className="text-[10px] text-[var(--color-accent)] hover:underline"
                   >
-                    {t("voice.higgsTempReset", "Сбросить к 0.80")}
+                    {isServer ? t("voice.higgsTempReset", "Сбросить к 0.80") : "Сбросить к 0.20"}
                   </button>
                 )}
                 <span className="mono text-xs font-semibold px-2 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)]">
@@ -8479,40 +8504,76 @@ function HiggsAudioModal({
             </div>
             <input
               type="range"
-              min={0.1}
-              max={2.0}
-              step={0.05}
+              min={isServer ? 0.1 : 0.05}
+              max={isServer ? 2.0 : 0.50}
+              step={isServer ? 0.05 : 0.02}
               value={temp}
               onChange={(e) => setTemp(parseFloat(e.target.value))}
               className="w-full accent-[var(--color-accent)] cursor-pointer"
             />
             <div className="text-[10px] text-[var(--color-muted)] leading-snug flex items-start justify-between gap-2">
               <span>
-                {t(
-                  "voice.higgsTempHint",
-                  "Дефолт модели: 0.80. Рекомендуемый диапазон 0.60–1.00. Значения ниже 0.65 могут вызывать зацикливание."
-                )}
+                {isServer
+                  ? t("voice.higgsTempHint", "Дефолт модели: 0.80. Рекомендуемый диапазон 0.60–1.00. Значения ниже 0.65 могут вызывать зацикливание.")
+                  : "Для Legacy DLL дефолт: 0.20. Рекомендуемый диапазон 0.10–0.35 (выше 0.45 возможны сбои дикции)."}
               </span>
               <div className="flex items-center gap-1 shrink-0">
-                {Math.abs(temp - 0.6) > 0.001 && (
-                  <button
-                    type="button"
-                    onClick={() => setTemp(0.6)}
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
-                    title="0.60 (мягкий тон)"
-                  >
-                    0.60
-                  </button>
-                )}
-                {Math.abs(temp - 0.8) > 0.001 && (
-                  <button
-                    type="button"
-                    onClick={() => setTemp(0.8)}
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
-                    title="0.80 (дефолт)"
-                  >
-                    0.80
-                  </button>
+                {isServer ? (
+                  <>
+                    {Math.abs(temp - 0.6) > 0.001 && (
+                      <button
+                        type="button"
+                        onClick={() => setTemp(0.6)}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
+                        title="0.60 (мягкий тон)"
+                      >
+                        0.60
+                      </button>
+                    )}
+                    {Math.abs(temp - 0.8) > 0.001 && (
+                      <button
+                        type="button"
+                        onClick={() => setTemp(0.8)}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
+                        title="0.80 (дефолт)"
+                      >
+                        0.80
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {Math.abs(temp - 0.1) > 0.001 && (
+                      <button
+                        type="button"
+                        onClick={() => setTemp(0.1)}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
+                        title="0.10 (спокойно)"
+                      >
+                        0.10
+                      </button>
+                    )}
+                    {Math.abs(temp - 0.2) > 0.001 && (
+                      <button
+                        type="button"
+                        onClick={() => setTemp(0.2)}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
+                        title="0.20 (нормально)"
+                      >
+                        0.20
+                      </button>
+                    )}
+                    {Math.abs(temp - 0.35) > 0.001 && (
+                      <button
+                        type="button"
+                        onClick={() => setTemp(0.35)}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
+                        title="0.35 (эмоционально)"
+                      >
+                        0.35
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>

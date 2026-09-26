@@ -556,8 +556,12 @@ pub fn build_tts_input(
                 format!("({}) {}", parts.join(", "), clean_text)
             }
         }
+        "higgs" => {
+            // Для Higgs Audio v3 сохраняем валидные управляющие теги (<|...|>) для эмоций и стилей
+            raw_tgt.trim().to_string()
+        }
         _ => {
-            // Для других движков (Higgs и т.д.) оставляем чистый текст
+            // Для других движков оставляем чистый текст
             clean_speech_text(raw_tgt)
         }
     }
@@ -1443,14 +1447,17 @@ fn build_dub(
         .map(|v| v == "1")
         .unwrap_or(false);
 
-    // Настраиваемая температура / стабильность голоса: дефолт 0.20 (0.05..2.00)
-    let user_voice_temp: f64 = if voice_manual_ctrl {
+    // Настраиваемая температура / стабильность голоса для legacy DLL (0.05..0.50):
+    // Приоритет: 1) higgs_temp проекта (если задан), 2) voice_temp из selection при ручном контроле, 3) авто 0.28
+    let user_voice_temp: f64 = if let Some(ht) = proj.audio.higgs_temp {
+        ht.clamp(0.05, 0.50)
+    } else if voice_manual_ctrl {
         crate::models::load_selection(&paths.models_root)
             .get("voice_temp")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.20)
-            .clamp(0.05, 2.00)
+            .clamp(0.05, 0.50)
     } else {
         0.28
     };
@@ -1765,15 +1772,16 @@ fn build_dub(
                 1.0
             };
             let base_temp = if let Some(ct) = custom_temp {
-                // Индивидуальная экспрессия фразы из контекстного меню (с мягкой адаптацией под темп)
+                // Если фраза сохранила высокую температуру от audio.cpp (>0.50), для DLL мягко откатываем к безопасному 0.20
+                let ct_eff = if ct > 0.50 { 0.20 } else { ct };
                 if rate_ratio > 1.12 {
-                    (ct * 0.85).clamp(0.05, 0.55)
+                    (ct_eff * 0.85).clamp(0.05, 0.45)
                 } else if rate_ratio < 0.88 {
-                    (ct * 1.15).clamp(0.05, 0.60)
+                    (ct_eff * 1.15).clamp(0.05, 0.45)
                 } else {
-                    ct
+                    ct_eff
                 }
-            } else if voice_manual_ctrl {
+            } else if voice_manual_ctrl || proj.audio.higgs_temp.is_some() {
                 // Ручной контроль: масштабирование от выбранного на ползунке значения user_voice_temp
                 if rate_ratio > 1.12 {
                     (user_voice_temp * 0.85).clamp(0.08, 0.45)
@@ -3951,6 +3959,20 @@ mod tests {
         assert_eq!(
             build_tts_input("voxcpm2", "Привет!", ""),
             "Привет!"
+        );
+
+        // Higgs Audio: сохраняются управляющие теги (<|...|>)
+        assert_eq!(
+            build_tts_input("higgs", "<|emotion:anger|>Привет мир!", ""),
+            "<|emotion:anger|>Привет мир!"
+        );
+        assert_eq!(
+            build_tts_input("higgs", "Привет, <|style:whispering|>тихий шепот", "global prompt"),
+            "Привет, <|style:whispering|>тихий шепот"
+        );
+        assert_eq!(
+            build_tts_input("higgs", "  Обычный текст.  ", ""),
+            "Обычный текст."
         );
     }
 
