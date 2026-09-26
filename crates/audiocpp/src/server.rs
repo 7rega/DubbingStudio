@@ -154,7 +154,7 @@ impl AudiocppClient {
         }
 
         if let Some(rt) = reference_text {
-            // Сохраняем непустую строку (включая " " для изоляции референса в Fish Audio)
+            // Сохраняем непустую строку (включая " " для изоляции референса при необходимости)
             if !rt.is_empty() {
                 body.as_object_mut()
                     .unwrap()
@@ -503,27 +503,6 @@ pub fn resolve_voxcpm2_path(models_root: &Path, quant: &str) -> Option<PathBuf> 
     None
 }
 
-/// Поиск модели Fish Audio S2 Pro (q8_0 или bf16).
-pub fn resolve_fish_audio_path(models_root: &Path, quant: &str) -> Option<PathBuf> {
-    let filename = match quant {
-        "bf16" => "fish-audio-s2-pro-bf16.gguf",
-        _ => "fish-audio-s2-pro-q8_0.gguf",
-    };
-
-    let candidates = [
-        models_root.join("fish_audio").join(filename),
-        models_root.join(filename),
-        PathBuf::from("E:\\audio.cpp\\models").join(filename),
-        PathBuf::from("F:\\DubStudio\\models\\fish_audio").join(filename),
-    ];
-
-    for c in candidates {
-        if c.exists() {
-            return Some(c);
-        }
-    }
-    None
-}
 
 /// Декодер RIFF WAV (PCM16 или Float32) в моно f32 сэмплы + sample_rate.
 pub fn decode_wav_mono_f32(bytes: &[u8]) -> Result<(Vec<f32>, i32), AudiocppServerError> {

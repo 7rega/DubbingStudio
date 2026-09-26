@@ -49,8 +49,6 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "higgs-q4_k_m" => vec![("tts_engine", "higgs".into()), ("tts", "q4_k_m".into())],
         "voxcpm2" => vec![("tts_engine", "voxcpm2".into()), ("tts", "q8_0".into())],
         "voxcpm2-bf16" => vec![("tts_engine", "voxcpm2".into()), ("tts", "bf16".into())],
-        "fish_audio" => vec![("tts_engine", "fish_audio".into()), ("tts", "q8_0".into())],
-        "fish_audio-bf16" => vec![("tts_engine", "fish_audio".into()), ("tts", "bf16".into())],
         "parakeet" => vec![("asr_engine", "parakeet".into()), ("asr", "int8".into())],
         "parakeet-fp32" => vec![("asr_engine", "parakeet".into()), ("asr", "fp32".into())],
         "whisper-tiny" => vec![("asr_engine", "whisper".into()), ("whisper_model", "tiny".into())],
@@ -510,11 +508,10 @@ pub fn build_engine(choice: &AsrChoice) -> Box<dyn dub_asr::AsrEngine> {
     }
 }
 
-/// Выбранный TTS-движок: "higgs" (дефолт), "voxcpm2" или "fish_audio".
+/// Выбранный TTS-движок: "higgs" (дефолт) или "voxcpm2".
 pub fn resolve_tts_engine(sel: &Value) -> &'static str {
     match pick(sel, "tts_engine") {
         Some("voxcpm2") => "voxcpm2",
-        Some("fish_audio") => "fish_audio",
         _ => "higgs",
     }
 }
@@ -523,13 +520,6 @@ pub fn resolve_tts_engine(sel: &Value) -> &'static str {
 pub fn resolve_voxcpm2(mroot: &Path, sel: &Value) -> Option<(PathBuf, String)> {
     let quant = pick(sel, "tts").unwrap_or("q8_0");
     let model_path = audiocpp::resolve_voxcpm2_path(mroot, quant)?;
-    Some((model_path, quant.to_string()))
-}
-
-/// Fish Audio S2 Pro TTS: models/fish_audio/fish-audio-s2-pro-{q8_0,bf16}.gguf. Возврат (путь к .gguf, квант).
-pub fn resolve_fish_audio(mroot: &Path, sel: &Value) -> Option<(PathBuf, String)> {
-    let quant = pick(sel, "tts").unwrap_or("q8_0");
-    let model_path = audiocpp::resolve_fish_audio_path(mroot, quant)?;
     Some((model_path, quant.to_string()))
 }
 

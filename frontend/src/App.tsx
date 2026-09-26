@@ -61,7 +61,6 @@ function LanguageSwitcher() {
 const VARIANT_SLOT: Record<string, [string, string]> = {
   higgs: ["tts", "q8_0"], "higgs-q6_k": ["tts", "q6_k"], "higgs-q4_k_m": ["tts", "q4_k_m"],
   voxcpm2: ["tts", "q8_0"], "voxcpm2-bf16": ["tts", "bf16"],
-  fish_audio: ["tts", "q8_0"], "fish_audio-bf16": ["tts", "bf16"],
   parakeet: ["asr", "int8"], "parakeet-fp32": ["asr", "fp32"],
   gemma: ["mt", "q4_0"], "gemma-q5_0": ["mt", "q5_0"], "gemma-q6_k": ["mt", "q6_k"], "gemma-q8_0": ["mt", "q8_0"],
   roformer: ["sep", "Q8_0"], "roformer-q5": ["sep", "Q5_0"], "roformer-q4": ["sep", "Q4_0"],
@@ -283,7 +282,6 @@ function ModelsSection() {
           {[
             { id: "higgs", label: "Higgs Audio v3", cloud: false },
             { id: "voxcpm2", label: "VoxCPM2", cloud: false },
-            { id: "fish_audio", label: "Fish Audio S2", cloud: false },
             { id: "openrouter", label: "OpenRouter", cloud: true },
           ].map((e) => {
             const ttsCloud = selv("or_tts_on") === "1";
@@ -334,11 +332,6 @@ function ModelsSection() {
         ) : (selv("tts_engine") === "voxcpm2") ? (
           <>
             <VariantPicker base="VoxCPM2 (audio.cpp)" ids={["voxcpm2", "voxcpm2-bf16"]} />
-            {rowOf("audiocpp-engine")}
-          </>
-        ) : (selv("tts_engine") === "fish_audio") ? (
-          <>
-            <VariantPicker base="Fish Audio S2 Pro (audio.cpp)" ids={["fish_audio", "fish_audio-bf16"]} />
             {rowOf("audiocpp-engine")}
           </>
         ) : (
@@ -3725,7 +3718,7 @@ function MultiTrackTimeline({
 
   const handlePromptTemp = (seg: Project["segments"][number]) => {
     const cur = typeof seg.temp === "number" ? seg.temp : (seg.extra && typeof seg.extra.temp === "number" ? seg.extra.temp : null);
-    const isHighTemp = activeTtsEngine === "fish_audio" || activeTtsEngine === "higgs";
+    const isHighTemp = activeTtsEngine === "higgs";
     const defHint = isHighTemp ? "0.80" : "0.20";
     const input = window.prompt("Температура сэмплинга (от 0.05 до 2.00, или 'auto' для сброса):", cur !== null ? String(cur) : defHint);
     if (input !== null) {
@@ -4268,7 +4261,7 @@ function MultiTrackTimeline({
                   </button>
                 </div>
                 <div className="grid grid-cols-5 gap-1 px-1 pb-0.5">
-                  {(activeTtsEngine === "fish_audio" || activeTtsEngine === "higgs" ? [
+                  {(activeTtsEngine === "higgs" ? [
                     { label: "Авто", val: null, title: "По умолчанию (0.80)" },
                     { label: "0.60", val: 0.60, title: "Мягкий тон" },
                     { label: "0.80", val: 0.80, title: "Нормальная речь (дефолт)" },
@@ -4877,7 +4870,6 @@ function Editor() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [showCastModal, setShowCastModal] = useState(false);
   const [showHiggsModal, setShowHiggsModal] = useState(false);
-  const [showFishModal, setShowFishModal] = useState(false);
   const [showVoxModal, setShowVoxModal] = useState(false);
   const [subsViewMode, setSubsViewMode] = useState<"cards" | "table">("cards");
   const [actorPickerState, setActorPickerState] = useState<{ targetIds: string[]; x: number; y: number } | null>(null);
@@ -7501,7 +7493,7 @@ function Editor() {
                     <Sliders size={12} className="text-[var(--color-accent)]" />
                     {t("voice.ttsModelSettings", "Настройки моделей синтеза")}
                   </div>
-                  <div className="grid grid-cols-3 gap-1.5">
+                  <div className="grid grid-cols-2 gap-1.5">
                     {/* Кнопка Higgs Audio v3 */}
                     <button
                       type="button"
@@ -7521,28 +7513,6 @@ function Editor() {
                       </div>
                       <div className="text-[9px] text-[var(--color-muted)] truncate w-full mt-0.5">
                         {`t: ${(p.audio.higgs_temp ?? 0.8).toFixed(2)}${p.audio.higgs_seed != null ? " • сид" : ""}`}
-                      </div>
-                    </button>
-
-                    {/* Кнопка Fish Audio S2 Pro */}
-                    <button
-                      type="button"
-                      onClick={() => setShowFishModal(true)}
-                      className={`flex flex-col items-start p-2 rounded-lg border text-left transition-all ${
-                        activeTtsEngine === "fish_audio"
-                          ? "bg-[var(--color-accent)]/10 border-[var(--color-accent)] text-[var(--color-text)] shadow-sm"
-                          : "bg-[var(--color-surface)] border-[var(--color-border)] hover:border-[var(--color-muted)] text-[var(--color-text)]"
-                      }`}
-                      title={t("voice.fishModalTitle", "Fish Audio S2 Pro — настройки")}
-                    >
-                      <div className="flex items-center justify-between w-full">
-                        <span className="text-[11px] font-semibold truncate flex items-center gap-1">
-                          🐟 Fish S2
-                        </span>
-                        <Settings2 size={11} className={activeTtsEngine === "fish_audio" ? "text-[var(--color-accent)]" : "text-[var(--color-muted)]"} />
-                      </div>
-                      <div className="text-[9px] text-[var(--color-muted)] truncate w-full mt-0.5">
-                        {p.audio.fish_prompt ? p.audio.fish_prompt : `t: ${(p.audio.fish_temp ?? 0.8).toFixed(2)}${p.audio.fish_clean_ref !== false ? " • чистый" : ""}`}
                       </div>
                     </button>
 
@@ -8122,16 +8092,6 @@ function Editor() {
           onClose={() => setShowHiggsModal(false)}
         />
       )}
-      {showFishModal && (
-        <FishAudioModal
-          p={p}
-          onSave={async (settings) => {
-            await branch("tts_settings", settings);
-            setShowFishModal(false);
-          }}
-          onClose={() => setShowFishModal(false)}
-        />
-      )}
       {showVoxModal && (
         <VoxCPM2Modal
           p={p}
@@ -8593,234 +8553,6 @@ function HiggsAudioModal({
                 "Максимальный бюджет токенов на фразу. «Авто» адаптивно рассчитывает лимит по длине фразы."
               )}
             </div>
-          </div>
-        </div>
-
-        {/* Подвал */}
-        <div className="px-5 py-3 border-t border-[var(--color-border)]/70 bg-[var(--color-surface-2)]/30 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
-          >
-            {t("common.cancel", "Отмена")}
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving}
-            className="px-4 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity shadow-sm flex items-center gap-1.5 disabled:opacity-50"
-          >
-            {saving ? <Loader2 size={13} className="animate-spin" /> : null}
-            <span>{t("common.save", "Сохранить")}</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Модальное окно настроек Fish Audio S2 Pro
-function FishAudioModal({
-  p,
-  onSave,
-  onClose,
-}: {
-  p: Project;
-  onSave: (settings: {
-    fish_prompt: string;
-    fish_temp: number;
-    fish_clean_ref: boolean;
-    fish_seed: number | null;
-  }) => Promise<void>;
-  onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  const [prompt, setPrompt] = useState(p.audio.fish_prompt ?? "");
-  const [temp, setTemp] = useState<number>(p.audio.fish_temp ?? 0.8);
-  const [cleanRef, setCleanRef] = useState<boolean>(p.audio.fish_clean_ref ?? true);
-  const [seedFixed, setSeedFixed] = useState<boolean>(p.audio.fish_seed != null);
-  const [seed, setSeed] = useState<number>(p.audio.fish_seed ?? 42);
-  const [saving, setSaving] = useState(false);
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await onSave({
-        fish_prompt: prompt.trim(),
-        fish_temp: temp,
-        fish_clean_ref: cleanRef,
-        fish_seed: seedFixed ? seed : null,
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const generateSeed = () => {
-    setSeed(Math.floor(Math.random() * 1000000) + 1);
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="relative w-full max-w-lg flex flex-col rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-        {/* Шапка */}
-        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-border)]/70">
-          <div className="flex items-start gap-3">
-            <span className="text-2xl leading-none">🐟</span>
-            <div>
-              <h2 className="text-base font-semibold text-[var(--color-text)] leading-tight">
-                {t("voice.fishModalTitle", "Fish Audio S2 Pro")}
-              </h2>
-              <div className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-relaxed">
-                {t("voice.fishModalSubtitle", "Параметры синтеза и подавления акцента")}
-              </div>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
-          >
-            <X size={16} />
-          </button>
-        </div>
-
-        {/* Тело настроек */}
-        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-          {/* Глобальный промпт */}
-          <div>
-            <div className="flex items-center justify-between text-[11px] mb-1">
-              <label className="font-medium text-[var(--color-text)]">
-                {t("voice.fishPromptLabel", "Глобальный промпт стиля/акцента")}
-              </label>
-              {prompt ? (
-                <button
-                  type="button"
-                  onClick={() => setPrompt("")}
-                  className="text-[10px] text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"
-                >
-                  {t("common.clear", "Очистить")}
-                </button>
-              ) : null}
-            </div>
-            <input
-              type="text"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder={t("voice.fishPromptPlaceholder", "например: [ru], [Russian]...")}
-              className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-xs text-[var(--color-text)] placeholder-[var(--color-muted)]/60 focus:border-[var(--color-accent)] outline-none transition-colors"
-            />
-            <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-1">
-              {t("voice.fishPromptHint", "Задаёт языковую принадлежность и эмоциональные теги для Fish Audio. Оставьте пустым или укажите [ru] для чистой русской речи.")}
-            </div>
-          </div>
-
-          {/* Температура сэмплинга */}
-          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[var(--color-text)]">
-                {t("voice.fishTempLabel", "Температура сэмплинга")}
-              </span>
-              <div className="flex items-center gap-2">
-                {Math.abs(temp - 0.8) > 0.001 && (
-                  <button
-                    type="button"
-                    onClick={() => setTemp(0.8)}
-                    className="text-[10px] text-[var(--color-accent)] hover:underline"
-                  >
-                    {t("voice.fishTempReset", "Сбросить к 0.80")}
-                  </button>
-                )}
-                <span className="mono text-xs font-semibold px-2 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)]">
-                  {temp.toFixed(2)}
-                </span>
-              </div>
-            </div>
-            <input
-              type="range"
-              min={0.0}
-              max={2.0}
-              step={0.05}
-              value={temp}
-              onChange={(e) => setTemp(parseFloat(e.target.value))}
-              className="w-full accent-[var(--color-accent)] cursor-pointer"
-            />
-            <div className="text-[10px] text-[var(--color-muted)] leading-snug flex items-start justify-between gap-2">
-              <span>{t("voice.fishTempHint", "Дефолт модели: 0.80. Для устранения иностранного акцента на фразах рекомендуется снизить до 0.50.")}</span>
-              {Math.abs(temp - 0.5) > 0.001 && (
-                <button
-                  type="button"
-                  onClick={() => setTemp(0.5)}
-                  className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
-                  title="Установить 0.50"
-                >
-                  0.50
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Изоляция референса */}
-          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-1">
-            <label className="flex items-start gap-2.5 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={cleanRef}
-                onChange={(e) => setCleanRef(e.target.checked)}
-                className="mt-0.5 accent-[var(--color-accent)] w-4 h-4 rounded"
-              />
-              <div className="flex-1 min-w-0">
-                <span className="text-xs font-medium text-[var(--color-text)] block">
-                  {t("voice.fishCleanRefLabel", "Изолировать референс от иностранного текста")}
-                </span>
-                <span className="text-[10px] text-[var(--color-muted)] leading-snug block mt-0.5">
-                  {t("voice.fishCleanRefHint", "Передаёт чистый аудио-образец без исходного английского текста транскрипции. Устраняет проникновение английской фонетики и акцента.")}
-                </span>
-              </div>
-            </label>
-          </div>
-
-          {/* Фиксация сида */}
-          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[var(--color-text)]">
-                {seedFixed ? t("voice.seedFixed", "Зафиксировать сид") : t("voice.seedRandom", "Случайный сид")}
-              </span>
-              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[var(--color-muted)] select-none">
-                <input
-                  type="checkbox"
-                  checked={seedFixed}
-                  onChange={(e) => setSeedFixed(e.target.checked)}
-                  className="accent-[var(--color-accent)] w-3.5 h-3.5 rounded"
-                />
-                <span>{t("voice.seedFixed", "Зафиксировать сид")}</span>
-              </label>
-            </div>
-            {seedFixed ? (
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="number"
-                  min={0}
-                  max={2147483647}
-                  value={seed}
-                  onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
-                  className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-xs font-mono text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={generateSeed}
-                  className="px-2.5 py-1.5 rounded-lg text-xs bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors flex items-center gap-1 font-medium"
-                  title={t("voice.seedGenerate", "Сгенерировать случайный сид")}
-                >
-                  <span>🎲</span>
-                </button>
-              </div>
-            ) : (
-              <div className="text-[10px] text-[var(--color-muted)] leading-snug">
-                {t("voice.seedRandomHint", "Каждая генерация даёт уникальную интонацию")}
-              </div>
-            )}
           </div>
         </div>
 

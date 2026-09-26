@@ -42,10 +42,6 @@ mod tests {
     #[test]
     fn audio_tts_settings_defaults_and_roundtrips() {
         let p = Project::default();
-        assert_eq!(p.audio.fish_prompt, "");
-        assert_eq!(p.audio.fish_temp, 0.8);
-        assert_eq!(p.audio.fish_clean_ref, true);
-        assert_eq!(p.audio.fish_seed, None);
         assert_eq!(p.audio.vox_prompt, "");
         assert_eq!(p.audio.vox_steps, 20);
         assert_eq!(p.audio.vox_cfg, 1.6);
@@ -53,8 +49,6 @@ mod tests {
 
         let j = p.to_json().unwrap();
         let p2 = Project::from_json(&j).unwrap();
-        assert_eq!(p2.audio.fish_temp, 0.8);
-        assert_eq!(p2.audio.fish_clean_ref, true);
         assert_eq!(p2.audio.vox_steps, 20);
         assert_eq!(p2.audio.vox_cfg, 1.6);
     }

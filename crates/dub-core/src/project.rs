@@ -100,21 +100,9 @@ pub struct Audio {
     /// "real" (реальные лица) | "anime" (рисованные). Пусто = не определяли (юзер задал явно/кастинг выкл).
     #[serde(default)]
     pub content_type: String,
-    /// Глобальный промпт стиля/акцента речи для моделей VoxCPM2 и Fish Audio (например, "native Russian speaker").
+    /// Глобальный промпт стиля/акцента речи для VoxCPM2 (например, "native Russian speaker").
     #[serde(default)]
     pub voice_prompt: String,
-    /// Индивидуальный промпт стиля/акцента для Fish Audio S2 Pro (например, "[ru]").
-    #[serde(default)]
-    pub fish_prompt: String,
-    /// Температура сэмплинга Fish Audio (дефолт 0.8, диапазон 0.0 - 2.0).
-    #[serde(default = "default_fish_temp")]
-    pub fish_temp: f64,
-    /// Изолировать референс от иностранного текста транскрипции при синтезе Fish Audio (дефолт true).
-    #[serde(default = "default_true")]
-    pub fish_clean_ref: bool,
-    /// Фиксированный сид генерации Fish Audio (None = случайный сид).
-    #[serde(default)]
-    pub fish_seed: Option<u64>,
     /// Индивидуальный промпт манеры/стиля речи для VoxCPM2 (например, "slowly pace, calm tone").
     #[serde(default)]
     pub vox_prompt: String,
@@ -144,9 +132,6 @@ fn default_true() -> bool {
     true
 }
 
-fn default_fish_temp() -> f64 {
-    0.8
-}
 
 fn default_vox_steps() -> u32 {
     20
@@ -189,10 +174,6 @@ impl Default for Audio {
             container: default_container(),
             content_type: String::new(),
             voice_prompt: String::new(),
-            fish_prompt: String::new(),
-            fish_temp: default_fish_temp(),
-            fish_clean_ref: true,
-            fish_seed: None,
             vox_prompt: String::new(),
             vox_steps: default_vox_steps(),
             vox_cfg: default_vox_cfg(),

@@ -32,7 +32,6 @@ export type Project = {
   mode: string; tgt_lang: string;
   audio: {
     keep_music: boolean; voice: { mode: string; name?: string | null }; rewrite?: string | null; gain_db?: number; voice_gain_db?: number; music_gain_db?: number; voiceover_gain_db?: number; voiceover_duck?: string; dub_mix_mode?: string; translate_style?: string; keep_original_track?: boolean; container?: string; mix_dirty?: boolean; voice_prompt?: string;
-    fish_prompt?: string; fish_temp?: number; fish_clean_ref?: boolean; fish_seed?: number | null;
     vox_prompt?: string; vox_steps?: number; vox_cfg?: number; vox_seed?: number | null;
     higgs_temp?: number | null; higgs_seed?: number | null;
   };

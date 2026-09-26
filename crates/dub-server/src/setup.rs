@@ -270,42 +270,6 @@ pub fn manifest() -> Vec<Component> {
             external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
         },
         Component {
-            id: "fish_audio",
-            name: "Fish Audio S2 Pro (Q8_0, audio.cpp)",
-            purpose: "Выразительный синтез, клон голоса и инлайн-эмоции (44.1 кГц, 80+ языков)",
-            requirement: Requirement::Optional,
-            delivery: Delivery::Download,
-            size: 6_317_911_232,
-            files: &[
-                FileSpec {
-                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Fish-Audio-S2-Pro-GGUF/fish-audio-s2-pro-q8_0.gguf?download=true",
-                    dest_rel: "models/fish_audio/fish-audio-s2-pro-q8_0.gguf",
-                    size: 6_317_911_232,
-                    extract: Extract::None,
-                },
-            ],
-            markers: &[Marker { rel: "models/fish_audio/fish-audio-s2-pro-q8_0.gguf", expect: 6_317_911_232 }],
-            external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
-        },
-        Component {
-            id: "fish_audio-bf16",
-            name: "Fish Audio S2 Pro (BF16, audio.cpp)",
-            purpose: "Полноточная модель Fish Audio S2 Pro (максимальное качество)",
-            requirement: Requirement::Optional,
-            delivery: Delivery::Download,
-            size: 12_365_725_696,
-            files: &[
-                FileSpec {
-                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Fish-Audio-S2-Pro-GGUF/fish-audio-s2-pro-bf16.gguf?download=true",
-                    dest_rel: "models/fish_audio/fish-audio-s2-pro-bf16.gguf",
-                    size: 12_365_725_696,
-                    extract: Extract::None,
-                },
-            ],
-            markers: &[Marker { rel: "models/fish_audio/fish-audio-s2-pro-bf16.gguf", expect: 12_365_725_696 }],
-            external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
-        },
-        Component {
             id: "audiocpp-engine",
             name: "audio.cpp движок (audiocpp_server)",
             purpose: "Нативный C++ движок озвучки нового поколения (audio.cpp CUDA 13.3)",
@@ -939,8 +903,6 @@ fn vram_estimate(id: &str) -> u64 {
         "roformer-q4" => gb(0.4),
         "voxcpm2" => gb(3.2),
         "voxcpm2-bf16" => gb(5.0),
-        "fish_audio" => gb(7.5),
-        "fish_audio-bf16" => gb(13.0),
         _ => 0,
     }
 }
