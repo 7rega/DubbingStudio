@@ -1665,21 +1665,21 @@ fn build_dub(
                     let out = wd.join(format!("ref_donor_{sid}.wav"));
                     let cap = paths.ref_secs.min(REF_IDEAL_HI).max(1.0);
 
-                    // 1. Проверяем, есть ли уже озвученная русская фраза-донор
+                    // 1. Проверяем, есть ли уже озвученная русская фраза-донор (приоритет чистого donor_raw без сжатия)
                     let donor_sid = crate::segment_cache::audio_key(&ds);
-                    let donor_fit = wd.join(format!("seg_{donor_sid}_fit.wav"));
                     let donor_raw = wd.join(format!("seg_{donor_sid}.wav"));
-                    let donor_wav = if donor_fit.is_file() {
-                        Some(donor_fit)
-                    } else if donor_raw.is_file() {
+                    let donor_fit = wd.join(format!("seg_{donor_sid}_fit.wav"));
+                    let donor_wav = if donor_raw.is_file() {
                         Some(donor_raw)
+                    } else if donor_fit.is_file() {
+                        Some(donor_fit)
                     } else {
-                        let direct_fit = wd.join(format!("seg_{}_fit.wav", ds.id));
                         let direct_raw = wd.join(format!("seg_{}.wav", ds.id));
-                        if direct_fit.is_file() {
-                            Some(direct_fit)
-                        } else if direct_raw.is_file() {
+                        let direct_fit = wd.join(format!("seg_{}_fit.wav", ds.id));
+                        if direct_raw.is_file() {
                             Some(direct_raw)
+                        } else if direct_fit.is_file() {
+                            Some(direct_fit)
                         } else {
                             None
                         }
@@ -1692,14 +1692,10 @@ fn build_dub(
                         let trim_ok = media::trim(dwav, &out, 0.0, trim_end, 16_000).is_ok();
                         if trim_ok && out.is_file() {
                             let _ = media::align_wav_to_codec_frames(&out);
-                            let t = ds.tgt_text.trim();
-                            let text = if !t.is_empty() {
-                                Some(t.to_string())
-                            } else {
-                                let st = ds.src_text.trim();
-                                if !st.is_empty() { Some(st.to_string()) } else { None }
-                            };
-                            Some((out, text))
+                            // Для донора передаём только акустику без текста (Audio-Only In-Context Prompting).
+                            // Экспериментально доказано, что передача чужого текста референса ломает интонацию
+                            // и проглатывает окончания целевой фразы (в то время как Audio-Only даёт идеальное произношение).
+                            Some((out, None))
                         } else {
                             None
                         }
@@ -1713,8 +1709,7 @@ fn build_dub(
                         };
                         if trim_ok && out.is_file() {
                             let _ = media::align_wav_to_codec_frames(&out);
-                            let t = ds.src_text.trim();
-                            Some((out, if t.is_empty() { None } else { Some(t.to_string()) }))
+                            Some((out, None))
                         } else {
                             None
                         }

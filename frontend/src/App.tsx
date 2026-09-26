@@ -4824,23 +4824,13 @@ function Editor() {
 
   const [editorTab, setEditorTab] = useState<"subs" | "gen">("subs");
   const [duckOn, setDuckOn] = useState(false);
-  const [voiceManualCtrl, setVoiceManualCtrl] = useState(false);
-  const [voiceTemp, setVoiceTemp] = useState(0.20);
-  const [voiceTempDraft, setVoiceTempDraft] = useState<number | null>(null);
   const [autoCastBusy, setAutoCastBusy] = useState(false);
   const autoCastOn = useStore((s) => s.autoCastOn);
   const [activeTtsEngine, setActiveTtsEngine] = useState<string>("higgs");
-  const [higgsExecution, setHiggsExecution] = useState<string>("server");
   useEffect(() => {
     api.capabilities().then((c) => {
       setDuckOn(c.selection?.duck_on === "1");
-      setVoiceManualCtrl(c.selection?.voice_manual_ctrl === "1");
       if (c.selection?.tts_engine) setActiveTtsEngine(c.selection.tts_engine);
-      if (c.selection?.higgs_execution) setHiggsExecution(c.selection.higgs_execution);
-      if (c.selection?.voice_temp) {
-        const vt = parseFloat(c.selection.voice_temp);
-        if (!isNaN(vt) && vt >= 0.05 && vt <= 2.00) setVoiceTemp(vt);
-      }
     }).catch(() => {});
   }, [editorTab]);
   const setDuckSaved = (v: boolean) => { setDuckOn(v); api.setSelection("duck_on", v ? "1" : "0").catch(() => {}); };
@@ -7654,70 +7644,6 @@ function Editor() {
                   </div>
                 )}
 
-                <div className="pt-2">
-                  <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none" title={t("voice.manualCtrlHint")}>
-                    <input
-                      type="checkbox"
-                      checked={voiceManualCtrl}
-                      onChange={async (e) => {
-                        const val = e.target.checked;
-                        setVoiceManualCtrl(val);
-                        await api.setSelection("voice_manual_ctrl", val ? "1" : "0");
-                      }}
-                      className="accent-[var(--color-accent)] w-3.5 h-3.5"
-                    />
-                    <span className="text-[var(--color-text)] font-medium">{t("voice.manualCtrl")}</span>
-                  </label>
-                  <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.manualCtrlHint")}</div>
-                </div>
-
-                {voiceManualCtrl && (() => {
-                  const isHighTemp = activeTtsEngine === "fish_audio" || (activeTtsEngine === "higgs" && higgsExecution !== "dll");
-                  const sMin = 0.10;
-                  const sMax = isHighTemp ? 1.50 : 0.50;
-                  const sStep = isHighTemp ? 0.05 : 0.02;
-                  const curVal = voiceTempDraft ?? voiceTemp;
-                  const desc = isHighTemp
-                    ? curVal < 0.65
-                      ? `(${t("voice.monolithic", "собранно")})`
-                      : curVal > 0.90
-                      ? `(${t("voice.lively", "экспрессивно")})`
-                      : `(${t("voice.balanced", "сбалансированно")})`
-                    : curVal <= 0.16
-                    ? `(${t("voice.monolithic", "монолитно")})`
-                    : curVal >= 0.28
-                    ? `(${t("voice.lively", "выразительно")})`
-                    : `(${t("voice.balanced", "сбалансированно")})`;
-                  return (
-                    <div className="pl-3 py-1 space-y-2 border-l-2 border-[var(--color-accent)]/40 mt-1">
-                      <div>
-                        <div className="flex items-center justify-between text-[11px] mb-1">
-                          <span className="text-[var(--color-muted)]">{t("voice.stability")}</span>
-                          <span className="mono text-[11px] text-[var(--color-text)]">
-                            {curVal.toFixed(2)} {desc}
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={sMin}
-                          max={sMax}
-                          step={sStep}
-                          value={curVal}
-                          onChange={(e) => setVoiceTempDraft(parseFloat(e.target.value))}
-                          onPointerUp={async () => {
-                            if (voiceTempDraft != null) {
-                              setVoiceTemp(voiceTempDraft);
-                              await api.setSelection("voice_temp", voiceTempDraft.toFixed(2));
-                              setVoiceTempDraft(null);
-                            }
-                          }}
-                          className="w-full accent-[var(--color-accent)]"
-                        />
-                        <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.stabilityHint")}</div>
-                      </div>
-                    </div>
-                  );
-                })()}
 
                 <button onClick={doRegenAll} disabled={regenId !== null} title={t("voice.regenAll")}
                   className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">

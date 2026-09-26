@@ -1204,9 +1204,11 @@ pub fn trim_smart_ref(
     Ok((abs_start, abs_end))
 }
 
-/// Выравнивает количество сэмплов в mono 16kHz WAV-файле до целого числа фреймов (кратного 640 сэмплам / 40мс).
+/// Выравнивает количество сэмплов в mono 16kHz WAV-файле до целого числа фреймов (кратного 640 сэмплам / 40мс)
+/// и гарантирует безопасную минимальную длину клипа (не менее 1.52 сек = 38 * 640 = 24320 сэмплов @ 16kHz).
 /// Это критически важно для нейросетевых TTS (в т.ч. Higgs Audio v3 / audio.cpp), где акустический (24kHz, hop=960)
-/// и семантический (16kHz, hop=640) энкодеры должны иметь строго равное число фреймов.
+/// и семантический (16kHz, hop=640) энкодеры должны иметь строго равное число фреймов. На клипах короче ~1.0 сек
+/// (< 15440 сэмплов) сверточные слои в audio.cpp расходятся на 1 фрейм из-за краевых эффектов, вызывая ошибку 500.
 pub fn align_wav_to_codec_frames(wav_path: &Path) -> Result<(), String> {
     let (mut samples, sr) = match crate::wavio::read_mono_f32(wav_path) {
         Ok((s, sr)) => (s, sr),
@@ -1215,14 +1217,22 @@ pub fn align_wav_to_codec_frames(wav_path: &Path) -> Result<(), String> {
     if sr != 16_000 || samples.is_empty() {
         return Ok(());
     }
+    let initial_len = samples.len();
     let frame_samples = 640; // 40мс @ 16kHz
+    let min_samples = 25 * frame_samples; // 16000 сэмплов (1.00 сек, 25 фреймов @ 16kHz)
+
+    // Если клип короче минимального порога энкодеров (1.00 сек), дополняем его чистой тишиной (нулями).
+    // Это гарантирует совпадение числа фреймов в audio.cpp (25 == 25) без дублирования слов речи и искажения контекста.
+    if samples.len() < min_samples {
+        samples.resize(min_samples, 0.0);
+    }
+
     let rem = samples.len() % frame_samples;
     if rem != 0 {
-        if samples.len() > frame_samples {
-            samples.truncate(samples.len() - rem);
-        } else {
-            samples.resize(frame_samples, 0.0);
-        }
+        samples.truncate(samples.len() - rem);
+    }
+
+    if samples.len() != initial_len {
         let spec = hound::WavSpec {
             channels: 1,
             sample_rate: 16_000,
@@ -1419,7 +1429,7 @@ mod iso639_tests {
 
 #[cfg(test)]
 mod pause_squeeze_tests {
-    use super::{find_smart_ref_bounds, squeeze_internal_pauses};
+    use super::*;
 
     #[test]
     fn squeezes_internal_long_pauses_only() {
@@ -1506,6 +1516,54 @@ mod pause_squeeze_tests {
         let (t_start, t_end) = find_smart_ref_bounds(&samples, sr, 6.0);
         assert_eq!(t_start, 0.0);
         assert!((t_end - 2.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn test_align_wav_to_codec_frames() {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        // 1. Короткий файл 14080 сэмплов (0.88с) -> должен расшириться тишиной до 16000 (25 фреймов @ 640)
+        let tmp1 = std::env::temp_dir().join(format!("test_align_short_{}.wav", std::process::id()));
+        {
+            let mut writer = hound::WavWriter::create(&tmp1, spec).unwrap();
+            for _ in 0..14080 {
+                writer.write_sample(1000i16).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+        align_wav_to_codec_frames(&tmp1).unwrap();
+        {
+            let (samples, sr) = crate::wavio::read_mono_f32(&tmp1).unwrap();
+            assert_eq!(sr, 16_000);
+            assert_eq!(samples.len(), 16000);
+            assert_eq!(samples.len() % 640, 0);
+            // Проверяем сохранность исходных сэмплов и тишину в хвосте
+            assert!((samples[0] - (1000.0 / 32768.0)).abs() < 1e-4);
+            assert_eq!(samples[15000], 0.0);
+        }
+        let _ = std::fs::remove_file(&tmp1);
+
+        // 2. Длинный файл 30100 сэмплов -> должен усечься до 30080 (кратного 640)
+        let tmp2 = std::env::temp_dir().join(format!("test_align_long_{}.wav", std::process::id()));
+        {
+            let mut writer = hound::WavWriter::create(&tmp2, spec).unwrap();
+            for _ in 0..30100 {
+                writer.write_sample(1000i16).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+        align_wav_to_codec_frames(&tmp2).unwrap();
+        {
+            let (samples, sr) = crate::wavio::read_mono_f32(&tmp2).unwrap();
+            assert_eq!(sr, 16_000);
+            assert_eq!(samples.len(), 30080);
+            assert_eq!(samples.len() % 640, 0);
+        }
+        let _ = std::fs::remove_file(&tmp2);
     }
 }
 
