@@ -33,8 +33,8 @@ pub fn set_selection(mroot: &Path, engine: &str, variant: &str) -> std::io::Resu
     std::fs::rename(&tmp, mroot.join("active.json"))
 }
 
-fn pick<'a>(sel: &'a Value, engine: &str) -> Option<&'a str> {
-    sel.get(engine).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+pub fn pick<'a>(sel: &'a Value, key: &str) -> Option<&'a str> {
+    sel.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
 }
 
 /// Отобразить id компонента манифеста -> список (slot, значение) для записи выбора при скачивании.
@@ -43,9 +43,13 @@ fn pick<'a>(sel: &'a Value, engine: &str) -> Option<&'a str> {
 /// чтобы скачивание Whisper-модели сразу делало Whisper активным движком (и наоборот для Parakeet).
 pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
     match id {
-        "higgs" => vec![("tts", "q8_0".into())],
-        "higgs-q6_k" => vec![("tts", "q6_k".into())],
-        "higgs-q4_k_m" => vec![("tts", "q4_k_m".into())],
+        "higgs" => vec![("tts_engine", "higgs".into()), ("tts", "q8_0".into())],
+        "higgs-q6_k" => vec![("tts_engine", "higgs".into()), ("tts", "q6_k".into())],
+        "higgs-q4_k_m" => vec![("tts_engine", "higgs".into()), ("tts", "q4_k_m".into())],
+        "voxcpm2" => vec![("tts_engine", "voxcpm2".into()), ("tts", "q8_0".into())],
+        "voxcpm2-bf16" => vec![("tts_engine", "voxcpm2".into()), ("tts", "bf16".into())],
+        "fish_audio" => vec![("tts_engine", "fish_audio".into()), ("tts", "q8_0".into())],
+        "fish_audio-bf16" => vec![("tts_engine", "fish_audio".into()), ("tts", "bf16".into())],
         "parakeet" => vec![("asr_engine", "parakeet".into()), ("asr", "int8".into())],
         "parakeet-fp32" => vec![("asr_engine", "parakeet".into()), ("asr", "fp32".into())],
         "whisper-tiny" => vec![("asr_engine", "whisper".into()), ("whisper_model", "tiny".into())],
@@ -74,7 +78,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
 pub fn is_selection_key(key: &str) -> bool {
     matches!(
         key,
-        "tts" | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device" | "whisper_executable" | "whisper_xxl_args"
+        "tts" | "tts_engine" | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device" | "whisper_executable" | "whisper_xxl_args"
             // Backend КАЖДОЙ локальной стадии независимо (auto|gpu|cpu): любой движок на любой инстанс.
             // gpu = CUDA, cpu = без NVIDIA. sep=сепарация(BSRoformer CUDA/CPU-сборка), diar=диаризация
             // (Sortformer onnx CUDA-EP/CPU), asr=локальный ASR (Parakeet onnx / Whisper CTranslate2).
@@ -502,6 +506,29 @@ pub fn build_engine(choice: &AsrChoice) -> Box<dyn dub_asr::AsrEngine> {
             Box::new(dub_asr::WhisperAsr::new(bin, model_dir, model, compute, device, xxl_args.clone()))
         }
     }
+}
+
+/// Выбранный TTS-движок: "higgs" (дефолт), "voxcpm2" или "fish_audio".
+pub fn resolve_tts_engine(sel: &Value) -> &'static str {
+    match pick(sel, "tts_engine") {
+        Some("voxcpm2") => "voxcpm2",
+        Some("fish_audio") => "fish_audio",
+        _ => "higgs",
+    }
+}
+
+/// VoxCPM2 TTS: models/voxcpm2/voxcpm2-{q8_0,bf16}.gguf. Возврат (путь к .gguf, квант).
+pub fn resolve_voxcpm2(mroot: &Path, sel: &Value) -> Option<(PathBuf, String)> {
+    let quant = pick(sel, "tts").unwrap_or("q8_0");
+    let model_path = audiocpp::resolve_voxcpm2_path(mroot, quant)?;
+    Some((model_path, quant.to_string()))
+}
+
+/// Fish Audio S2 Pro TTS: models/fish_audio/fish-audio-s2-pro-{q8_0,bf16}.gguf. Возврат (путь к .gguf, квант).
+pub fn resolve_fish_audio(mroot: &Path, sel: &Value) -> Option<(PathBuf, String)> {
+    let quant = pick(sel, "tts").unwrap_or("q8_0");
+    let model_path = audiocpp::resolve_fish_audio_path(mroot, quant)?;
+    Some((model_path, quant.to_string()))
 }
 
 /// Higgs TTS: папки higgs-{q8_0,q6_k,q4_k_m}, внутри файл {q}.gguf. Возврат (каталог, квант-строка

@@ -21,6 +21,9 @@ Cargo.status
 
 # Application / Runtime Models & Cache (large files, downloaded on first run)
 /models/
+/tools/audiocpp/
+/tools/llama/
+/tools/ffmpeg/
 /webview-data/
 /workspace/
 /temp/

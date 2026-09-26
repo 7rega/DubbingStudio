@@ -60,6 +60,8 @@ function LanguageSwitcher() {
 // резолвится при генерации.
 const VARIANT_SLOT: Record<string, [string, string]> = {
   higgs: ["tts", "q8_0"], "higgs-q6_k": ["tts", "q6_k"], "higgs-q4_k_m": ["tts", "q4_k_m"],
+  voxcpm2: ["tts", "q8_0"], "voxcpm2-bf16": ["tts", "bf16"],
+  fish_audio: ["tts", "q8_0"], "fish_audio-bf16": ["tts", "bf16"],
   parakeet: ["asr", "int8"], "parakeet-fp32": ["asr", "fp32"],
   gemma: ["mt", "q4_0"], "gemma-q5_0": ["mt", "q5_0"], "gemma-q6_k": ["mt", "q6_k"], "gemma-q8_0": ["mt", "q8_0"],
   roformer: ["sep", "Q8_0"], "roformer-q5": ["sep", "Q5_0"], "roformer-q4": ["sep", "Q4_0"],
@@ -191,7 +193,7 @@ function ModelsSection() {
     const pick = picks[ids[0]] ?? activeVariantId(ids, sel) ?? installed?.id ?? variants[0]?.id ?? "";
     const c = get(pick);
     if (!c) return null;
-    const quant = (v: SetupComponent) => (v.name.match(/\b(q\d[\w]*|int8|fp32|f16|large-v3-turbo|large-v3|tiny|base|small|medium)\b/i)?.[1] ?? v.name);
+    const quant = (v: SetupComponent) => (v.name.match(/\b(q\d[\w]*|int8|fp32|bf16|f16|large-v3-turbo|large-v3|tiny|base|small|medium)\b/i)?.[1] ?? v.name);
     const active = prog?.id === c.id;
     return (
       <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
@@ -277,7 +279,37 @@ function ModelsSection() {
         </div>
       )}
       <Group label={t("settings.roleTts")}>
-        <EngineTabs cloud={selv("or_tts_on") === "1"} localLabel="Higgs Audio v3" onLocal={() => setSel("or_tts_on", "0")} onCloud={() => setSel("or_tts_on", "1")} />
+        <div className="flex gap-1 mb-1.5">
+          {[
+            { id: "higgs", label: "Higgs Audio v3", cloud: false },
+            { id: "voxcpm2", label: "VoxCPM2", cloud: false },
+            { id: "fish_audio", label: "Fish Audio S2", cloud: false },
+            { id: "openrouter", label: "OpenRouter", cloud: true },
+          ].map((e) => {
+            const ttsCloud = selv("or_tts_on") === "1";
+            const currentTtsEngine = selv("tts_engine") || "higgs";
+            const active = e.cloud ? ttsCloud : (!ttsCloud && currentTtsEngine === e.id);
+            const dis = e.cloud && !hasOrKey;
+            return (
+              <button
+                key={e.id}
+                disabled={dis}
+                title={dis ? "Введите ключ OpenRouter ниже (Облачные настройки)" : ""}
+                onClick={() => {
+                  if (e.cloud) {
+                    setSel("or_tts_on", "1");
+                  } else {
+                    setSel("or_tts_on", "0");
+                    setSel("tts_engine", e.id);
+                  }
+                }}
+                className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${active ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"} disabled:opacity-40`}
+              >
+                {e.label}
+              </button>
+            );
+          })}
+        </div>
         {selv("or_tts_on") === "1" ? (
           <div className={`${orRowCls} space-y-2`}>
             <OrModelSelect kind="tts" k="or_tts_model" empty="— выбрать TTS-модель —" />
@@ -299,6 +331,16 @@ function ModelsSection() {
               </select>
             )}
           </div>
+        ) : (selv("tts_engine") === "voxcpm2") ? (
+          <>
+            <VariantPicker base="VoxCPM2 (audio.cpp)" ids={["voxcpm2", "voxcpm2-bf16"]} />
+            {rowOf("audiocpp-engine")}
+          </>
+        ) : (selv("tts_engine") === "fish_audio") ? (
+          <>
+            <VariantPicker base="Fish Audio S2 Pro (audio.cpp)" ids={["fish_audio", "fish_audio-bf16"]} />
+            {rowOf("audiocpp-engine")}
+          </>
         ) : (
           <>
             <VariantPicker base="Higgs Audio v3" ids={["higgs", "higgs-q6_k", "higgs-q4_k_m"]} />

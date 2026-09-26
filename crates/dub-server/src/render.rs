@@ -11,7 +11,7 @@
 //! не-dirty переиспользуются, dirty пере-синтезируются (улучшение против питон-_regen_dub, что гнал
 //! весь дубляж заново — правка #10). tgt-текст пустой -> сегмент молчит (как в питоне).
 
-use audiocpp::AudiocppEngine;
+use audiocpp::{AudiocppEngine, AudiocppServer, AudiocppServerOpts};
 use dub_captions::{BlurBox, Sub, SubStyle as CapSubStyle, Title as CapTitle};
 use dub_core::{Project, SubStyle as CoreSubStyle, Title as CoreTitle};
 use serde_json::{json, Value};
@@ -79,6 +79,12 @@ pub struct RenderPaths {
     pub ref_secs: f64,         // длина реф-клипа клона голоса, сек (настройка «Экономия RAM», дефолт 12.0)
     pub models_root: PathBuf,  // каталог моделей (active.json) — читаем настройки облачного TTS OpenRouter
     pub tts_cache: Arc<Mutex<Option<(EngineKey, Arc<AudiocppEngine>)>>>,
+    pub audiocpp_bin: PathBuf, // путь к audiocpp_server(.exe)
+    pub voxcpm2_dir: PathBuf,  // каталог моделей voxcpm2
+    pub fish_audio_dir: PathBuf, // каталог моделей fish_audio
+    pub tts_engine: String,    // "higgs" | "voxcpm2" | "fish_audio"
+    pub voxcpm2_quant: String, // "q8_0" | "bf16"
+    pub fish_audio_quant: String, // "q8_0" | "bf16"
 }
 
 pub type Progress<'a> = dyn Fn(Value) + Send + Sync + 'a;
@@ -1026,14 +1032,69 @@ fn build_dub(
         }
     };
 
-    // 4) TTS каждый сегмент через Higgs (audiocpp).
-    // Облачный TTS (OpenRouter) вместо локального Higgs: тяжёлую DLL + модель НЕ грузим вовсе — в этом и
+    // 4) TTS каждый сегмент через Higgs (audiocpp) или VoxCPM2 (audio.cpp).
+    // Облачный TTS (OpenRouter) вместо локального: тяжёлую DLL + модель НЕ грузим вовсе — в этом и
     // смысл (снять самую тяжёлую часть). engine=None; синтез идёт по облачной ветке ниже.
     let cloud_tts_on = crate::models::openrouter_stage_on(&paths.models_root, "tts");
+    let is_audiocpp_tts = paths.tts_engine == "voxcpm2" || paths.tts_engine == "fish_audio";
+
+    let mut vox_server: Option<AudiocppServer> = None;
     let engine: Option<Arc<AudiocppEngine>> = if dirty_count == 0 {
         None
     } else if cloud_tts_on {
-        emit(progress, "tts", "TTS через облако (OpenRouter) — локальный Higgs не загружаем");
+        emit(progress, "tts", "TTS через облако (OpenRouter) — локальные движки не загружаем");
+        None
+    } else if is_audiocpp_tts {
+        let is_fish = paths.tts_engine == "fish_audio";
+        let engine_name = if is_fish { "Fish Audio S2 Pro" } else { "VoxCPM2" };
+        emit(progress, "tts", &format!("{engine_name} TTS: инициализация аудио-сервера audio.cpp..."));
+        *paths.tts_cache.lock().unwrap() = None;
+
+        let (model_path, model_family, model_id) = if is_fish {
+            let p = audiocpp::resolve_fish_audio_path(&paths.fish_audio_dir, &paths.fish_audio_quant)
+                .or_else(|| audiocpp::resolve_fish_audio_path(&paths.models_root, &paths.fish_audio_quant))
+                .ok_or_else(|| {
+                    format!(
+                        "Модель Fish Audio ({}) не найдена в {} или {}",
+                        paths.fish_audio_quant,
+                        paths.fish_audio_dir.display(),
+                        paths.models_root.display()
+                    )
+                })?;
+            (p, "fish_audio".to_string(), "fish_audio".to_string())
+        } else {
+            let p = audiocpp::resolve_voxcpm2_path(&paths.voxcpm2_dir, &paths.voxcpm2_quant)
+                .or_else(|| audiocpp::resolve_voxcpm2_path(&paths.models_root, &paths.voxcpm2_quant))
+                .ok_or_else(|| {
+                    format!(
+                        "Модель VoxCPM2 ({}) не найдена в {} или {}",
+                        paths.voxcpm2_quant,
+                        paths.voxcpm2_dir.display(),
+                        paths.models_root.display()
+                    )
+                })?;
+            (p, "voxcpm2".to_string(), "voxcpm2".to_string())
+        };
+
+        let audiocpp_bin = if paths.audiocpp_bin.is_file() {
+            paths.audiocpp_bin.clone()
+        } else {
+            let tools_audiocpp = paths.audiocpp_bin.parent().unwrap_or(&paths.models_root);
+            audiocpp::resolve_audiocpp_bin(tools_audiocpp)
+        };
+
+        let mut opts = AudiocppServerOpts::new(&audiocpp_bin, &model_path);
+        opts.model_family = model_family;
+        opts.model_id = model_id;
+        opts.backend = paths.higgs_backend.clone();
+        opts.device = paths.higgs_device;
+        opts.threads = paths.higgs_threads;
+        opts.ready_timeout_secs = 60;
+
+        emit(progress, "tts", &format!("{engine_name} TTS: запуск audiocpp_server с моделью {}...", model_path.file_name().unwrap_or_default().to_string_lossy()));
+        let srv = AudiocppServer::start(opts)
+            .map_err(|e| format!("Сбой запуска audiocpp_server: {e}"))?;
+        vox_server = Some(srv);
         None
     } else {
         let key = EngineKey {
@@ -1575,43 +1636,81 @@ fn build_dub(
                 // минуты, так что порог чисто разделяет. Ошибка/таймаут -> как дефект (ретрай стохастику
                 // обычно лечит); исчерпали попытки -> ОРИГИНАЛ (сегмент дороже потерять, чем зависший рендер).
                 let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(min_timeout_secs));
-                let eng = engine.as_ref().expect("локальный Higgs (не облако)");
-                let (samples, sr) = match voice_clone_guarded(eng, tgt, &rw.to_string_lossy(), rt, &opts, vc_to) {
-                    Ok(v) => v,
-                    Err(e) if e.starts_with(ENGINE_STUCK) => {
-                        emit(progress, "tts", &format!(
-                            "⚠ фраза #{}: {} — оставлена оригинальная реплика, синтез оставшихся фраз пропущен",
-                            fi + 1, e
-                        ));
-                        *paths.tts_cache.lock().unwrap() = None;
-                        engine_dead = true;
-                        media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
-                        kept_original = true;
-                        break (Vec::new(), 24_000);
-                    }
-                    Err(e) => {
-                        retried = true;
-                        total_retries += 1;
-                        if attempt >= MAX_TTS_ATTEMPTS {
-                            if let Some((sm, r, rng)) = best_bad.take() {
-                                emit(progress, "tts", &format!(
-                                    "⚠ фраза #{}: {MAX_TTS_ATTEMPTS} сбоев синтеза ({e}) — взята сгенерированная озвучка (размах {rng:.0} дБ)",
-                                    fi + 1
-                                ));
-                                break (sm, r);
-                            } else {
-                                media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
-                                kept_original = true;
-                                emit(progress, "tts", &format!(
-                                    "⚠ фраза #{}: {MAX_TTS_ATTEMPTS} сбоев/таймаутов синтеза ({e}) — оставлена оригинальная реплика",
-                                    fi + 1
-                                ));
-                                break (Vec::new(), 24_000);
+                let (samples, sr) = if let Some(ref vox) = vox_server {
+                    let speed = if paths.tts_engine != "voxcpm2" && speech_rate_on && rate_ratio > 0.5 && rate_ratio < 2.0 {
+                        Some(rate_ratio as f32)
+                    } else {
+                        None
+                    };
+                    let vr = if rw.is_file() { Some(rw.as_path()) } else { None };
+                    let model_id = if paths.tts_engine == "fish_audio" { "fish_audio" } else { "voxcpm2" };
+                    let clean_tgt = strip_higgs_tags(tgt);
+                    match vox.client().speech_pcm(model_id, &clean_tgt, vr, rt, speed) {
+                        Ok((smp, r, _)) => (smp, r),
+                        Err(e) => {
+                            retried = true;
+                            total_retries += 1;
+                            if attempt >= MAX_TTS_ATTEMPTS {
+                                if let Some((sm, r, rng)) = best_bad.take() {
+                                    emit(progress, "tts", &format!(
+                                        "⚠ фраза #{}: {MAX_TTS_ATTEMPTS} сбоев синтеза ({e}) — взята сгенерированная озвучка (размах {rng:.0} дБ)",
+                                        fi + 1
+                                    ));
+                                    break (sm, r);
+                                } else {
+                                    media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
+                                    kept_original = true;
+                                    emit(progress, "tts", &format!(
+                                        "⚠ фраза #{}: {MAX_TTS_ATTEMPTS} сбоев синтеза ({e}) — оставлена оригинальная реплика",
+                                        fi + 1
+                                    ));
+                                    break (Vec::new(), 24_000);
+                                }
                             }
+                            emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (фраза #{}) — {e} (попытка {}/{})", fi + 1, attempt + 1, MAX_TTS_ATTEMPTS));
+                            std::thread::sleep(Duration::from_millis(1000));
+                            continue;
                         }
-                        emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (фраза #{}) — {e} (попытка {}/{})", fi + 1, attempt + 1, MAX_TTS_ATTEMPTS));
-                        std::thread::sleep(Duration::from_millis(1000));
-                        continue;
+                    }
+                } else {
+                    let eng = engine.as_ref().expect("локальный Higgs (не облако)");
+                    match voice_clone_guarded(eng, tgt, &rw.to_string_lossy(), rt, &opts, vc_to) {
+                        Ok(v) => v,
+                        Err(e) if e.starts_with(ENGINE_STUCK) => {
+                            emit(progress, "tts", &format!(
+                                "⚠ фраза #{}: {} — оставлена оригинальная реплика, синтез оставшихся фраз пропущен",
+                                fi + 1, e
+                            ));
+                            *paths.tts_cache.lock().unwrap() = None;
+                            engine_dead = true;
+                            media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
+                            kept_original = true;
+                            break (Vec::new(), 24_000);
+                        }
+                        Err(e) => {
+                            retried = true;
+                            total_retries += 1;
+                            if attempt >= MAX_TTS_ATTEMPTS {
+                                if let Some((sm, r, rng)) = best_bad.take() {
+                                    emit(progress, "tts", &format!(
+                                        "⚠ фраза #{}: {MAX_TTS_ATTEMPTS} сбоев синтеза ({e}) — взята сгенерированная озвучка (размах {rng:.0} дБ)",
+                                        fi + 1
+                                    ));
+                                    break (sm, r);
+                                } else {
+                                    media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
+                                    kept_original = true;
+                                    emit(progress, "tts", &format!(
+                                        "⚠ фраза #{}: {MAX_TTS_ATTEMPTS} сбоев/таймаутов синтеза ({e}) — оставлена оригинальная реплика",
+                                        fi + 1
+                                    ));
+                                    break (Vec::new(), 24_000);
+                                }
+                            }
+                            emit(progress, "tts", &format!("озвучка фраз: {synth_counter} из {dirty_total} (фраза #{}) — {e} (попытка {}/{})", fi + 1, attempt + 1, MAX_TTS_ATTEMPTS));
+                            std::thread::sleep(Duration::from_millis(1000));
+                            continue;
+                        }
                     }
                 };
                 match synth_defect(&samples, sr, tgt_chars) {
@@ -1698,7 +1797,7 @@ fn build_dub(
         let room = (nxt - at).max(0.3);
 
         // ── MULTI-TAKE: адаптивный отбор дублей ──
-        if multitake_on && need_synth && !kept_original && !cloud_tts_on && engine.is_some() {
+        if multitake_on && need_synth && !kept_original && !cloud_tts_on && (engine.is_some() || vox_server.is_some()) {
             let raw_dur = media::duration(&raw).unwrap_or(0.0);
             let target = if speech_rate_on { ((s.end - s.start) - lead_in).max(0.3) } else { room };
             let tgt = s.tgt_text.trim();
@@ -1743,32 +1842,47 @@ fn build_dub(
                     );
                     let rt_mt = ref_text_mt.as_deref();
                     let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(min_timeout_secs));
-                    let eng = engine.as_ref().unwrap();
-                    match voice_clone_guarded(eng, tgt, &ref_wav_mt.to_string_lossy(), rt_mt, &opts, vc_to) {
-                        Ok((samples, sr)) => {
-                            if synth_defect(&samples, sr, count_speech_chars(tgt)).is_none() {
-                                let wav = AudiocppEngine::encode_wav(&samples, sr, 1);
-                                let _ = std::fs::write(&take_path, &wav);
-                                if let Ok(td) = media::duration(&take_path) {
-                                    let score = (td - target).abs();
-                                    if score < best_score {
-                                        best_score = score;
-                                        best_path = take_path.clone();
-                                    }
-                                }
+                    let (samples, sr) = if let Some(ref vox) = vox_server {
+                        let speed = if paths.tts_engine != "voxcpm2" {
+                            if take_i == 1 { Some(1.05) } else { Some(0.95) }
+                        } else {
+                            None
+                        };
+                        let vr = if ref_wav_mt.is_file() { Some(ref_wav_mt.as_path()) } else { None };
+                        let model_id = if paths.tts_engine == "fish_audio" { "fish_audio" } else { "voxcpm2" };
+                        let clean_tgt = strip_higgs_tags(tgt);
+                        match vox.client().speech_pcm(model_id, &clean_tgt, vr, ref_text_mt.as_deref(), speed) {
+                            Ok((s, r, _)) => (s, r),
+                            Err(_) => continue,
+                        }
+                    } else {
+                        let eng = engine.as_ref().unwrap();
+                        match voice_clone_guarded(eng, tgt, &ref_wav_mt.to_string_lossy(), rt_mt, &opts, vc_to) {
+                            Ok(v) => v,
+                            Err(e) if e.starts_with(ENGINE_STUCK) => {
+                                emit(progress, "tts", &format!(
+                                    "⚠ фраза #{}: multi-take — {e}, пропуск доп. дублей",
+                                    fi + 1
+                                ));
+                                *paths.tts_cache.lock().unwrap() = None;
+                                engine_dead = true;
+                                break; // первый дубль (raw) уже на диске
+                            }
+                            Err(_) => {
+                                std::thread::sleep(Duration::from_millis(1000));
+                                continue;
                             }
                         }
-                        Err(e) if e.starts_with(ENGINE_STUCK) => {
-                            emit(progress, "tts", &format!(
-                                "⚠ фраза #{}: multi-take — {e}, пропуск доп. дублей",
-                                fi + 1
-                            ));
-                            *paths.tts_cache.lock().unwrap() = None;
-                            engine_dead = true;
-                            break; // первый дубль (raw) уже на диске
-                        }
-                        Err(_) => {
-                            std::thread::sleep(Duration::from_millis(1000));
+                    };
+                    if synth_defect(&samples, sr, count_speech_chars(tgt)).is_none() {
+                        let wav = AudiocppEngine::encode_wav(&samples, sr, 1);
+                        let _ = std::fs::write(&take_path, &wav);
+                        if let Ok(td) = media::duration(&take_path) {
+                            let score = (td - target).abs();
+                            if score < best_score {
+                                best_score = score;
+                                best_path = take_path.clone();
+                            }
                         }
                     }
                 }
@@ -1927,20 +2041,33 @@ fn build_dub(
                 .enumerate()
                 {
                     let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(min_timeout_secs));
-                    let (smp, r) = match voice_clone_guarded(engine.as_ref().expect("локальный Higgs (QC не для облака)"), tgtq, &rw.to_string_lossy(), rt, &opts, vc_to) {
-                        Ok(v) => v,
-                        Err(e) if e.starts_with(ENGINE_STUCK) => {
-                            emit(progress, "tts", &format!(
-                                "⚠ QC фраза #{}: {} — пропуск пересинтеза (движок недоступен)",
-                                fi + 1, e
-                            ));
-                            *paths.tts_cache.lock().unwrap() = None;
-                            engine_dead = true;
-                            break;
+                    let (smp, r) = if let Some(ref vox) = vox_server {
+                        let vr = if rw.is_file() { Some(rw.as_path()) } else { None };
+                        let model_id = if paths.tts_engine == "fish_audio" { "fish_audio" } else { "voxcpm2" };
+                        let clean_tgtq = strip_higgs_tags(tgtq);
+                        match vox.client().speech_pcm(model_id, &clean_tgtq, vr, rt, None) {
+                            Ok((s, rate, _)) => (s, rate),
+                            Err(_) => {
+                                std::thread::sleep(Duration::from_millis(500));
+                                continue;
+                            }
                         }
-                        Err(_) => {
-                            std::thread::sleep(Duration::from_millis(1000));
-                            continue;
+                    } else {
+                        match voice_clone_guarded(engine.as_ref().expect("локальный Higgs (QC не для облака)"), tgtq, &rw.to_string_lossy(), rt, &opts, vc_to) {
+                            Ok(v) => v,
+                            Err(e) if e.starts_with(ENGINE_STUCK) => {
+                                emit(progress, "tts", &format!(
+                                    "⚠ QC фраза #{}: {} — пропуск пересинтеза (движок недоступен)",
+                                    fi + 1, e
+                                ));
+                                *paths.tts_cache.lock().unwrap() = None;
+                                engine_dead = true;
+                                break;
+                            }
+                            Err(_) => {
+                                std::thread::sleep(Duration::from_millis(1000));
+                                continue;
+                            }
                         }
                     };
                     if synth_defect(&smp, r, tgt_chars).is_some() {

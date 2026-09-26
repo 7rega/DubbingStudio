@@ -204,6 +204,12 @@ pub struct AppState {
     pub higgs_dll: PathBuf,
     /// Каталог весов Higgs (q8_0). Env DUB_STUDIO_HIGGS_MODEL, иначе <models>/higgs-q8_0.
     pub higgs_model_root: PathBuf,
+    /// audiocpp_server(.exe) — сайдкар инференса audio.cpp (VoxCPM2).
+    pub audiocpp_bin: PathBuf,
+    /// Каталог моделей VoxCPM2. Env DUB_STUDIO_VOXCPM2_DIR, иначе <models>/voxcpm2.
+    pub voxcpm2_dir: PathBuf,
+    /// Каталог моделей Fish Audio. Env DUB_STUDIO_FISH_AUDIO_DIR, иначе <models>/fish_audio.
+    pub fish_audio_dir: PathBuf,
     /// Каталог bundled-шрифтов субтитров. Env DUB_STUDIO_FONTS_DIR, иначе <repo>/fonts.
     pub fonts_dir: PathBuf,
     /// Корень моделей (для OCR: <root>/ocr/…). Env DUBENGINE_MODELS_ROOT, иначе <repo>/models.
@@ -229,6 +235,7 @@ pub fn augment_path_for_tools(repo_root: &Path) {
     let dirs = [
         repo_root.join("tools").join("ffmpeg"),
         repo_root.join("tools").join("llama"),
+        repo_root.join("tools").join("audiocpp"),
         repo_root.join("models").join("higgs-engine"),
     ];
     let sep = if cfg!(windows) { ";" } else { ":" };
@@ -304,6 +311,13 @@ impl AppState {
         let higgs_model_root = std::env::var("DUB_STUDIO_HIGGS_MODEL")
             .map(PathBuf::from)
             .unwrap_or_else(|_| mroot.join("higgs-q8_0"));
+        let audiocpp_bin = audiocpp::resolve_audiocpp_bin(&repo_root.join("tools").join("audiocpp"));
+        let voxcpm2_dir = std::env::var("DUB_STUDIO_VOXCPM2_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| mroot.join("voxcpm2"));
+        let fish_audio_dir = std::env::var("DUB_STUDIO_FISH_AUDIO_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| mroot.join("fish_audio"));
         let fonts_dir = std::env::var("DUB_STUDIO_FONTS_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| repo_root.join("fonts"));
@@ -324,6 +338,9 @@ impl AppState {
             bsroformer_model,
             higgs_dll,
             higgs_model_root,
+            audiocpp_bin,
+            voxcpm2_dir,
+            fish_audio_dir,
             fonts_dir,
             models_root: mroot,
             voices_dir,
@@ -619,6 +636,29 @@ fn ensure_job_components(
     {
         need.push("whisper-cuda".to_string());
     }
+
+    // TTS VoxCPM2 / Fish Audio: движок audiocpp-engine + выбранная модель
+    let tts_engine = models::resolve_tts_engine(&sel);
+    if tts_engine == "voxcpm2" {
+        if missing("audiocpp-engine") {
+            need.push("audiocpp-engine".to_string());
+        }
+        let quant = models::pick(&sel, "tts").unwrap_or("q8_0");
+        let model_comp = if quant == "bf16" { "voxcpm2-bf16" } else { "voxcpm2" };
+        if missing(model_comp) {
+            need.push(model_comp.to_string());
+        }
+    } else if tts_engine == "fish_audio" {
+        if missing("audiocpp-engine") {
+            need.push("audiocpp-engine".to_string());
+        }
+        let quant = models::pick(&sel, "tts").unwrap_or("q8_0");
+        let model_comp = if quant == "bf16" { "fish_audio-bf16" } else { "fish_audio" };
+        if missing(model_comp) {
+            need.push(model_comp.to_string());
+        }
+    }
+
     if need.is_empty() {
         return Ok(());
     }
@@ -1870,7 +1910,14 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
     let sel = models::load_selection(&st.models_root);
     let (higgs_model_root, higgs_quant) = models::resolve_tts(&st.models_root, &sel);
     let sep_model = models::resolve_sep(&st.models_root, &sel);
-    eprintln!("[models] render: TTS={} (q={}) · SEP={}", higgs_model_root.display(), higgs_quant, sep_model.display());
+    let tts_engine = models::resolve_tts_engine(&sel).to_string();
+    let voxcpm2_quant = models::resolve_voxcpm2(&st.models_root, &sel)
+        .map(|(_, q)| q)
+        .unwrap_or_else(|| "q8_0".to_string());
+    let fish_audio_quant = models::resolve_fish_audio(&st.models_root, &sel)
+        .map(|(_, q)| q)
+        .unwrap_or_else(|| "q8_0".to_string());
+    eprintln!("[models] render: engine={} · TTS={} (q={}) · SEP={}", tts_engine, higgs_model_root.display(), higgs_quant, sep_model.display());
     let paths = render::RenderPaths {
         input,
         bench: models::bench_enabled(&st.models_root),
@@ -1891,6 +1938,12 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
         ref_secs: models::higgs_ref_secs(&st.models_root),
         models_root: st.models_root.clone(),
         tts_cache: st.tts_cache.clone(),
+        audiocpp_bin: st.audiocpp_bin.clone(),
+        voxcpm2_dir: st.voxcpm2_dir.clone(),
+        fish_audio_dir: st.fish_audio_dir.clone(),
+        tts_engine,
+        voxcpm2_quant,
+        fish_audio_quant,
     };
 
     let dir_for_job = dir.clone();
@@ -2014,6 +2067,13 @@ async fn export_lang(
     let sel = models::load_selection(&st.models_root);
     let (higgs_model_root, higgs_quant) = models::resolve_tts(&st.models_root, &sel);
     let sep_model = models::resolve_sep(&st.models_root, &sel);
+    let tts_engine = models::resolve_tts_engine(&sel).to_string();
+    let voxcpm2_quant = models::resolve_voxcpm2(&st.models_root, &sel)
+        .map(|(_, q)| q)
+        .unwrap_or_else(|| "q8_0".to_string());
+    let fish_audio_quant = models::resolve_fish_audio(&st.models_root, &sel)
+        .map(|(_, q)| q)
+        .unwrap_or_else(|| "q8_0".to_string());
     let output = dst_dir.join("output.mp4");
     let paths = render::RenderPaths {
         input,
@@ -2035,6 +2095,12 @@ async fn export_lang(
         ref_secs: models::higgs_ref_secs(&st.models_root),
         models_root: st.models_root.clone(),
         tts_cache: st.tts_cache.clone(),
+        audiocpp_bin: st.audiocpp_bin.clone(),
+        voxcpm2_dir: st.voxcpm2_dir.clone(),
+        fish_audio_dir: st.fish_audio_dir.clone(),
+        tts_engine,
+        voxcpm2_quant,
+        fish_audio_quant,
     };
 
     let dst_for_job = dst_dir.clone();
@@ -2226,6 +2292,13 @@ async fn dub_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
     };
     let sel = models::load_selection(&st.models_root);
     let (higgs_model_root, higgs_quant) = models::resolve_tts(&st.models_root, &sel);
+    let tts_engine = models::resolve_tts_engine(&sel).to_string();
+    let voxcpm2_quant = models::resolve_voxcpm2(&st.models_root, &sel)
+        .map(|(_, q)| q)
+        .unwrap_or_else(|| "q8_0".to_string());
+    let fish_audio_quant = models::resolve_fish_audio(&st.models_root, &sel)
+        .map(|(_, q)| q)
+        .unwrap_or_else(|| "q8_0".to_string());
     let paths = render::RenderPaths {
         input,
         bench: models::bench_enabled(&st.models_root),
@@ -2246,6 +2319,12 @@ async fn dub_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         ref_secs: models::higgs_ref_secs(&st.models_root),
         models_root: st.models_root.clone(),
         tts_cache: st.tts_cache.clone(),
+        audiocpp_bin: st.audiocpp_bin.clone(),
+        voxcpm2_dir: st.voxcpm2_dir.clone(),
+        fish_audio_dir: st.fish_audio_dir.clone(),
+        tts_engine,
+        voxcpm2_quant,
+        fish_audio_quant,
     };
     let dir_for_job = dir.clone();
     let job: jobs::JobFn = Box::new(move |progress: jobs::ProgressFn| {
@@ -2278,6 +2357,13 @@ async fn synth_segments_project(State(st): State<AppState>, AxPath(pid): AxPath<
     };
     let sel = models::load_selection(&st.models_root);
     let (higgs_model_root, higgs_quant) = models::resolve_tts(&st.models_root, &sel);
+    let tts_engine = models::resolve_tts_engine(&sel).to_string();
+    let voxcpm2_quant = models::resolve_voxcpm2(&st.models_root, &sel)
+        .map(|(_, q)| q)
+        .unwrap_or_else(|| "q8_0".to_string());
+    let fish_audio_quant = models::resolve_fish_audio(&st.models_root, &sel)
+        .map(|(_, q)| q)
+        .unwrap_or_else(|| "q8_0".to_string());
     let paths = render::RenderPaths {
         input,
         bench: models::bench_enabled(&st.models_root),
@@ -2298,6 +2384,12 @@ async fn synth_segments_project(State(st): State<AppState>, AxPath(pid): AxPath<
         ref_secs: models::higgs_ref_secs(&st.models_root),
         models_root: st.models_root.clone(),
         tts_cache: st.tts_cache.clone(),
+        audiocpp_bin: st.audiocpp_bin.clone(),
+        voxcpm2_dir: st.voxcpm2_dir.clone(),
+        fish_audio_dir: st.fish_audio_dir.clone(),
+        tts_engine,
+        voxcpm2_quant,
+        fish_audio_quant,
     };
     let dir_for_job = dir.clone();
     let job: jobs::JobFn = Box::new(move |progress: jobs::ProgressFn| {
