@@ -663,10 +663,52 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
         vocals16.clone()
     };
     bench.stage("diarize");
-    // Backend диаризации (onnx CUDA-EP / CPU) — exec_config читает DUB_ASR_BACKEND при создании сессии.
-    std::env::set_var("DUB_ASR_BACKEND", crate::models::stage_backend(&paths.models_root, "diar_backend"));
-    emit(progress, "diarize", "диаризация (Sortformer)");
-    let diar = if want_diar && paths.sortformer_onnx.is_file() {
+    // Backend диаризации (CUDA / CPU) — общий для Nemotron и Sortformer
+    let diar_bk = crate::models::stage_backend(&paths.models_root, "diar_backend");
+    std::env::set_var("DUB_ASR_BACKEND", diar_bk);
+
+    let chosen_model = crate::models::diar_model_selection(&paths.models_root);
+    let nemotron_threshold = crate::models::diar_nemotron_threshold(&paths.models_root);
+    let audiocpp_cli = audiocpp::resolve_audiocpp_cli(&paths.models_root);
+    let nemotron_model = crate::models::resolve_nemotron_path(&paths.models_root, chosen_model);
+
+    let is_nemotron = chosen_model == "nemotron-bf16" || chosen_model == "nemotron-q8_0";
+
+    let diar = if !want_diar {
+        emit(progress, "diarize", "субтитры: без диаризации (single-speaker)");
+        None
+    } else if is_nemotron && audiocpp_cli.is_file() {
+        if let Some(mpath) = nemotron_model {
+            emit(progress, "diarize", &format!("диаризация Nemotron-3 (backend: {diar_bk}, до 8 спикеров)"));
+            match dub_asr::diarize_nemotron_simple(
+                &asr_wav,
+                &audiocpp_cli,
+                &mpath,
+                diar_bk,
+                nemotron_threshold,
+                0.5,
+                1.5,
+            ) {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    emit(progress, "diarize", &format!("сбой Nemotron-3 ({e}), откат на Sortformer..."));
+                    if paths.sortformer_onnx.is_file() {
+                        dub_asr::turns(&asr_wav, &paths.sortformer_onnx, 0.8, 2.5).ok()
+                    } else {
+                        None
+                    }
+                }
+            }
+        } else {
+            emit(progress, "diarize", "модель Nemotron-3 не найдена; запуск Sortformer...");
+            if paths.sortformer_onnx.is_file() {
+                dub_asr::turns(&asr_wav, &paths.sortformer_onnx, 0.8, 2.5).ok()
+            } else {
+                None
+            }
+        }
+    } else if paths.sortformer_onnx.is_file() {
+        emit(progress, "diarize", &format!("диаризация Sortformer v2 (backend: {diar_bk}, до 4 спикеров)"));
         match dub_asr::turns(&asr_wav, &paths.sortformer_onnx, 0.8, 2.5) {
             Ok(d) => Some(d),
             Err(e) => {
@@ -682,14 +724,12 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
         emit(
             progress,
             "diarize",
-            if !want_diar { "субтитры: без диаризации (whole-clip, как питон)" } else { "sortformer-модель не найдена; single-speaker путь" },
+            "модели диаризации не найдены; single-speaker путь",
         );
         None
     };
-    // Param-хэш диаризации в cache.json. Вход = отпечаток источника (vocals16 детерминирован от него) +
-    // DIAR_VER + режим (влияет на want_diar). Файловых выходов нет — durable-результат в project.json;
-    // запись служит задел под честный resume/инкрементальный re-analyze (правка транскрипта её НЕ трогает).
-    let diar_key = cache::hash_stage(&[DIAR_VER, &src_hash, &args.mode]);
+    // Param-хэш диаризации в cache.json. Вход = отпечаток источника + выбранная модель + бэкенд + режим.
+    let diar_key = cache::hash_stage(&[DIAR_VER, chosen_model, diar_bk, &src_hash, &args.mode]);
     cache.write_stage(&paths.work_dir, "diarize", &diar_key, &[]);
 
     // 4) сегменты: из импортированных субтитров (точный текст+тайминг, ASR пропущен) ЛИБО через ASR.

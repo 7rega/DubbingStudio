@@ -15,6 +15,8 @@ mod segment;
 mod speaker_global;
 mod whisper;
 mod window;
+pub mod nemotron;
+pub use nemotron::{diarize_nemotron, diarize_nemotron_simple, NemotronDiarConfig};
 pub use align::{
     align_bounds, align_segments_to_vocals, extract_vocal_spans, AlignableSegment, SpeechSpan,
     SegmentBound, MIN_SUBTITLE_GAP, SPEECH_LEAD_IN, SPEECH_TAIL,
@@ -150,6 +152,8 @@ pub enum AsrError {
     WavRead(String, String),
     #[error("io: {0}")]
     Io(String),
+    #[error("диаризация: {0}")]
+    Diarize(String),
 }
 
 /// Одна реплика диаризации: [start, end] в секундах, speaker — контиг. id (0..k-1).
@@ -628,12 +632,27 @@ pub fn turns(
     merge_gap: f64,
     min_speaker_dur: f64,
 ) -> Result<DiarTurns, AsrError> {
-    use std::collections::HashMap;
-    let single = |_| DiarTurns { turns: Vec::new(), n_speakers: 1, ref_windows: HashMap::new() };
-
     let raw = diarize(wav, sortformer_onnx)?;
+    Ok(postprocess_diar_turns(&raw, merge_gap, min_speaker_dur))
+}
+
+/// Унифицированная постобработка сырых реплик диаризации (общая для Sortformer и Nemotron):
+/// 1. Слияние подряд идущих реплик одного спикера с зазором <= merge_gap.
+/// 2. Фильтрация «настоящих» спикеров по суммарной длительности >= min_speaker_dur.
+/// 3. Схлопывание в single-speaker при <2 настоящих спикерах.
+/// 4. Переназначение коротких реплик ненастоящих спикеров ближайшему настоящему.
+/// 5. Расчёт самого длинного референсного окна для каждого спикера (ref_windows).
+/// 6. Нормализация спикеров в 0..k-1.
+pub fn postprocess_diar_turns(
+    raw: &[Turn],
+    merge_gap: f64,
+    min_speaker_dur: f64,
+) -> DiarTurns {
+    use std::collections::HashMap;
+    let single = || DiarTurns { turns: Vec::new(), n_speakers: 1, ref_windows: HashMap::new() };
+
     if raw.is_empty() {
-        return Ok(single(()));
+        return single();
     }
 
     // Слить подряд идущие реплики одного спикера с зазором <= merge_gap.
@@ -655,7 +674,7 @@ pub fn turns(
     let realset: std::collections::HashSet<i32> =
         dur.iter().filter(|(_, &d)| d >= min_speaker_dur).map(|(&s, _)| s).collect();
     if realset.len() < 2 {
-        return Ok(single(())); // реально один голос -> single-speaker путь
+        return single(); // реально один голос -> single-speaker путь
     }
 
     // Крошечную реплику не-настоящего спикера переназначить ближайшей настоящей (по середине).
@@ -697,7 +716,7 @@ pub fn turns(
         .map(|m| Turn { start: m[0], end: m[1], speaker: remap[&(m[2] as i32)] })
         .collect();
     let rw: HashMap<i32, RefWindow> = longest.into_iter().map(|(old, w)| (remap[&old], w)).collect();
-    Ok(DiarTurns { turns: out, n_speakers: labels.len(), ref_windows: rw })
+    DiarTurns { turns: out, n_speakers: labels.len(), ref_windows: rw }
 }
 
 /// Нормализовать слово для сравнения на шве: lowercase + снять КОНЕЧНУЮ пунктуацию (.,!?…;:).

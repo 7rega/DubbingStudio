@@ -481,6 +481,40 @@ pub fn resolve_audiocpp_bin(tools_dir: &Path) -> PathBuf {
     direct
 }
 
+/// Поиск бинарника audiocpp_cli(.exe).
+pub fn resolve_audiocpp_cli(tools_or_models_root: &Path) -> PathBuf {
+    if let Ok(v) = std::env::var("DUB_STUDIO_AUDIOCPP_CLI") {
+        let p = PathBuf::from(v);
+        if p.exists() {
+            return p;
+        }
+    }
+    let name = if cfg!(windows) {
+        "audiocpp_cli.exe"
+    } else {
+        "audiocpp_cli"
+    };
+
+    let candidates = [
+        tools_or_models_root.join(name),
+        tools_or_models_root.join("tools").join(name),
+        tools_or_models_root.join("tools").join("audiocpp").join(name),
+        tools_or_models_root.join("audiocpp").join(name),
+        PathBuf::from("tools/audiocpp").join(name),
+        PathBuf::from("F:\\DubStudio\\tools\\audiocpp").join(name),
+        PathBuf::from("E:\\audio.cpp").join(name),
+        PathBuf::from("E:\\audio.cpp\\build\\bin\\Release").join(name),
+    ];
+
+    for c in &candidates {
+        if c.is_file() {
+            return c.clone();
+        }
+    }
+
+    tools_or_models_root.join("tools").join("audiocpp").join(name)
+}
+
 /// Поиск модели VoxCPM2 (q8_0 или bf16).
 pub fn resolve_voxcpm2_path(models_root: &Path, quant: &str) -> Option<PathBuf> {
     let filename = match quant {

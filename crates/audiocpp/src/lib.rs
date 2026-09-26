@@ -13,7 +13,7 @@ pub use engine::{
     ProgressCallback,
 };
 pub use server::{
-    decode_wav_mono_f32, resolve_audiocpp_bin, resolve_voxcpm2_path,
+    decode_wav_mono_f32, resolve_audiocpp_bin, resolve_audiocpp_cli, resolve_voxcpm2_path,
     AudiocppClient, AudiocppServer, AudiocppServerError, AudiocppServerOpts, SpeechOptions,
 };
 

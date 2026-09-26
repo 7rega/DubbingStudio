@@ -68,6 +68,9 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "roformer" => vec![("sep", "Q8_0".into())],
         "roformer-q5" => vec![("sep", "Q5_0".into())],
         "roformer-q4" => vec![("sep", "Q4_0".into())],
+        "sortformer" => vec![("diar_model", "sortformer".into())],
+        "nemotron-bf16" => vec![("diar_model", "nemotron-bf16".into())],
+        "nemotron-q8_0" => vec![("diar_model", "nemotron-q8_0".into())],
         _ => vec![],
     }
 }
@@ -82,6 +85,8 @@ pub fn is_selection_key(key: &str) -> bool {
             // gpu = CUDA, cpu = без NVIDIA. sep=сепарация(BSRoformer CUDA/CPU-сборка), diar=диаризация
             // (Sortformer onnx CUDA-EP/CPU), asr=локальный ASR (Parakeet onnx / Whisper CTranslate2).
             | "local_backend" | "sep_backend" | "diar_backend" | "asr_backend"
+            // Модель диаризации и порог активности спикера Nemotron
+            | "diar_model" | "diar_nemotron_threshold"
             // Режим формирования instrumental (BSRoformer voc_fv6):
             // "spectral_mask" (дефолт, без фантомного вокала) | "legacy" (mix - vocals)
             | "sep_mode"
@@ -141,6 +146,52 @@ pub fn stage_backend(mroot: &Path, key: &str) -> &'static str {
     pick_bk(key)
         .or_else(|| if key == "local_backend" { None } else { pick_bk("local_backend") })
         .unwrap_or(if crate::setup::detect_driver() { "gpu" } else { "cpu" })
+}
+
+/// Выбор активной модели диаризации ("nemotron-bf16", "nemotron-q8_0" или "sortformer").
+pub fn diar_model_selection(mroot: &Path) -> &'static str {
+    let sel = load_selection(mroot);
+    match pick(&sel, "diar_model") {
+        Some("nemotron-q8_0") => "nemotron-q8_0",
+        Some("nemotron-bf16") | Some("nemotron") => "nemotron-bf16",
+        _ => "sortformer",
+    }
+}
+
+/// Порог активности спикера для Nemotron-3 (по умолчанию 0.48).
+pub fn diar_nemotron_threshold(mroot: &Path) -> f32 {
+    let sel = load_selection(mroot);
+    pick(&sel, "diar_nemotron_threshold")
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.48)
+}
+
+/// Поиск файла весов Nemotron-3 Diarization (GGUF).
+pub fn resolve_nemotron_path(mroot: &Path, quant: &str) -> Option<std::path::PathBuf> {
+    if let Ok(env_path) = std::env::var("DUB_STUDIO_NEMOTRON_PATH") {
+        let p = std::path::PathBuf::from(env_path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let filename = match quant {
+        "q8_0" | "nemotron-q8_0" => "nemotron-3-diarization-q8_0.gguf",
+        _ => "nemotron-3-diarization-bf16.gguf",
+    };
+    let candidates = [
+        mroot.join("diarization").join(filename),
+        mroot.join("models").join("diarization").join(filename),
+        mroot.join(filename),
+        std::path::PathBuf::from("models/diarization").join(filename),
+        std::path::PathBuf::from("F:\\DubStudio\\models\\diarization").join(filename),
+        std::path::PathBuf::from("F:\\DubStudio\\TEST").join(filename),
+    ];
+    for c in &candidates {
+        if c.is_file() {
+            return Some(c.clone());
+        }
+    }
+    None
 }
 
 /// Глобальный backend локальных стадий (обратная совместимость: пресеты/старые вызовы).

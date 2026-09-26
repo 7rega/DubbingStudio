@@ -521,9 +521,45 @@ function ModelsSection() {
         </div>
       </Group>
       <Group label={t("settings.roleDiar")}>
-        {/* На чём считать диаризацию — свои табы (Sortformer onnx: CUDA-EP / CPU-провайдер). */}
+        {/* 1. Общие табы бэкенда для обеих моделей: Авто / GPU (CUDA) / CPU */}
         <BackendTabs k="diar_backend" />
-        {rowOf("sortformer")}
+
+        {/* 2. Выбор активной модели диаризации */}
+        <div className="mt-2 pt-2 border-t border-[var(--color-border)]">
+          <div className="mb-1.5">
+            <div className="text-[12px] font-medium">{t("settings.diarModelTitle")}</div>
+            <div className="text-[10px] text-[var(--color-muted)]">{t("settings.diarModelHint")}</div>
+          </div>
+          <div className="flex gap-1">
+            {([
+              ["sortformer", "Sortformer v2 (4spk ONNX)"],
+              ["nemotron-bf16", "Nemotron-3 BF16 (8spk)"],
+              ["nemotron-q8_0", "Nemotron-3 Q8_0 (101 МБ)"]
+            ] as const).map(([id, label]) => {
+              const cur = selv("diar_model") || "sortformer";
+              return (
+                <button
+                  key={id}
+                  onClick={() => setSel("diar_model", id)}
+                  className={`flex-1 px-2 py-1.5 rounded-md text-[11px] font-medium border transition-colors ${
+                    cur === id
+                      ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]"
+                      : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* 3. Строки загрузки и статуса моделей из менеджера компонентов */}
+        <div className="mt-2.5 space-y-1.5">
+          {rowOf("sortformer")}
+          {rowOf("nemotron-bf16")}
+          {rowOf("nemotron-q8_0")}
+        </div>
       </Group>
       <Group label={t("settings.roleRuntime")}>{rowOf("onnxruntime")}{(selv("diar_backend") === "gpu" || selv("asr_backend") === "gpu") && rowOf("onnxruntime-gpu")}{(selv("diar_backend") === "gpu" || selv("asr_backend") === "gpu") && rowOf("cudnn")}{rowOf("ffmpeg")}{rowOf("cuda-runtime")}{rowOf("vcruntime")}{rowOf("ocr")}</Group>
       {/* Производительность / экономия RAM — ВИДИМЫЕ контролы (не авто-магия): против OOM на слабой памяти. */}
@@ -9445,6 +9481,7 @@ const QUANT_GROUP: Record<string, string> = {
   parakeet: "parakeet", "parakeet-fp32": "parakeet",
   roformer: "roformer", "roformer-q5": "roformer", "roformer-q4": "roformer",
   "whisper-engine": "whisper_engine", "whisper-xxl": "whisper_engine",
+  "nemotron-bf16": "nemotron", "nemotron-q8_0": "nemotron",
 };
 
 // ── «Первый запуск»: панель автозакачки компонентов (модели/движки/системные библиотеки) ──
@@ -9495,7 +9532,7 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
   const reqLabel = (r: string) => (r === "required" ? t("setup.required") : t("setup.recommended"));
   const deliveryNote = (c: SetupComponent) =>
     c.delivery === "bundled" ? t("setup.reinstallHint") : c.delivery === "external" ? t("setup.external") : "";
-  const GROUP_LABEL: Record<string, string> = { higgs: t("setup.grpHiggs"), gemma: t("setup.grpGemma"), parakeet: t("setup.grpParakeet"), roformer: t("setup.grpRoformer"), whisper_engine: t("setup.grpWhisperEngine") };
+  const GROUP_LABEL: Record<string, string> = { higgs: t("setup.grpHiggs"), gemma: t("setup.grpGemma"), parakeet: t("setup.grpParakeet"), roformer: t("setup.grpRoformer"), whisper_engine: t("setup.grpWhisperEngine"), nemotron: t("setup.grpNemotron") };
   const pickOne = (id: string, group: string) => setSel((prev) => {   // radio внутри семейства: выбрать этот квант, снять остальные того же семейства
     const n = new Set(prev);
     Object.entries(QUANT_GROUP).forEach(([cid, g]) => { if (g === group) n.delete(cid); });

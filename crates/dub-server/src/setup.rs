@@ -121,6 +121,15 @@ pub struct Marker {
 // HF: Sortformer v2 диаризация (altunenes/parakeet-rs).
 const HF_SORTFORMER: &str =
     "https://huggingface.co/altunenes/parakeet-rs/resolve/main/diar_streaming_sortformer_4spk-v2.onnx";
+// HF: Nemotron-3 Diarization GGUF (audio-cpp/Nemotron-3-Diarization-GGUF).
+pub const HF_NEMOTRON_BF16: &str =
+    "https://huggingface.co/audio-cpp/Nemotron-3-Diarization-GGUF/resolve/main/nemotron-3-diarization-bf16.gguf?download=true";
+pub const HF_NEMOTRON_Q8_0: &str =
+    "https://huggingface.co/audio-cpp/Nemotron-3-Diarization-GGUF/resolve/main/nemotron-3-diarization-q8_0.gguf?download=true";
+
+pub const NEMOTRON_BF16_SIZE: u64 = 198_720_032; // ~189.5 МБ
+pub const NEMOTRON_Q8_0_SIZE: u64 = 106_674_240; // ~101.7 МБ
+
 // HF: Mel-Band Roformer voc_fv6-Q8_0 (chenmozhijin/BSRoformer-GGUF).
 const HF_ROFORMER: &str = "https://huggingface.co/chenmozhijin/BSRoformer-GGUF/resolve/main/GaboxR67/MelBandRoformers/melbandroformers/vocals/voc_fv6-Q8_0.gguf";
 // GitHub: BSRoformer.cpp движок win-cuda-13.1.0 zip (chenmozhijin/BSRoformer.cpp v0.1.0).
@@ -622,6 +631,48 @@ pub fn manifest() -> Vec<Component> {
             external_url: None,
         },
         Component {
+            id: "nemotron-bf16",
+            name: "Nemotron-3 Diarization BF16 (до 8 спикеров)",
+            purpose: "Высокоточное разделение до 8 спикеров (рекомендуется для фильмов и трейлеров)",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: NEMOTRON_BF16_SIZE,
+            files: &[
+                FileSpec {
+                    url: HF_NEMOTRON_BF16,
+                    dest_rel: "models/diarization/nemotron-3-diarization-bf16.gguf",
+                    size: NEMOTRON_BF16_SIZE,
+                    extract: Extract::None,
+                },
+            ],
+            markers: &[Marker {
+                rel: "models/diarization/nemotron-3-diarization-bf16.gguf",
+                expect: NEMOTRON_BF16_SIZE,
+            }],
+            external_url: Some("https://huggingface.co/audio-cpp/Nemotron-3-Diarization-GGUF"),
+        },
+        Component {
+            id: "nemotron-q8_0",
+            name: "Nemotron-3 Diarization Q8_0 (101 МБ)",
+            purpose: "Компактная квантованная модель разделения спикеров (быстрая загрузка)",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: NEMOTRON_Q8_0_SIZE,
+            files: &[
+                FileSpec {
+                    url: HF_NEMOTRON_Q8_0,
+                    dest_rel: "models/diarization/nemotron-3-diarization-q8_0.gguf",
+                    size: NEMOTRON_Q8_0_SIZE,
+                    extract: Extract::None,
+                },
+            ],
+            markers: &[Marker {
+                rel: "models/diarization/nemotron-3-diarization-q8_0.gguf",
+                expect: NEMOTRON_Q8_0_SIZE,
+            }],
+            external_url: Some("https://huggingface.co/audio-cpp/Nemotron-3-Diarization-GGUF"),
+        },
+        Component {
             id: "roformer",
             name: "Mel-Band Roformer voc_fv6 (Q8_0)",
             purpose: "Модель вокал/инструментал сепарации",
@@ -898,6 +949,8 @@ fn vram_estimate(id: &str) -> u64 {
         "parakeet" => gb(1.1),
         "parakeet-fp32" => gb(2.7),
         "sortformer" => gb(0.6),
+        "nemotron-bf16" => gb(0.2),
+        "nemotron-q8_0" => gb(0.15),
         "roformer" => gb(0.5),
         "roformer-q5" => gb(0.45),
         "roformer-q4" => gb(0.4),
@@ -919,6 +972,24 @@ fn resolve_marker_metadata(repo_root: &Path, rel: &str) -> std::io::Result<std::
                 return Err(e);
             };
             std::fs::metadata(&alt)
+        } else if rel.contains("nemotron-3-diarization") {
+            let fname = if rel.contains("bf16") {
+                "nemotron-3-diarization-bf16.gguf"
+            } else {
+                "nemotron-3-diarization-q8_0.gguf"
+            };
+            let cands = [
+                repo_root.join("models").join(fname),
+                repo_root.join("models").join("diarization").join(fname),
+                std::path::PathBuf::from("F:\\DubStudio\\models\\diarization").join(fname),
+                std::path::PathBuf::from("F:\\DubStudio\\TEST").join(fname),
+            ];
+            for c in &cands {
+                if let Ok(meta) = std::fs::metadata(c) {
+                    return Ok(meta);
+                }
+            }
+            Err(e)
         } else {
             Err(e)
         }
