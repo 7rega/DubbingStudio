@@ -3988,6 +3988,73 @@ function MultiTrackTimeline({
                 const topPx = lane === 0 ? 4 : 48;
 
                 const isRegen = Boolean(seg.extra?.regenerated);
+
+                // Индикаторы донора / кастомного голоса и ручных параметров звука
+                const segTemp = typeof seg.temp === "number" ? seg.temp : (seg.extra && typeof seg.extra.temp === "number" ? seg.extra.temp : undefined);
+                const hasCustomTemp = segTemp !== undefined;
+                const segVol = typeof seg.volume === "number" ? seg.volume : (seg.extra && typeof seg.extra.volume === "number" ? seg.extra.volume : 100);
+                const hasCustomVol = segVol !== 100;
+                const hasCustomAudio = hasCustomTemp || hasCustomVol;
+
+                const isDonor = Boolean(seg.voice && (seg.voice.startsWith("donor:") || seg.voice.startsWith("clone:")));
+                const hasCustomVoice = Boolean(seg.voice && seg.voice.trim() !== "");
+
+                let donorNum: string | number | null = null;
+                if (isDonor && seg.voice) {
+                  const donorKey = seg.voice.replace(/^(donor|clone):/, "");
+                  const dIdx = segments.findIndex((s) => s.id === donorKey);
+                  donorNum = dIdx !== -1 ? dIdx + 1 : donorKey;
+                }
+
+                // Цветовая окантовка и подсветка плашки на таймлайне
+                let borderStyleClass = "border border-white/20";
+                let shadowStyleClass = "";
+
+                if (hasCustomVoice && hasCustomAudio) {
+                  // И донор, и ручные параметры (температура / громкость)
+                  borderStyleClass = "border-2 border-purple-400 border-t-[3px] border-t-amber-400";
+                  shadowStyleClass = "shadow-[inset_0_3px_6px_rgba(245,158,11,0.5),inset_0_0_8px_rgba(168,85,247,0.35)]";
+                } else if (hasCustomVoice) {
+                  // Только донор / кастомный голос: неоново-фиолетовая окантовка
+                  borderStyleClass = "border-2 border-purple-400";
+                  shadowStyleClass = "shadow-[inset_0_0_8px_rgba(168,85,247,0.45)]";
+                } else if (hasCustomAudio) {
+                  // Только ручные параметры: огненно-оранжевая окантовка
+                  borderStyleClass = "border-2 border-amber-400";
+                  shadowStyleClass = "shadow-[inset_0_0_8px_rgba(245,158,11,0.45)]";
+                } else if (isRegen) {
+                  borderStyleClass = "border-t-[3px] border-t-emerald-400";
+                  shadowStyleClass = "shadow-[inset_0_3px_8px_rgba(52,211,153,0.35)]";
+                }
+
+                if (isRegen && (hasCustomVoice || hasCustomAudio)) {
+                  borderStyleClass += " border-b-[3px] border-b-emerald-400";
+                }
+
+                // Информативный тултип при наведении на плашку
+                const segIdx = segments.findIndex((s) => s.id === seg.id);
+                const phraseNum = segIdx !== -1 ? segIdx + 1 : seg.id;
+                const tooltipParts: string[] = [`Фраза #${phraseNum}`];
+                if (seg.speaker != null) tooltipParts.push(`Спикер: ${seg.speaker}`);
+                if (isDonor && donorNum != null) {
+                  tooltipParts.push(`🧬 Донор: #${donorNum}`);
+                } else if (hasCustomVoice) {
+                  tooltipParts.push(`🎙️ Голос: ${seg.voice}`);
+                }
+                if (hasCustomTemp) {
+                  tooltipParts.push(`🔥 Температура: ${segTemp}`);
+                }
+                if (hasCustomVol) {
+                  tooltipParts.push(`🔊 Громкость: ${segVol}%`);
+                }
+                if (isRegen) {
+                  tooltipParts.push(`✨ Перегенерирована`);
+                }
+                if (seg.tgt_text) {
+                  tooltipParts.push(`«${seg.tgt_text}»`);
+                }
+                const blockTitle = tooltipParts.join(" | ");
+
                 return (
                   <div
                     key={seg.id}
@@ -4001,12 +4068,10 @@ function MultiTrackTimeline({
                       e.stopPropagation();
                       setContextMenu({ x: e.clientX, y: e.clientY, tAt: seg.start, seg });
                     }}
-                    title={isRegen ? "Фраза перегенерирована вручную" : undefined}
-                    className={`group/seg absolute h-[36px] rounded-md border flex items-center justify-between text-[11px] cursor-grab active:cursor-grabbing transition-all overflow-hidden ${spkClass} ${
-                      isRegen ? "border-t-[3px] border-t-emerald-400 shadow-[inset_0_3px_8px_rgba(52,211,153,0.35)]" : ""
-                    } ${
+                    title={blockTitle}
+                    className={`group/seg absolute h-[36px] rounded-md flex items-center justify-between text-[11px] cursor-grab active:cursor-grabbing transition-all overflow-hidden ${spkClass} ${borderStyleClass} ${shadowStyleClass} ${
                       isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""
-                    } ${isLoop ? "border-amber-400 ring-2 ring-amber-400" : ""}`}
+                    } ${isLoop ? "ring-2 ring-amber-400" : ""}`}
                   >
                     {/* Left Trim Handle (sleek micro-handle on hover) */}
                     <div
@@ -4015,7 +4080,7 @@ function MultiTrackTimeline({
                       title="Изменить начало (Drag to Trim)"
                     />
 
-                    {/* Content: Play Button + Text + Speaker Badge */}
+                    {/* Content: Play Button + Text + Badges */}
                     <div className="flex items-center gap-1 min-w-0 flex-1 px-1 overflow-hidden pointer-events-none">
                       {!isTiny && (
                         <button
@@ -4030,37 +4095,44 @@ function MultiTrackTimeline({
                           <Play size={9} fill="currentColor" />
                         </button>
                       )}
-                      {!isCompact && seg.speaker != null && (
-                        <span className="mono text-[8.5px] px-1 py-0.5 rounded bg-black/50 text-white font-bold shrink-0 shadow-sm">
-                          SPK {seg.speaker}
+                      {seg.speaker != null && (
+                        <span
+                          title={`Спикер: ${seg.speaker}`}
+                          className={`mono px-1 py-0.5 rounded bg-black/50 text-white font-bold shrink-0 shadow-sm ${
+                            isCompact ? "text-[8px] px-0.5" : "text-[8.5px]"
+                          }`}
+                        >
+                          {isCompact ? `S${seg.speaker}` : `SPK ${seg.speaker}`}
                         </span>
                       )}
-                      {(() => {
-                        const segVol = typeof seg.volume === "number" ? seg.volume : (seg.extra && typeof seg.extra.volume === "number" ? seg.extra.volume : 100);
-                        if (segVol === 100) return null;
-                        return (
-                          <span
-                            title={`Громкость фразы: ${segVol}%`}
-                            className={`mono text-[8px] px-1 py-0.2 rounded font-bold shrink-0 shadow-sm ${
-                              segVol < 100 ? "bg-amber-950/90 text-amber-300 border border-amber-500/50" : "bg-emerald-950/90 text-emerald-300 border border-emerald-500/50"
-                            }`}
-                          >
-                            {segVol}%
-                          </span>
-                        );
-                      })()}
-                      {(() => {
-                        const segTemp = typeof seg.temp === "number" ? seg.temp : (seg.extra && typeof seg.extra.temp === "number" ? seg.extra.temp : undefined);
-                        if (segTemp === undefined) return null;
-                        return (
-                          <span
-                            title={`Температура / экспрессия: ${segTemp}`}
-                            className="mono text-[8px] px-1 py-0.2 rounded bg-purple-950/90 text-purple-200 border border-purple-500/50 font-bold shrink-0 shadow-sm"
-                          >
-                            T:{segTemp}
-                          </span>
-                        );
-                      })()}
+                      {isDonor && (
+                        <span
+                          title={`Донорский голос: #${donorNum ?? ""}`}
+                          className="mono text-[8px] px-1 py-0.2 rounded bg-purple-950/90 text-purple-200 border border-purple-400/60 font-bold shrink-0 shadow-sm"
+                        >
+                          🧬{donorNum ? `#${donorNum}` : ""}
+                        </span>
+                      )}
+                      {hasCustomTemp && (
+                        <span
+                          title={`Температура / экспрессия: ${segTemp}`}
+                          className="mono text-[8px] px-1 py-0.2 rounded bg-amber-950/90 text-amber-200 border border-amber-400/60 font-bold shrink-0 shadow-sm"
+                        >
+                          🔥{segTemp}
+                        </span>
+                      )}
+                      {hasCustomVol && (
+                        <span
+                          title={`Громкость фразы: ${segVol}%`}
+                          className={`mono text-[8px] px-1 py-0.2 rounded font-bold shrink-0 shadow-sm ${
+                            segVol < 100
+                              ? "bg-amber-950/90 text-amber-300 border border-amber-500/50"
+                              : "bg-emerald-950/90 text-emerald-300 border border-emerald-500/50"
+                          }`}
+                        >
+                          {segVol}%
+                        </span>
+                      )}
                       {!isTiny && (
                         <span className="font-medium truncate text-[11px] flex-1 leading-snug text-white drop-shadow-sm">
                           {seg.tgt_text || seg.src_text}
@@ -7827,15 +7899,15 @@ function Editor() {
           pushActivity(actLabel, "work");
         };
 
-        const topPos = Math.min(window.innerHeight - 360, Math.max(10, voiceMenuSeg.y));
-        const leftPos = Math.min(window.innerWidth - 270, Math.max(10, voiceMenuSeg.x));
+        const topPos = Math.max(12, Math.min(window.innerHeight - 480, voiceMenuSeg.y));
+        const leftPos = Math.max(12, Math.min(window.innerWidth - 280, voiceMenuSeg.x));
 
         return (
           <>
             <div className="fixed inset-0 z-50 bg-transparent" onClick={() => setVoiceMenuSeg(null)} />
             <div
               style={{ top: `${topPos}px`, left: `${leftPos}px` }}
-              className="fixed z-50 w-64 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl shadow-2xl p-2.5 space-y-2.5 text-[11px] select-none"
+              className="fixed z-50 w-64 max-h-[calc(100vh-24px)] overflow-y-auto bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl shadow-2xl p-2.5 space-y-2.5 text-[11px] select-none [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-white/20"
             >
               {/* Header */}
               <div className="flex items-center justify-between border-b border-[var(--color-border)]/60 pb-1.5">

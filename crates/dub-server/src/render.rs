@@ -2350,7 +2350,7 @@ fn build_dub(
                 let custom_temp: Option<f64> = s.extra.get("temp")
                     .or_else(|| s.extra.get("temperature"))
                     .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|str_v| str_v.parse::<f64>().ok())))
-                    .map(|t| t.clamp(0.05, 0.60));
+                    .map(|t| t.clamp(0.05, 2.00));
                 let has_custom_voice = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()).is_some();
                 let main_rw = if has_custom_voice { seg_rw.clone() } else { ref_of(s) };
                 let main_rt = if has_custom_voice { seg_rt.clone() } else { reftext_of(s) };

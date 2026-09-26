@@ -135,7 +135,7 @@ fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
             }
         }
     }
-    // Посегментная температура сэмплинга (0.05..0.60). Смена требует ре-синтеза (dirty = true).
+    // Посегментная температура сэмплинга (0.05..2.00). Смена требует ре-синтеза (dirty = true).
     let mut temp_changed = false;
     if let Some(t) = edit.get("temp").or_else(|| edit.get("temperature")) {
         if t.is_null() || t.as_str() == Some("auto") || t.as_str() == Some("") {
@@ -143,7 +143,7 @@ fn op_segment(p: &mut Project, edit: &Value) -> PatchResult {
                 temp_changed = true;
             }
         } else if let Some(tv) = t.as_f64().or_else(|| t.as_str().and_then(|s| s.parse::<f64>().ok())) {
-            let clamped = tv.clamp(0.05, 0.60);
+            let clamped = tv.clamp(0.05, 2.00);
             seg.extra.insert("temp".into(), serde_json::json!(clamped));
             temp_changed = true;
         }
