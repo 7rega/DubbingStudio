@@ -55,7 +55,7 @@ fn tail_text(tail: &LogTail) -> String {
 }
 
 /// Параметры запуска сайдкар-сервера audiocpp_server.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AudiocppServerOpts {
     pub bin: PathBuf,
     pub model_path: PathBuf,
@@ -80,6 +80,16 @@ impl AudiocppServerOpts {
             ready_timeout_secs: 120,
         }
     }
+}
+
+/// Опции генерации речи для audiocpp_server (температура, сид, шаги диффузии, CFG scale).
+#[derive(Clone, Debug, Default)]
+pub struct SpeechOptions {
+    pub temperature: Option<f64>,
+    pub seed: Option<u64>,
+    pub num_inference_steps: Option<u32>,
+    pub guidance_scale: Option<f64>,
+    pub max_tokens: Option<u32>,
 }
 
 /// HTTP клиент к сайдкар-серверу audiocpp_server.
@@ -125,6 +135,7 @@ impl AudiocppClient {
         voice_ref: Option<&Path>,
         reference_text: Option<&str>,
         speed: Option<f32>,
+        opts: Option<&SpeechOptions>,
     ) -> Result<Vec<u8>, AudiocppServerError> {
         let url = format!("{}/v1/audio/speech", self.base_url);
 
@@ -143,11 +154,11 @@ impl AudiocppClient {
         }
 
         if let Some(rt) = reference_text {
-            let rt_trimmed = rt.trim();
-            if !rt_trimmed.is_empty() {
+            // Сохраняем непустую строку (включая " " для изоляции референса в Fish Audio)
+            if !rt.is_empty() {
                 body.as_object_mut()
                     .unwrap()
-                    .insert("reference_text".to_string(), serde_json::Value::String(rt_trimmed.to_string()));
+                    .insert("reference_text".to_string(), serde_json::Value::String(rt.to_string()));
             }
         }
 
@@ -160,11 +171,34 @@ impl AudiocppClient {
             }
         }
 
-        // Оптимальный профиль качества для VoxCPM2: 20 шагов диффузии и CFG 1.6
+        if let Some(opt) = opts {
+            let obj = body.as_object_mut().unwrap();
+            if let Some(temp) = opt.temperature {
+                obj.insert("temperature".to_string(), serde_json::json!(temp));
+            }
+            if let Some(seed) = opt.seed {
+                obj.insert("seed".to_string(), serde_json::json!(seed));
+            }
+            if let Some(steps) = opt.num_inference_steps {
+                obj.insert("num_inference_steps".to_string(), serde_json::json!(steps));
+            }
+            if let Some(cfg) = opt.guidance_scale {
+                obj.insert("guidance_scale".to_string(), serde_json::json!(cfg));
+            }
+            if let Some(max_tok) = opt.max_tokens {
+                obj.insert("max_tokens".to_string(), serde_json::json!(max_tok));
+            }
+        }
+
+        // Профиль качества по умолчанию для VoxCPM2 (20 шагов диффузии и CFG 1.6, если не переопределено)
         if model_id.to_lowercase().contains("voxcpm") {
             let obj = body.as_object_mut().unwrap();
-            obj.insert("num_inference_steps".to_string(), serde_json::json!(20));
-            obj.insert("guidance_scale".to_string(), serde_json::json!(1.6));
+            if !obj.contains_key("num_inference_steps") {
+                obj.insert("num_inference_steps".to_string(), serde_json::json!(20));
+            }
+            if !obj.contains_key("guidance_scale") {
+                obj.insert("guidance_scale".to_string(), serde_json::json!(1.6));
+            }
         }
 
         let resp = self
@@ -205,8 +239,9 @@ impl AudiocppClient {
         voice_ref: Option<&Path>,
         reference_text: Option<&str>,
         speed: Option<f32>,
+        opts: Option<&SpeechOptions>,
     ) -> Result<(Vec<f32>, i32, Vec<u8>), AudiocppServerError> {
-        let wav_bytes = self.speech(model_id, text, voice_ref, reference_text, speed)?;
+        let wav_bytes = self.speech(model_id, text, voice_ref, reference_text, speed, opts)?;
         let (samples, sr) = decode_wav_mono_f32(&wav_bytes)?;
         Ok((samples, sr, wav_bytes))
     }
@@ -220,9 +255,32 @@ pub struct AudiocppServer {
     log_tail: LogTail,
     drain_handles: Vec<std::thread::JoinHandle<()>>,
     config_path: PathBuf,
+    pub opts: AudiocppServerOpts,
 }
 
 impl AudiocppServer {
+    /// Принудительно завершить любые висящие зомби-процессы audiocpp_server(.exe) в ОС перед запуском.
+    pub fn kill_zombie_processes(bin: &Path) {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let bin_name = bin
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("audiocpp_server.exe");
+            let _ = Command::new("taskkill")
+                .args(["/F", "/IM", bin_name, "/T"])
+                .creation_flags(0x08000000)
+                .output();
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+
+    /// Проверить, запущен ли сервер с теми же параметрами и отвечает ли на /health.
+    pub fn can_reuse(&self, new_opts: &AudiocppServerOpts) -> bool {
+        self.opts == *new_opts && self.client.is_healthy()
+    }
+
     /// Запустить сайдкар-сервер с указанными параметрами.
     pub fn start(opts: AudiocppServerOpts) -> Result<Self, AudiocppServerError> {
         if !opts.bin.exists() {
@@ -237,6 +295,9 @@ impl AudiocppServer {
                 opts.model_path.display()
             )));
         }
+
+        // Предварительная зачистка зависших процессов audiocpp_server перед стартом
+        Self::kill_zombie_processes(&opts.bin);
 
         // Подбираем свободный порт на 127.0.0.1
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -285,6 +346,7 @@ impl AudiocppServer {
         let mut cmd = Command::new(&opts.bin);
         cmd.arg("--config").arg(&config_path);
         cmd.arg("--no-ui");
+        cmd.arg("--idle-unload-ms").arg("45000");
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -303,6 +365,12 @@ impl AudiocppServer {
         let mut child = cmd
             .spawn()
             .map_err(|e| AudiocppServerError::Spawn(format!("spawn audiocpp_server: {e}")))?;
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            crate::job_object::assign_process_to_global_job(child.as_raw_handle());
+        }
 
         let log_tail = Arc::new(Mutex::new(VecDeque::new()));
         let mut drain_handles = Vec::new();
@@ -324,9 +392,10 @@ impl AudiocppServer {
             log_tail,
             drain_handles,
             config_path,
+            opts,
         };
 
-        srv.wait_ready(opts.ready_timeout_secs)?;
+        srv.wait_ready(srv.opts.ready_timeout_secs)?;
         Ok(srv)
     }
 
@@ -368,11 +437,8 @@ impl AudiocppServer {
     pub fn stop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        for h in self.drain_handles.drain(..) {
-            let _ = h.join();
-        }
+        self.drain_handles.clear();
         let _ = std::fs::remove_file(&self.config_path);
-        std::thread::sleep(Duration::from_millis(100));
     }
 }
 

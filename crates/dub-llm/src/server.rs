@@ -138,6 +138,10 @@ impl LlamaServer {
         //   (граф вычислений prefill масштабируется от ubatch; меньше ubatch = меньше пиковый буфер).
         let ctx = env_u32_pos("DUB_STUDIO_LLAMA_CTX").unwrap_or(opts.ctx_size);
         let ngl = std::env::var("DUB_STUDIO_LLAMA_NGL").ok().and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(opts.n_gpu_layers);
+
+        // Предварительная зачистка зависших процессов llama-server
+        Self::kill_zombie_processes(&opts.bin);
+
         let mut cmd = Command::new(&opts.bin);
         #[cfg(windows)]
         {
@@ -260,13 +264,28 @@ impl LlamaServer {
         self.port
     }
 
-    /// Явно остановить сервер (kill + wait + join + WDDM dealloc sleep). Идемпотентно.
+    /// Принудительно завершить любые висящие зомби-процессы llama-server(.exe) в ОС перед запуском.
+    pub fn kill_zombie_processes(bin: &Path) {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let bin_name = bin
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("llama-server.exe");
+            let _ = Command::new("taskkill")
+                .args(["/F", "/IM", bin_name, "/T"])
+                .creation_flags(0x08000000)
+                .output();
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+
+    /// Явно остановить сервер (kill + wait + WDDM dealloc sleep). Идемпотентно.
     pub fn stop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        for h in self.drain_handles.drain(..) {
-            let _ = h.join();
-        }
+        self.drain_handles.clear();
         // Даём Windows WDDM время вернуть закоммиченные страницы видеопамяти
         std::thread::sleep(Duration::from_millis(200));
     }

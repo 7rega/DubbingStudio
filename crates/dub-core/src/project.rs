@@ -100,6 +100,39 @@ pub struct Audio {
     /// "real" (реальные лица) | "anime" (рисованные). Пусто = не определяли (юзер задал явно/кастинг выкл).
     #[serde(default)]
     pub content_type: String,
+    /// Глобальный промпт стиля/акцента речи для моделей VoxCPM2 и Fish Audio (например, "native Russian speaker").
+    #[serde(default)]
+    pub voice_prompt: String,
+    /// Индивидуальный промпт стиля/акцента для Fish Audio S2 Pro (например, "[ru]").
+    #[serde(default)]
+    pub fish_prompt: String,
+    /// Температура сэмплинга Fish Audio (дефолт 0.8, диапазон 0.0 - 2.0).
+    #[serde(default = "default_fish_temp")]
+    pub fish_temp: f64,
+    /// Изолировать референс от иностранного текста транскрипции при синтезе Fish Audio (дефолт true).
+    #[serde(default = "default_true")]
+    pub fish_clean_ref: bool,
+    /// Фиксированный сид генерации Fish Audio (None = случайный сид).
+    #[serde(default)]
+    pub fish_seed: Option<u64>,
+    /// Индивидуальный промпт манеры/стиля речи для VoxCPM2 (например, "slowly pace, calm tone").
+    #[serde(default)]
+    pub vox_prompt: String,
+    /// Количество шагов диффузии для VoxCPM2 (дефолт 20, диапазон 10 - 50).
+    #[serde(default = "default_vox_steps")]
+    pub vox_steps: u32,
+    /// CFG scale (guidance scale) для VoxCPM2 (дефолт 1.6, диапазон 1.0 - 3.0).
+    #[serde(default = "default_vox_cfg")]
+    pub vox_cfg: f64,
+    /// Фиксированный сид генерации VoxCPM2 (None = случайный сид).
+    #[serde(default)]
+    pub vox_seed: Option<u64>,
+    /// Индивидуальная температура сэмплинга Higgs Audio v3 (дефолт None -> в рантайме 0.80).
+    #[serde(default)]
+    pub higgs_temp: Option<f64>,
+    /// Фиксированный сид генерации Higgs Audio v3 (None = случайный сид).
+    #[serde(default)]
+    pub higgs_seed: Option<u64>,
     /// Флаг наличия несведённых изменений (перегенерированных фраз, не запечённых в мастер-трек dub_audio.m4a).
     #[serde(default)]
     pub mix_dirty: bool,
@@ -109,6 +142,18 @@ pub struct Audio {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_fish_temp() -> f64 {
+    0.8
+}
+
+fn default_vox_steps() -> u32 {
+    20
+}
+
+fn default_vox_cfg() -> f64 {
+    1.6
 }
 
 fn default_voiceover_gain() -> f64 {
@@ -143,6 +188,17 @@ impl Default for Audio {
             keep_original_track: false,
             container: default_container(),
             content_type: String::new(),
+            voice_prompt: String::new(),
+            fish_prompt: String::new(),
+            fish_temp: default_fish_temp(),
+            fish_clean_ref: true,
+            fish_seed: None,
+            vox_prompt: String::new(),
+            vox_steps: default_vox_steps(),
+            vox_cfg: default_vox_cfg(),
+            vox_seed: None,
+            higgs_temp: None,
+            higgs_seed: None,
             mix_dirty: false,
             extra: Extra::new(),
         }

@@ -187,6 +187,14 @@ fn hide_console_window() {
     }
 }
 
+static SHUTDOWN_CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn fast_shutdown() {
+    if !SHUTDOWN_CALLED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        dub_server::shutdown_all_servers();
+    }
+}
+
 pub fn run() {
     #[cfg(windows)]
     hide_console_window();
@@ -223,6 +231,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .on_window_event(|_window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                fast_shutdown();
+            }
+        })
         .setup(move |app| {
             // Иконка бандла для GUI-окна: без явной установки окно оставалось пустым в ALT+TAB/панели задач
             // (иконка висела на консольном окне). Ставим её на само GUI-окно.
@@ -253,6 +266,11 @@ pub fn run() {
             spawn_update_check(app.handle().clone(), is_portable());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("ошибка запуска Tauri");
+        .build(tauri::generate_context!())
+        .expect("ошибка сборки контекста Tauri")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                fast_shutdown();
+            }
+        });
 }

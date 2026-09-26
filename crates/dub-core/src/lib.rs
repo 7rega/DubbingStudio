@@ -35,7 +35,27 @@ mod tests {
         assert!(p.extra.contains_key("future_field"));
         assert_eq!(p.segments[0].extra.get("gui_only").unwrap(), &serde_json::json!(true));
         let out = p.to_json().unwrap();
-        assert!(out.contains("future_field"));
-        assert!(out.contains("gui_only"));
+        assert_eq!(out.contains("future_field"), true);
+        assert_eq!(out.contains("gui_only"), true);
+    }
+
+    #[test]
+    fn audio_tts_settings_defaults_and_roundtrips() {
+        let p = Project::default();
+        assert_eq!(p.audio.fish_prompt, "");
+        assert_eq!(p.audio.fish_temp, 0.8);
+        assert_eq!(p.audio.fish_clean_ref, true);
+        assert_eq!(p.audio.fish_seed, None);
+        assert_eq!(p.audio.vox_prompt, "");
+        assert_eq!(p.audio.vox_steps, 20);
+        assert_eq!(p.audio.vox_cfg, 1.6);
+        assert_eq!(p.audio.vox_seed, None);
+
+        let j = p.to_json().unwrap();
+        let p2 = Project::from_json(&j).unwrap();
+        assert_eq!(p2.audio.fish_temp, 0.8);
+        assert_eq!(p2.audio.fish_clean_ref, true);
+        assert_eq!(p2.audio.vox_steps, 20);
+        assert_eq!(p2.audio.vox_cfg, 1.6);
     }
 }

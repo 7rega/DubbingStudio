@@ -11,7 +11,7 @@
 //! не-dirty переиспользуются, dirty пере-синтезируются (улучшение против питон-_regen_dub, что гнал
 //! весь дубляж заново — правка #10). tgt-текст пустой -> сегмент молчит (как в питоне).
 
-use audiocpp::{AudiocppEngine, AudiocppServer, AudiocppServerOpts};
+use audiocpp::{AudiocppEngine, AudiocppServer, AudiocppServerOpts, SpeechOptions};
 use dub_captions::{BlurBox, Sub, SubStyle as CapSubStyle, Title as CapTitle};
 use dub_core::{Project, SubStyle as CoreSubStyle, Title as CoreTitle};
 use serde_json::{json, Value};
@@ -85,6 +85,7 @@ pub struct RenderPaths {
     pub tts_engine: String,    // "higgs" | "voxcpm2" | "fish_audio"
     pub voxcpm2_quant: String, // "q8_0" | "bf16"
     pub fish_audio_quant: String, // "q8_0" | "bf16"
+    pub higgs_execution: String, // "server" | "dll"
 }
 
 pub type Progress<'a> = dyn Fn(Value) + Send + Sync + 'a;
@@ -449,21 +450,37 @@ fn synth_defect(samples: &[f32], sr: i32, tgt_chars: usize) -> Option<&'static s
     None
 }
 
-/// Удаляет управляющие теги Higgs (<|...|>) и нормализует пробелы
-pub fn strip_higgs_tags(s: &str) -> String {
+/// Очищает текст от всех управляющих тегов и промптов (Higgs `<|...|>`, Fish `[...]`, Vox `(...)`)
+/// для безопасного использования в расчётах таймингов, подсчёте произносимых символов, субтитрах и ASR-QC.
+pub fn clean_speech_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    let mut in_tag = false;
+    let mut depth_higgs = 0usize;
+    let mut depth_sq = 0usize;
+    let mut depth_paren = 0usize;
+
     let chars: Vec<char> = s.chars().collect();
     let len = chars.len();
     let mut i = 0;
     while i < len {
-        if !in_tag && i + 1 < len && chars[i] == '<' && chars[i + 1] == '|' {
-            in_tag = true;
+        if i + 1 < len && chars[i] == '<' && chars[i + 1] == '|' {
+            depth_higgs += 1;
             i += 2;
-        } else if in_tag && i + 1 < len && chars[i] == '|' && chars[i + 1] == '>' {
-            in_tag = false;
+        } else if depth_higgs > 0 && i + 1 < len && chars[i] == '|' && chars[i + 1] == '>' {
+            depth_higgs -= 1;
             i += 2;
-        } else if !in_tag {
+        } else if chars[i] == '[' {
+            depth_sq += 1;
+            i += 1;
+        } else if depth_sq > 0 && chars[i] == ']' {
+            depth_sq -= 1;
+            i += 1;
+        } else if chars[i] == '(' {
+            depth_paren += 1;
+            i += 1;
+        } else if depth_paren > 0 && chars[i] == ')' {
+            depth_paren -= 1;
+            i += 1;
+        } else if depth_higgs == 0 && depth_sq == 0 && depth_paren == 0 {
             out.push(chars[i]);
             i += 1;
         } else {
@@ -473,9 +490,228 @@ pub fn strip_higgs_tags(s: &str) -> String {
     out.split_whitespace().collect::<Vec<&str>>().join(" ")
 }
 
-/// Подсчет реальных произносимых буквенно-цифровых символов без управляющих тегов Higgs (<|...|>)
+/// Удаляет управляющие теги и промпты (псевдоним для совместимости)
+pub fn strip_higgs_tags(s: &str) -> String {
+    clean_speech_text(s)
+}
+
+/// Извлекает локальные промпты из текста фразы в скобках [] или ().
+pub fn extract_phrase_prompts(s: &str, engine: &str) -> Vec<String> {
+    let mut prompts = Vec::new();
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        if (engine == "fish_audio" || engine == "all") && chars[i] == '[' {
+            let start = i + 1;
+            let mut end = start;
+            while end < len && chars[end] != ']' {
+                end += 1;
+            }
+            if end < len {
+                let inner: String = chars[start..end].iter().collect();
+                let trimmed = inner.trim().to_string();
+                if !trimmed.is_empty() {
+                    prompts.push(trimmed);
+                }
+                i = end + 1;
+                continue;
+            }
+        } else if (engine == "voxcpm2" || engine == "all") && chars[i] == '(' {
+            let start = i + 1;
+            let mut end = start;
+            while end < len && chars[end] != ')' {
+                end += 1;
+            }
+            if end < len {
+                let inner: String = chars[start..end].iter().collect();
+                let trimmed = inner.trim().to_string();
+                if !trimmed.is_empty() {
+                    prompts.push(trimmed);
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    prompts
+}
+
+/// Очищает текст для Fish Audio от тегов других движков (<|...|>, (...)),
+/// сохраняя управляющие теги самого Fish Audio ([...]) на их исходных местах во фразе.
+pub fn clean_fish_audio_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut depth_higgs = 0usize;
+    let mut depth_paren = 0usize;
+
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        if i + 1 < len && chars[i] == '<' && chars[i + 1] == '|' {
+            depth_higgs += 1;
+            i += 2;
+        } else if depth_higgs > 0 && i + 1 < len && chars[i] == '|' && chars[i + 1] == '>' {
+            depth_higgs -= 1;
+            i += 2;
+        } else if chars[i] == '(' {
+            depth_paren += 1;
+            i += 1;
+        } else if depth_paren > 0 && chars[i] == ')' {
+            depth_paren -= 1;
+            i += 1;
+        } else if depth_higgs == 0 && depth_paren == 0 {
+            out.push(chars[i]);
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    out.split_whitespace().collect::<Vec<&str>>().join(" ")
+}
+
+/// Формирует входной текст для TTS с учетом глобального промпта проекта и локальных промптов фразы.
+pub fn build_tts_input(
+    engine: &str,
+    raw_tgt: &str,
+    global_prompt: &str,
+) -> String {
+    match engine {
+        "voxcpm2" => {
+            let clean_text = clean_speech_text(raw_tgt);
+            let phrase_prompts = extract_phrase_prompts(raw_tgt, engine);
+            // VoxCPM2: слияние через запятую в одних круглых скобках: (global, local1, local2) clean_text
+            let mut parts = Vec::new();
+            let g = global_prompt
+                .trim()
+                .trim_matches(|c| c == '(' || c == ')' || c == '[' || c == ']')
+                .trim();
+            if !g.is_empty() {
+                parts.push(g.to_string());
+            }
+            for p in phrase_prompts {
+                let p_clean = p
+                    .trim()
+                    .trim_matches(|c| c == '(' || c == ')' || c == '[' || c == ']')
+                    .trim();
+                if !p_clean.is_empty() {
+                    parts.push(p_clean.to_string());
+                }
+            }
+            if parts.is_empty() {
+                clean_text
+            } else {
+                format!("({}) {}", parts.join(", "), clean_text)
+            }
+        }
+        "fish_audio" => {
+            // Fish Audio: сохраняем инлайн-теги [...] на их местах во фразе;
+            // глобальный промпт проекта добавляется в префикс [global] (если ещё не указан в начале фразы).
+            let cleaned = clean_fish_audio_text(raw_tgt);
+            let g = global_prompt
+                .trim()
+                .trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')')
+                .trim();
+            if g.is_empty() {
+                cleaned
+            } else {
+                let g_tag = format!("[{g}]");
+                if cleaned.starts_with(&g_tag) {
+                    cleaned
+                } else if cleaned.is_empty() {
+                    g_tag
+                } else {
+                    format!("{g_tag} {cleaned}")
+                }
+            }
+        }
+        _ => {
+            // Для других движков (Higgs и т.д.) оставляем чистый текст
+            clean_speech_text(raw_tgt)
+        }
+    }
+}
+
+/// Определяет активный промпт для выбранного TTS-движка с фоллбэком на общий voice_prompt.
+pub fn active_tts_prompt<'a>(tts_engine: &str, audio: &'a dub_core::Audio) -> &'a str {
+    if tts_engine == "fish_audio" {
+        if !audio.fish_prompt.trim().is_empty() {
+            &audio.fish_prompt
+        } else {
+            &audio.voice_prompt
+        }
+    } else {
+        if !audio.vox_prompt.trim().is_empty() {
+            &audio.vox_prompt
+        } else {
+            &audio.voice_prompt
+        }
+    }
+}
+
+/// Собирает опции генерации речи (температура, сид, шаги, CFG scale) из настроек проекта.
+pub fn build_speech_options(
+    tts_engine: &str,
+    audio: &dub_core::Audio,
+    custom_temp: Option<f64>,
+    seed_offset: u64,
+    max_tokens: Option<u32>,
+) -> SpeechOptions {
+    if tts_engine == "fish_audio" {
+        let temp = custom_temp.unwrap_or(audio.fish_temp);
+        let seed = audio.fish_seed.map(|s| s.wrapping_add(seed_offset));
+        SpeechOptions {
+            temperature: Some(temp),
+            seed,
+            num_inference_steps: None,
+            guidance_scale: None,
+            max_tokens: None,
+        }
+    } else if tts_engine == "voxcpm2" {
+        let seed = audio.vox_seed.map(|s| s.wrapping_add(seed_offset));
+        SpeechOptions {
+            temperature: None,
+            seed,
+            num_inference_steps: Some(audio.vox_steps),
+            guidance_scale: Some(audio.vox_cfg),
+            max_tokens: None,
+        }
+    } else if tts_engine == "higgs" {
+        let base_temp = custom_temp.or(audio.higgs_temp).unwrap_or(0.80);
+        let effective_temp = if seed_offset == 0 {
+            (base_temp.clamp(0.05, 2.00) * 100.0).round() / 100.0
+        } else {
+            // Запрет снижения ниже 0.65! Легкий подогрев для выхода из зацикливания:
+            let raw = (base_temp * (1.0 + 0.05 * (seed_offset as f64).min(4.0))).clamp(0.65, 1.10);
+            (raw * 100.0).round() / 100.0
+        };
+        let seed = if let Some(base) = audio.higgs_seed.or(audio.vox_seed).or(audio.fish_seed) {
+            Some(base.wrapping_add(seed_offset))
+        } else if seed_offset > 0 {
+            Some(42u64.wrapping_add(seed_offset))
+        } else {
+            None
+        };
+        SpeechOptions {
+            temperature: Some(effective_temp),
+            seed,
+            num_inference_steps: None,
+            guidance_scale: None,
+            max_tokens,
+        }
+    } else {
+        SpeechOptions {
+            max_tokens,
+            ..SpeechOptions::default()
+        }
+    }
+}
+
+/// Подсчет реальных произносимых буквенно-цифровых символов без управляющих тегов и промптов
 pub fn count_speech_chars(s: &str) -> usize {
-    strip_higgs_tags(s)
+    clean_speech_text(s)
         .chars()
         .filter(|c| c.is_alphanumeric())
         .count()
@@ -835,6 +1071,7 @@ fn build_dub(
                     media::trim(src, &out, 0.0, paths.ref_secs, 16_000).is_ok()
                 };
                 if trimmed && out.is_file() {
+                    let _ = media::align_wav_to_codec_frames(&out);
                     map.insert(spk.clone(), out);
                 } else {
                     clone_slot_spks.insert(spk.clone());
@@ -876,6 +1113,7 @@ fn build_dub(
                         media::trim(&src, &out, 0.0, paths.ref_secs, 16_000).is_ok()
                     };
                     if trimmed && out.is_file() {
+                        let _ = media::align_wav_to_codec_frames(&out);
                         map.insert(spk.clone(), out);
                     }
                 }
@@ -1024,7 +1262,10 @@ fn build_dub(
 
         let out = wd.join(format!("emoref_{sid}.wav"));
         match media::trim(&vocals16, &out, raw_start, raw_end.max(raw_start + 0.05), 16_000) {
-            Ok(()) => Some((out, ref_text)),
+            Ok(()) => {
+                let _ = media::align_wav_to_codec_frames(&out);
+                Some((out, ref_text))
+            }
             Err(e) => {
                 eprintln!("[Emo-Ref] {sid}: сбой обрезки вокала ffmpeg ({e}) -> откат на identity-реф");
                 None
@@ -1036,9 +1277,14 @@ fn build_dub(
     // Облачный TTS (OpenRouter) вместо локального: тяжёлую DLL + модель НЕ грузим вовсе — в этом и
     // смысл (снять самую тяжёлую часть). engine=None; синтез идёт по облачной ветке ниже.
     let cloud_tts_on = crate::models::openrouter_stage_on(&paths.models_root, "tts");
-    let is_audiocpp_tts = paths.tts_engine == "voxcpm2" || paths.tts_engine == "fish_audio";
+    let is_audiocpp_tts = paths.tts_engine == "voxcpm2"
+        || paths.tts_engine == "fish_audio"
+        || (paths.tts_engine == "higgs"
+            && paths.higgs_execution == "server"
+            && paths.higgs_quant != "q6_k"
+            && paths.higgs_quant != "q4_k_m");
 
-    let mut vox_server: Option<AudiocppServer> = None;
+    let mut vox_server: Option<Arc<Mutex<AudiocppServer>>> = None;
     let engine: Option<Arc<AudiocppEngine>> = if dirty_count == 0 {
         None
     } else if cloud_tts_on {
@@ -1046,7 +1292,14 @@ fn build_dub(
         None
     } else if is_audiocpp_tts {
         let is_fish = paths.tts_engine == "fish_audio";
-        let engine_name = if is_fish { "Fish Audio S2 Pro" } else { "VoxCPM2" };
+        let is_higgs = paths.tts_engine == "higgs";
+        let engine_name = if is_fish {
+            "Fish Audio S2 Pro"
+        } else if is_higgs {
+            "Higgs Audio v3"
+        } else {
+            "VoxCPM2"
+        };
         emit(progress, "tts", &format!("{engine_name} TTS: инициализация аудио-сервера audio.cpp..."));
         *paths.tts_cache.lock().unwrap() = None;
 
@@ -1062,6 +1315,16 @@ fn build_dub(
                     )
                 })?;
             (p, "fish_audio".to_string(), "fish_audio".to_string())
+        } else if is_higgs {
+            let p = crate::models::resolve_higgs_gguf_path(&paths.higgs_model_root, &paths.higgs_quant)
+                .ok_or_else(|| {
+                    format!(
+                        "Модель Higgs Audio v3 ({}) не найдена в {}",
+                        paths.higgs_quant,
+                        paths.higgs_model_root.display()
+                    )
+                })?;
+            (p, "higgs_audio_tts".to_string(), "higgs_audio_tts".to_string())
         } else {
             let p = audiocpp::resolve_voxcpm2_path(&paths.voxcpm2_dir, &paths.voxcpm2_quant)
                 .or_else(|| audiocpp::resolve_voxcpm2_path(&paths.models_root, &paths.voxcpm2_quant))
@@ -1091,12 +1354,42 @@ fn build_dub(
         opts.threads = paths.higgs_threads;
         opts.ready_timeout_secs = 60;
 
-        emit(progress, "tts", &format!("{engine_name} TTS: запуск audiocpp_server с моделью {}...", model_path.file_name().unwrap_or_default().to_string_lossy()));
-        let srv = AudiocppServer::start(opts)
-            .map_err(|e| format!("Сбой запуска audiocpp_server: {e}"))?;
-        vox_server = Some(srv);
+        let global = crate::global_audiocpp_server();
+        let mut guard = global.lock().unwrap();
+
+        let srv_handle = if let Some(ref existing_arc) = *guard {
+            let mut existing = existing_arc.lock().unwrap();
+            if existing.can_reuse(&opts) {
+                emit(progress, "tts", &format!("{engine_name} TTS: переиспользование активного сервера audio.cpp..."));
+                existing_arc.clone()
+            } else {
+                emit(progress, "tts", &format!("{engine_name} TTS: смена модели или параметров, перезапуск аудио-сервера..."));
+                existing.stop();
+                drop(existing);
+                *guard = None;
+
+                emit(progress, "tts", &format!("{engine_name} TTS: запуск audiocpp_server с моделью {}...", model_path.file_name().unwrap_or_default().to_string_lossy()));
+                let srv = AudiocppServer::start(opts)
+                    .map_err(|e| format!("Сбой запуска audiocpp_server: {e}"))?;
+                let arc = Arc::new(Mutex::new(srv));
+                *guard = Some(arc.clone());
+                arc
+            }
+        } else {
+            emit(progress, "tts", &format!("{engine_name} TTS: запуск audiocpp_server с моделью {}...", model_path.file_name().unwrap_or_default().to_string_lossy()));
+            let srv = AudiocppServer::start(opts)
+                .map_err(|e| format!("Сбой запуска audiocpp_server: {e}"))?;
+            let arc = Arc::new(Mutex::new(srv));
+            *guard = Some(arc.clone());
+            arc
+        };
+
+        vox_server = Some(srv_handle);
         None
     } else {
+        if paths.tts_engine == "higgs" && paths.higgs_execution == "server" && (paths.higgs_quant == "q6_k" || paths.higgs_quant == "q4_k_m") {
+            emit(progress, "tts", &format!("Higgs {}: кванты Q4/Q6 поддерживаются только через DLL (переключение на audiocpp_engine.dll)...", paths.higgs_quant));
+        }
         let key = EngineKey {
             dll: paths.higgs_dll.clone(),
             model_root: paths.higgs_model_root.clone(),
@@ -1255,25 +1548,35 @@ fn build_dub(
         .map(|v| v == "1")
         .unwrap_or(false);
 
-    // Настраиваемая температура / стабильность голоса: дефолт 0.20 (0.08..0.45)
+    // Настраиваемая температура / стабильность голоса: дефолт 0.20 (0.05..2.00)
     let user_voice_temp: f64 = if voice_manual_ctrl {
         crate::models::load_selection(&paths.models_root)
             .get("voice_temp")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.20)
-            .clamp(0.08, 0.45)
+            .clamp(0.05, 2.00)
     } else {
         0.28
     };
 
     // Лимит токенов TTS (higgs_max_tokens): "default" -> None (дефолт DLL), "auto" -> Some(0), либо число.
     let max_tokens_mode = crate::models::higgs_max_tokens(&paths.models_root);
+    let calc_max_tokens = |dur: f64| -> Option<u32> {
+        match max_tokens_mode {
+            None => Some(2048), // дефолт для audiocpp_server: 2048 (нативный лимит модели)
+            Some(0) => {
+                let cap = (((dur * 85.0 * 1.6).ceil() as u32) + 128).clamp(512, 1536);
+                Some(cap)
+            }
+            Some(n) => Some(n),
+        }
+    };
     let tok_json = |dur: f64| -> String {
         match max_tokens_mode {
             None => String::new(), // дефолт DLL (не передаём max_tokens)
             Some(0) => {
-                let cap = (((dur * 75.0 * 1.5).ceil() as u32) + 32).clamp(128, 768);
+                let cap = (((dur * 85.0 * 1.6).ceil() as u32) + 128).clamp(512, 1536);
                 format!(",\"max_tokens\":{cap}")
             }
             Some(n) => format!(",\"max_tokens\":{n}"),
@@ -1388,6 +1691,7 @@ fn build_dub(
                         let trim_end = if dur > 0.0 { dur.min(cap) } else { cap };
                         let trim_ok = media::trim(dwav, &out, 0.0, trim_end, 16_000).is_ok();
                         if trim_ok && out.is_file() {
+                            let _ = media::align_wav_to_codec_frames(&out);
                             let t = ds.tgt_text.trim();
                             let text = if !t.is_empty() {
                                 Some(t.to_string())
@@ -1408,6 +1712,7 @@ fn build_dub(
                             media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok()
                         };
                         if trim_ok && out.is_file() {
+                            let _ = media::align_wav_to_codec_frames(&out);
                             let t = ds.src_text.trim();
                             Some((out, if t.is_empty() { None } else { Some(t.to_string()) }))
                         } else {
@@ -1441,6 +1746,7 @@ fn build_dub(
                     };
                     let _ = std::fs::remove_file(&temp_in);
                     if trim_ok && out.is_file() {
+                        let _ = media::align_wav_to_codec_frames(&out);
                         // Если включена умная нарезка, получаем точный текст среза через ASR,
                         // исключая передачу огромного несоответствующего .txt файла в модель
                         let txt_content = if smart_ref_on {
@@ -1498,7 +1804,7 @@ fn build_dub(
         let custom_temp: Option<f64> = s.extra.get("temp")
             .or_else(|| s.extra.get("temperature"))
             .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|str_v| str_v.parse::<f64>().ok())))
-            .map(|t| t.clamp(0.05, 0.60));
+            .map(|t| t.clamp(0.05, 2.00));
         let effective_temp: f64 = custom_temp.unwrap_or(user_voice_temp);
 
         // Синтез ТОЛЬКО если сегмент dirty (правился текст/спикер/голос) ИЛИ нет кэша. Реф-клипы
@@ -1636,16 +1942,30 @@ fn build_dub(
                 // минуты, так что порог чисто разделяет. Ошибка/таймаут -> как дефект (ретрай стохастику
                 // обычно лечит); исчерпали попытки -> ОРИГИНАЛ (сегмент дороже потерять, чем зависший рендер).
                 let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(min_timeout_secs));
-                let (samples, sr) = if let Some(ref vox) = vox_server {
+                let (samples, sr) = if let Some(ref vox_arc) = vox_server {
+                    let vox = vox_arc.lock().unwrap();
                     let speed = if paths.tts_engine != "voxcpm2" && speech_rate_on && rate_ratio > 0.5 && rate_ratio < 2.0 {
                         Some(rate_ratio as f32)
                     } else {
                         None
                     };
                     let vr = if rw.is_file() { Some(rw.as_path()) } else { None };
-                    let model_id = if paths.tts_engine == "fish_audio" { "fish_audio" } else { "voxcpm2" };
-                    let clean_tgt = strip_higgs_tags(tgt);
-                    match vox.client().speech_pcm(model_id, &clean_tgt, vr, rt, speed) {
+                    let model_id = if paths.tts_engine == "fish_audio" {
+                        "fish_audio"
+                    } else if paths.tts_engine == "higgs" {
+                        "higgs_audio_tts"
+                    } else {
+                        "voxcpm2"
+                    };
+                    let prompt = active_tts_prompt(&paths.tts_engine, &proj.audio);
+                    let tts_text = build_tts_input(&paths.tts_engine, tgt, prompt);
+                    let effective_rt = if paths.tts_engine == "fish_audio" && proj.audio.fish_clean_ref {
+                        Some(" ")
+                    } else {
+                        rt
+                    };
+                    let speech_opts = build_speech_options(&paths.tts_engine, &proj.audio, custom_temp, attempt.saturating_sub(1) as u64, calc_max_tokens(expected_dur));
+                    match vox.client().speech_pcm(model_id, &tts_text, vr, effective_rt, speed, Some(&speech_opts)) {
                         Ok((smp, r, _)) => (smp, r),
                         Err(e) => {
                             retried = true;
@@ -1828,7 +2148,8 @@ fn build_dub(
                 // Multi-take обязан наследовать индивидуальный голос/донор сегмента (ref_wav / ref_text)
                 let ref_wav_mt = ref_wav.clone();
                 let ref_text_mt = ref_text.clone();
-                let tok_part_mt = tok_json((s.end - s.start).max(0.6));
+                let expected_dur = (s.end - s.start).max(0.6);
+                let tok_part_mt = tok_json(expected_dur);
                 for take_i in 1..=2u64 {
                     let take_path = wd.join(format!("seg_{sid}_take{take_i}.wav"));
                     let seed = spk_seed_base + take_i * 100 + 77;
@@ -1842,16 +2163,30 @@ fn build_dub(
                     );
                     let rt_mt = ref_text_mt.as_deref();
                     let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(min_timeout_secs));
-                    let (samples, sr) = if let Some(ref vox) = vox_server {
+                    let (samples, sr) = if let Some(ref vox_arc) = vox_server {
+                        let vox = vox_arc.lock().unwrap();
                         let speed = if paths.tts_engine != "voxcpm2" {
                             if take_i == 1 { Some(1.05) } else { Some(0.95) }
                         } else {
                             None
                         };
                         let vr = if ref_wav_mt.is_file() { Some(ref_wav_mt.as_path()) } else { None };
-                        let model_id = if paths.tts_engine == "fish_audio" { "fish_audio" } else { "voxcpm2" };
-                        let clean_tgt = strip_higgs_tags(tgt);
-                        match vox.client().speech_pcm(model_id, &clean_tgt, vr, ref_text_mt.as_deref(), speed) {
+                        let model_id = if paths.tts_engine == "fish_audio" {
+                            "fish_audio"
+                        } else if paths.tts_engine == "higgs" {
+                            "higgs_audio_tts"
+                        } else {
+                            "voxcpm2"
+                        };
+                        let prompt = active_tts_prompt(&paths.tts_engine, &proj.audio);
+                        let tts_text = build_tts_input(&paths.tts_engine, tgt, prompt);
+                        let effective_rt_mt = if paths.tts_engine == "fish_audio" && proj.audio.fish_clean_ref {
+                            Some(" ")
+                        } else {
+                            ref_text_mt.as_deref()
+                        };
+                        let speech_opts = build_speech_options(&paths.tts_engine, &proj.audio, custom_temp, take_i as u64, calc_max_tokens(expected_dur));
+                        match vox.client().speech_pcm(model_id, &tts_text, vr, effective_rt_mt, speed, Some(&speech_opts)) {
                             Ok((s, r, _)) => (s, r),
                             Err(_) => continue,
                         }
@@ -2017,6 +2352,10 @@ fn build_dub(
                 if engine_dead { break; } // движок мёртв — остальные QC не пересинтезируем
                 let (fi, pidx, raw, tgtq, spk, room, fitp, seg_rw, seg_rt) = &qc_list[i];
                 let s = &proj.segments[*fi];
+                let custom_temp: Option<f64> = s.extra.get("temp")
+                    .or_else(|| s.extra.get("temperature"))
+                    .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|str_v| str_v.parse::<f64>().ok())))
+                    .map(|t| t.clamp(0.05, 0.60));
                 let has_custom_voice = s.voice.as_deref().map(str::trim).filter(|v| !v.is_empty()).is_some();
                 let main_rw = if has_custom_voice { seg_rw.clone() } else { ref_of(s) };
                 let main_rt = if has_custom_voice { seg_rt.clone() } else { reftext_of(s) };
@@ -2041,11 +2380,25 @@ fn build_dub(
                 .enumerate()
                 {
                     let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(min_timeout_secs));
-                    let (smp, r) = if let Some(ref vox) = vox_server {
+                    let (smp, r) = if let Some(ref vox_arc) = vox_server {
+                        let vox = vox_arc.lock().unwrap();
                         let vr = if rw.is_file() { Some(rw.as_path()) } else { None };
-                        let model_id = if paths.tts_engine == "fish_audio" { "fish_audio" } else { "voxcpm2" };
-                        let clean_tgtq = strip_higgs_tags(tgtq);
-                        match vox.client().speech_pcm(model_id, &clean_tgtq, vr, rt, None) {
+                        let model_id = if paths.tts_engine == "fish_audio" {
+                            "fish_audio"
+                        } else if paths.tts_engine == "higgs" {
+                            "higgs_audio_tts"
+                        } else {
+                            "voxcpm2"
+                        };
+                        let prompt = active_tts_prompt(&paths.tts_engine, &proj.audio);
+                        let tts_text = build_tts_input(&paths.tts_engine, tgtq, prompt);
+                        let effective_rt = if paths.tts_engine == "fish_audio" && proj.audio.fish_clean_ref {
+                            Some(" ")
+                        } else {
+                            rt
+                        };
+                        let speech_opts = build_speech_options(&paths.tts_engine, &proj.audio, custom_temp, 100, calc_max_tokens(e_dur));
+                        match vox.client().speech_pcm(model_id, &tts_text, vr, effective_rt, None, Some(&speech_opts)) {
                             Ok((s, rate, _)) => (s, rate),
                             Err(_) => {
                                 std::thread::sleep(Duration::from_millis(500));
@@ -2639,6 +2992,7 @@ fn build_speaker_refs(
             if !trimmed {
                 media::trim(vocals16, &p, c.start, c.end.min(c.start + ref_secs), 16_000)?;
             }
+            let _ = media::align_wav_to_codec_frames(&p);
             batch.push(p);
         }
         cand_map.insert(spk.clone(), good);
@@ -3691,5 +4045,140 @@ mod tests {
         // Расширяться некуда, длительность 0.3с < 0.5с -> безопасный откат на None
         let res = smart_word_bounds(&s0, 10.0, &segs, "0");
         assert!(res.is_none(), "sandwiched phrase < 0.5s must safely return None");
+    }
+
+    #[test]
+    fn test_clean_speech_text_prompts_and_tags() {
+        assert_eq!(clean_speech_text("[native Russian speaker] Привет мир!"), "Привет мир!");
+        assert_eq!(clean_speech_text("(slowly pace) Спокойная речь."), "Спокойная речь.");
+        assert_eq!(clean_speech_text("<|emotion:anger|>[whisper] (calm) Смесь тегов!"), "Смесь тегов!");
+        assert_eq!(clean_speech_text("[prompt 1] Текст [prompt 2] продолжение"), "Текст продолжение");
+        assert_eq!(clean_speech_text("(prompt 1) Текст (prompt 2) конец"), "Текст конец");
+        assert_eq!(count_speech_chars("[native Russian speaker] Привет"), 6);
+        assert_eq!(count_speech_chars("(slowly pace) Привет"), 6);
+    }
+
+    #[test]
+    fn test_extract_phrase_prompts() {
+        let text_fish = "[native Russian speaker] [whisper] Привет!";
+        assert_eq!(extract_phrase_prompts(text_fish, "fish_audio"), vec!["native Russian speaker", "whisper"]);
+        assert!(extract_phrase_prompts(text_fish, "voxcpm2").is_empty());
+
+        let text_vox = "(slowly pace) (calm tone) Привет!";
+        assert_eq!(extract_phrase_prompts(text_vox, "voxcpm2"), vec!["slowly pace", "calm tone"]);
+        assert!(extract_phrase_prompts(text_vox, "fish_audio").is_empty());
+    }
+
+    #[test]
+    fn test_build_tts_input() {
+        // VoxCPM2: слияние global и local промптов в единый (g, l) префикс
+        assert_eq!(
+            build_tts_input("voxcpm2", "(slowly pace) Привет мир!", "native Russian speaker"),
+            "(native Russian speaker, slowly pace) Привет мир!"
+        );
+        assert_eq!(
+            build_tts_input("voxcpm2", "Привет мир!", "(native Russian speaker)"),
+            "(native Russian speaker) Привет мир!"
+        );
+        assert_eq!(
+            build_tts_input("voxcpm2", "(fast) Привет!", ""),
+            "(fast) Привет!"
+        );
+        assert_eq!(
+            build_tts_input("voxcpm2", "Привет!", ""),
+            "Привет!"
+        );
+
+        // Fish Audio: раздельные скобки [g] [l]
+        assert_eq!(
+            build_tts_input("fish_audio", "[whisper] Привет мир!", "native Russian speaker"),
+            "[native Russian speaker] [whisper] Привет мир!"
+        );
+        assert_eq!(
+            build_tts_input("fish_audio", "Привет мир!", "[native Russian speaker]"),
+            "[native Russian speaker] Привет мир!"
+        );
+        assert_eq!(
+            build_tts_input("fish_audio", "[fast] Привет!", ""),
+            "[fast] Привет!"
+        );
+        assert_eq!(
+            build_tts_input("fish_audio", "Привет!", ""),
+            "Привет!"
+        );
+        // Fish Audio: инлайн-теги в середине фразы сохраняются на своём месте
+        assert_eq!(
+            build_tts_input("fish_audio", "Привет, [whisper] как дела?", ""),
+            "Привет, [whisper] как дела?"
+        );
+        assert_eq!(
+            build_tts_input("fish_audio", "Привет, [whisper] как дела?", "native Russian speaker"),
+            "[native Russian speaker] Привет, [whisper] как дела?"
+        );
+        assert_eq!(
+            build_tts_input("fish_audio", "[native Russian speaker] Привет, [whisper] как дела?", "native Russian speaker"),
+            "[native Russian speaker] Привет, [whisper] как дела?"
+        );
+    }
+
+    #[test]
+    fn test_active_tts_prompt_and_speech_options() {
+        let mut audio = dub_core::Audio::default();
+        audio.voice_prompt = "fallback prompt".into();
+
+        // 1. Fallback к voice_prompt при пустых специфичных
+        assert_eq!(active_tts_prompt("fish_audio", &audio), "fallback prompt");
+        assert_eq!(active_tts_prompt("voxcpm2", &audio), "fallback prompt");
+
+        // 2. Специфичные промпты приоритетнее
+        audio.fish_prompt = "[ru]".into();
+        audio.vox_prompt = "calm".into();
+        assert_eq!(active_tts_prompt("fish_audio", &audio), "[ru]");
+        assert_eq!(active_tts_prompt("voxcpm2", &audio), "calm");
+
+        // 3. build_speech_options для Fish Audio
+        let opts_fish = build_speech_options("fish_audio", &audio, None, 0, None);
+        assert_eq!(opts_fish.temperature, Some(0.8));
+        assert_eq!(opts_fish.seed, None);
+        assert_eq!(opts_fish.num_inference_steps, None);
+        assert_eq!(opts_fish.max_tokens, None);
+
+        // Fish Audio с custom_temp и fixed seed
+        audio.fish_seed = Some(500);
+        let opts_fish_custom = build_speech_options("fish_audio", &audio, Some(0.5), 2, None);
+        assert_eq!(opts_fish_custom.temperature, Some(0.5));
+        assert_eq!(opts_fish_custom.seed, Some(502));
+        assert_eq!(opts_fish_custom.max_tokens, None);
+
+        // 4. build_speech_options для VoxCPM2
+        audio.vox_steps = 25;
+        audio.vox_cfg = 1.7;
+        audio.vox_seed = Some(1000);
+        let opts_vox = build_speech_options("voxcpm2", &audio, None, 5, None);
+        assert_eq!(opts_vox.temperature, None);
+        assert_eq!(opts_vox.seed, Some(1005));
+        assert_eq!(opts_vox.num_inference_steps, Some(25));
+        assert_eq!(opts_vox.guidance_scale, Some(1.7));
+        assert_eq!(opts_vox.max_tokens, None);
+
+        // 5. build_speech_options для Higgs Audio
+        let mut audio_higgs = dub_core::Audio::default();
+        let opts_higgs = build_speech_options("higgs", &audio_higgs, None, 0, Some(512));
+        assert_eq!(opts_higgs.temperature, Some(0.8));
+        assert_eq!(opts_higgs.seed, None);
+        assert_eq!(opts_higgs.max_tokens, Some(512));
+
+        // Higgs Audio на повторе (seed_offset > 0) без явного сида получает смещение от 42 и температуру >= 0.65
+        let opts_higgs_retry = build_speech_options("higgs", &audio_higgs, None, 1, Some(256));
+        assert_eq!(opts_higgs_retry.seed, Some(43));
+        assert!((opts_higgs_retry.temperature.unwrap() - 0.84).abs() < 1e-4);
+        assert_eq!(opts_higgs_retry.max_tokens, Some(256));
+
+        // Higgs Audio с явными higgs_temp и higgs_seed
+        audio_higgs.higgs_temp = Some(0.70);
+        audio_higgs.higgs_seed = Some(7000);
+        let opts_higgs_custom = build_speech_options("higgs", &audio_higgs, None, 2, None);
+        assert_eq!(opts_higgs_custom.seed, Some(7002));
+        assert!((opts_higgs_custom.temperature.unwrap() - 0.77).abs() < 1e-4);
     }
 }

@@ -199,9 +199,14 @@ pub fn manifest() -> Vec<Component> {
             purpose: "Синтез дубляжа и клон голоса (TTS)",
             requirement: Requirement::Required,
             delivery: Delivery::Download,
-            size: 5_534_363_733,
+            size: 5_106_797_492,
             files: &[
-                FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/q8_0.gguf", dest_rel: "models/higgs-q8_0/q8_0.gguf", size: 5_519_235_296, extract: Extract::None },
+                FileSpec {
+                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Higgs-Audio-v3-TTS-4B-GGUF/higgs-audio-v3-tts-4b-q8_0.gguf?download=true",
+                    dest_rel: "models/higgs-q8_0/q8_0.gguf",
+                    size: 5_095_354_048,
+                    extract: Extract::None,
+                },
                 FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/config.json", dest_rel: "models/higgs-q8_0/config.json", size: 2_755, extract: Extract::None },
                 FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/chat_template.jinja", dest_rel: "models/higgs-q8_0/chat_template.jinja", size: 2_427, extract: Extract::None },
                 FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/tokenizer.json", dest_rel: "models/higgs-q8_0/tokenizer.json", size: 11_433_924, extract: Extract::None },
@@ -209,7 +214,7 @@ pub fn manifest() -> Vec<Component> {
                 FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/higgs_audio_v2_tokenizer_config.json", dest_rel: "models/higgs-q8_0/higgs_audio_v2_tokenizer_config.json", size: 2_251, extract: Extract::None },
             ],
             markers: &[
-                Marker { rel: "models/higgs-q8_0/q8_0.gguf", expect: 5_519_235_296 },
+                Marker { rel: "models/higgs-q8_0/q8_0.gguf", expect: 5_095_354_048 },
                 Marker { rel: "models/higgs-q8_0/config.json", expect: 2_755 },
                 Marker { rel: "models/higgs-q8_0/tokenizer.json", expect: 11_433_924 },
             ],
@@ -443,6 +448,29 @@ pub fn manifest() -> Vec<Component> {
                 FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q4_k_m/higgs_audio_v2_tokenizer_config.json", dest_rel: "models/higgs-q4_k_m/higgs_audio_v2_tokenizer_config.json", size: 0, extract: Extract::None },
             ],
             markers: &[Marker { rel: "models/higgs-q4_k_m/q4_k_m.gguf", expect: 4_086_922_976 }, Marker { rel: "models/higgs-q4_k_m/tokenizer.json", expect: 0 }],
+            external_url: None,
+        },
+        Component {
+            id: "higgs-bf16",
+            name: "Higgs Audio v3 (BF16)",
+            purpose: "Синтез дубляжа и клон голоса (TTS) — полная точность BF16",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: 8_513_031_092,
+            files: &[
+                FileSpec {
+                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Higgs-Audio-v3-TTS-4B-GGUF/higgs-audio-v3-tts-4b-bf16.gguf?download=true",
+                    dest_rel: "models/higgs-bf16/bf16.gguf",
+                    size: 8_501_587_648,
+                    extract: Extract::None,
+                },
+                FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/config.json", dest_rel: "models/higgs-bf16/config.json", size: 0, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/chat_template.jinja", dest_rel: "models/higgs-bf16/chat_template.jinja", size: 0, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/tokenizer.json", dest_rel: "models/higgs-bf16/tokenizer.json", size: 11_433_924, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/tokenizer_config.json", dest_rel: "models/higgs-bf16/tokenizer_config.json", size: 0, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/higgs_audio_v2_tokenizer_config.json", dest_rel: "models/higgs-bf16/higgs_audio_v2_tokenizer_config.json", size: 0, extract: Extract::None },
+            ],
+            markers: &[Marker { rel: "models/higgs-bf16/bf16.gguf", expect: 8_501_587_648 }, Marker { rel: "models/higgs-bf16/tokenizer.json", expect: 0 }],
             external_url: None,
         },
         // Альтернативный квант ASR: fp32 (точнее, тяжелее int8). Отдельная папка (fp32 приоритетнее int8).
@@ -896,6 +924,7 @@ fn vram_estimate(id: &str) -> u64 {
     let gb = |g: f64| (g * 1024.0 * 1024.0 * 1024.0) as u64;
     match id {
         "higgs" => gb(5.6),
+        "higgs-bf16" => gb(9.0),
         "higgs-q6_k" => gb(5.1),
         "higgs-q4_k_m" => gb(4.2),
         "gemma" => gb(8.5),
@@ -916,10 +945,27 @@ fn vram_estimate(id: &str) -> u64 {
     }
 }
 
+fn resolve_marker_metadata(repo_root: &Path, rel: &str) -> std::io::Result<std::fs::Metadata> {
+    let p = repo_root.join(rel);
+    std::fs::metadata(&p).or_else(|e| {
+        if rel.starts_with("models/higgs-") && rel.ends_with(".gguf") {
+            let alt = if rel.ends_with("/q8_0.gguf") {
+                repo_root.join("models/higgs-q8_0/higgs-audio-v3-tts-4b-q8_0.gguf")
+            } else if rel.ends_with("/bf16.gguf") {
+                repo_root.join("models/higgs-bf16/higgs-audio-v3-tts-4b-bf16.gguf")
+            } else {
+                return Err(e);
+            };
+            std::fs::metadata(&alt)
+        } else {
+            Err(e)
+        }
+    })
+}
+
 /// Существует ли маркер и «целый» ли он (размер совпадает, если expect != 0).
 fn marker_ok(repo_root: &Path, m: &Marker) -> bool {
-    let p = repo_root.join(m.rel);
-    match std::fs::metadata(&p) {
+    match resolve_marker_metadata(repo_root, m.rel) {
         // Файл на месте и не оборван. Размер сверяем С ДОПУСКОМ (≥97% expect), а не точным ==: апстрим-веса
         // на HF могут слегка отличаться от зашитого expect (переезд/переупаковка) -> точное == давало ложный
         // «не установлено» → ready навсегда false → «Скачать всё» в бесконечном цикле (баг-репорт беты).
@@ -933,7 +979,7 @@ fn marker_ok(repo_root: &Path, m: &Marker) -> bool {
 }
 
 fn marker_bytes(repo_root: &Path, m: &Marker) -> u64 {
-    std::fs::metadata(repo_root.join(m.rel)).map(|x| x.len()).unwrap_or(0)
+    resolve_marker_metadata(repo_root, m.rel).map(|x| x.len()).unwrap_or(0)
 }
 
 fn dir_size(dir: &Path) -> u64 {

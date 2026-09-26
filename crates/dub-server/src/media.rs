@@ -1156,7 +1156,17 @@ pub fn trim_smart_ref(
     let abs_end = start_offset + rel_end;
 
     let idx_start = ((rel_start * sr as f64).round() as usize).min(available.len());
-    let idx_end = ((rel_end * sr as f64).round() as usize).min(available.len()).max(idx_start + 160);
+    let mut idx_end = ((rel_end * sr as f64).round() as usize).min(available.len()).max(idx_start + 160);
+
+    // Квантование длины сэмпла кратно 640 сэмплам (40мс @ 16kHz) для точного совпадения фреймов
+    // акустического и семантического кодеков Higgs/audio.cpp
+    if sr == 16_000 {
+        let len = idx_end - idx_start;
+        let rem = len % 640;
+        if rem != 0 && len > 640 {
+            idx_end -= rem;
+        }
+    }
 
     let mut slice = available[idx_start..idx_end].to_vec();
     if slice.is_empty() {
@@ -1192,6 +1202,42 @@ pub fn trim_smart_ref(
     writer.finalize().map_err(|e| format!("finalize wav: {e}"))?;
 
     Ok((abs_start, abs_end))
+}
+
+/// Выравнивает количество сэмплов в mono 16kHz WAV-файле до целого числа фреймов (кратного 640 сэмплам / 40мс).
+/// Это критически важно для нейросетевых TTS (в т.ч. Higgs Audio v3 / audio.cpp), где акустический (24kHz, hop=960)
+/// и семантический (16kHz, hop=640) энкодеры должны иметь строго равное число фреймов.
+pub fn align_wav_to_codec_frames(wav_path: &Path) -> Result<(), String> {
+    let (mut samples, sr) = match crate::wavio::read_mono_f32(wav_path) {
+        Ok((s, sr)) => (s, sr),
+        Err(e) => return Err(format!("align read {}: {e}", wav_path.display())),
+    };
+    if sr != 16_000 || samples.is_empty() {
+        return Ok(());
+    }
+    let frame_samples = 640; // 40мс @ 16kHz
+    let rem = samples.len() % frame_samples;
+    if rem != 0 {
+        if samples.len() > frame_samples {
+            samples.truncate(samples.len() - rem);
+        } else {
+            samples.resize(frame_samples, 0.0);
+        }
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(wav_path, spec)
+            .map_err(|e| format!("align create {}: {e}", wav_path.display()))?;
+        for &s in &samples {
+            let pcm = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+            writer.write_sample(pcm).map_err(|e| format!("align write: {e}"))?;
+        }
+        writer.finalize().map_err(|e| format!("align finalize: {e}"))?;
+    }
+    Ok(())
 }
 
 // ─── Оконная нарезка для полнометражного пайплайна (#79) ──────────────────────────────────────────

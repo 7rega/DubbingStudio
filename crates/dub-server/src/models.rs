@@ -44,6 +44,7 @@ pub fn pick<'a>(sel: &'a Value, key: &str) -> Option<&'a str> {
 pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
     match id {
         "higgs" => vec![("tts_engine", "higgs".into()), ("tts", "q8_0".into())],
+        "higgs-bf16" => vec![("tts_engine", "higgs".into()), ("tts", "bf16".into())],
         "higgs-q6_k" => vec![("tts_engine", "higgs".into()), ("tts", "q6_k".into())],
         "higgs-q4_k_m" => vec![("tts_engine", "higgs".into()), ("tts", "q4_k_m".into())],
         "voxcpm2" => vec![("tts_engine", "voxcpm2".into()), ("tts", "q8_0".into())],
@@ -91,6 +92,7 @@ pub fn is_selection_key(key: &str) -> bool {
             | "higgs_ref_secs"  // длина реф-клипа клона голоса (меньше = меньше prefill Higgs; <12с спасает 32ГБ)
             | "smart_ref_trim"  // "1" -> умная нарезка реф-клипов по паузам речи (дефолт); "0" -> классическая фикс-резка
             | "higgs_max_tokens" // лимит токенов Higgs TTS: default (дефолт DLL), auto (по длине фразы), или 256/512/768/1024
+            | "higgs_execution" // режим запуска Higgs: "server" (audiocpp_server) | "dll" (audiocpp_engine.dll)
             | "bench"           // пер-стадийный бенчмарк (bench.json + ⏱ в журнале); галка в настройках, ВЫКЛ по умолчанию
             | "duck_on"         // дакинг фона под дубляжом (приглушать фон под речью); ВЫКЛ по умолчанию — не всем нужен
             | "vision_on"       // "1" -> мультимодальный анализ видеокадров (Vision); "0" -> Fast Text Mode (только текст)
@@ -531,8 +533,43 @@ pub fn resolve_fish_audio(mroot: &Path, sel: &Value) -> Option<(PathBuf, String)
     Some((model_path, quant.to_string()))
 }
 
-/// Higgs TTS: папки higgs-{q8_0,q6_k,q4_k_m}, внутри файл {q}.gguf. Возврат (каталог, квант-строка
-/// для audiocpp load_model). Env DUB_STUDIO_HIGGS_MODEL (портатив) имеет приоритет.
+/// Выбранный режим исполнения Higgs: "server" (по умолчанию, audiocpp_server) или "dll" (audiocpp_engine.dll).
+/// Для устаревших квантов q6_k и q4_k_m сервер не поддерживается (нет schema-v1), принудительно возвращаем "dll".
+pub fn resolve_higgs_execution(sel: &Value) -> &'static str {
+    if let Some(q) = pick(sel, "tts") {
+        if q == "q6_k" || q == "q4_k_m" {
+            return "dll";
+        }
+    }
+    match pick(sel, "higgs_execution") {
+        Some("dll") => "dll",
+        _ => "server",
+    }
+}
+
+/// Найти GGUF файл модели Higgs в указанном каталоге (q8_0.gguf или higgs-audio-v3-tts-4b-q8_0.gguf).
+pub fn resolve_higgs_gguf_path(model_root: &Path, quant: &str) -> Option<PathBuf> {
+    let p1 = model_root.join(format!("{quant}.gguf"));
+    if p1.is_file() {
+        return Some(p1);
+    }
+    let p2 = model_root.join(format!("higgs-audio-v3-tts-4b-{quant}.gguf"));
+    if p2.is_file() {
+        return Some(p2);
+    }
+    if let Ok(entries) = std::fs::read_dir(model_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("gguf") {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Higgs TTS: папки higgs-{q8_0,bf16,q6_k,q4_k_m}, внутри файл {q}.gguf или higgs-audio-v3-tts-4b-{q}.gguf.
+/// Возврат (каталог, квант-строка для audiocpp). Env DUB_STUDIO_HIGGS_MODEL (портатив) имеет приоритет.
 pub fn resolve_tts(mroot: &Path, sel: &Value) -> (PathBuf, String) {
     if let Ok(env) = std::env::var("DUB_STUDIO_HIGGS_MODEL") {
         let d = PathBuf::from(env);
@@ -544,14 +581,18 @@ pub fn resolve_tts(mroot: &Path, sel: &Value) -> (PathBuf, String) {
             .to_string();
         return (d, q);
     }
-    let has = |q: &str| mroot.join(format!("higgs-{q}")).join(format!("{q}.gguf")).is_file();
+    let has = |q: &str| {
+        let dir = mroot.join(format!("higgs-{q}"));
+        dir.join(format!("{q}.gguf")).is_file()
+            || dir.join(format!("higgs-audio-v3-tts-4b-{q}.gguf")).is_file()
+    };
     let ret = |q: &str| (mroot.join(format!("higgs-{q}")), q.to_string());
     if let Some(q) = pick(sel, "tts") {
         if has(q) {
             return ret(q);
         }
     }
-    for q in ["q8_0", "q6_k", "q4_k_m"] {
+    for q in ["q8_0", "bf16", "q6_k", "q4_k_m"] {
         if has(q) {
             return ret(q);
         }

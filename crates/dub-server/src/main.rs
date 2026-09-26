@@ -40,5 +40,6 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("слушаю http://{addr}");
     axum::serve(listener, app).await?;
+    dub_server::shutdown_all_servers();
     Ok(())
 }

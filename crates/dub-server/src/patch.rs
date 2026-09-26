@@ -326,6 +326,125 @@ fn op_translate_style(p: &mut Project, edit: &Value) -> PatchResult {
     Ok(())
 }
 
+/// voice_prompt — глобальный промпт стиля/акцента речи для VoxCPM2 и Fish Audio.
+fn op_voice_prompt(p: &mut Project, edit: &Value) -> PatchResult {
+    let raw = s(edit, "prompt").unwrap_or_default();
+    let flat: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let new_prompt: String = flat.chars().take(500).collect();
+    if p.audio.voice_prompt != new_prompt {
+        p.audio.voice_prompt = new_prompt;
+        invalidate_all_audio(p);
+        p.audio.mix_dirty = true;
+    }
+    Ok(())
+}
+
+/// tts_settings — индивидуальные настройки генерации для моделей Fish Audio и VoxCPM2.
+fn op_tts_settings(p: &mut Project, edit: &Value) -> PatchResult {
+    let mut changed = false;
+
+    // Fish Audio
+    if let Some(prompt) = edit.get("fish_prompt").and_then(|x| x.as_str()) {
+        let flat: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+        let new_val: String = flat.chars().take(500).collect();
+        if p.audio.fish_prompt != new_val {
+            p.audio.fish_prompt = new_val;
+            changed = true;
+        }
+    }
+    if let Some(temp) = edit.get("fish_temp").and_then(|x| x.as_f64()) {
+        let clamped = temp.clamp(0.0, 2.0);
+        if (p.audio.fish_temp - clamped).abs() > 1e-4 {
+            p.audio.fish_temp = clamped;
+            changed = true;
+        }
+    }
+    if let Some(clean_ref) = edit.get("fish_clean_ref").and_then(|x| x.as_bool()) {
+        if p.audio.fish_clean_ref != clean_ref {
+            p.audio.fish_clean_ref = clean_ref;
+            changed = true;
+        }
+    }
+    if let Some(seed_val) = edit.get("fish_seed") {
+        let new_seed = if seed_val.is_null() {
+            None
+        } else {
+            seed_val.as_u64()
+        };
+        if p.audio.fish_seed != new_seed {
+            p.audio.fish_seed = new_seed;
+            changed = true;
+        }
+    }
+
+    // VoxCPM2
+    if let Some(prompt) = edit.get("vox_prompt").and_then(|x| x.as_str()) {
+        let flat: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+        let new_val: String = flat.chars().take(500).collect();
+        if p.audio.vox_prompt != new_val {
+            p.audio.vox_prompt = new_val;
+            changed = true;
+        }
+    }
+    if let Some(steps) = edit.get("vox_steps").and_then(|x| x.as_u64()) {
+        let clamped = (steps as u32).clamp(5, 100);
+        if p.audio.vox_steps != clamped {
+            p.audio.vox_steps = clamped;
+            changed = true;
+        }
+    }
+    if let Some(cfg) = edit.get("vox_cfg").and_then(|x| x.as_f64()) {
+        let clamped = cfg.clamp(0.5, 5.0);
+        if (p.audio.vox_cfg - clamped).abs() > 1e-4 {
+            p.audio.vox_cfg = clamped;
+            changed = true;
+        }
+    }
+    if let Some(seed_val) = edit.get("vox_seed") {
+        let new_seed = if seed_val.is_null() {
+            None
+        } else {
+            seed_val.as_u64()
+        };
+        if p.audio.vox_seed != new_seed {
+            p.audio.vox_seed = new_seed;
+            changed = true;
+        }
+    }
+
+    // Higgs Audio v3
+    if let Some(temp_val) = edit.get("higgs_temp") {
+        let new_temp = if temp_val.is_null() {
+            None
+        } else if let Some(t) = temp_val.as_f64() {
+            Some(t.clamp(0.05, 2.0))
+        } else {
+            None
+        };
+        if p.audio.higgs_temp != new_temp {
+            p.audio.higgs_temp = new_temp;
+            changed = true;
+        }
+    }
+    if let Some(seed_val) = edit.get("higgs_seed") {
+        let new_seed = if seed_val.is_null() {
+            None
+        } else {
+            seed_val.as_u64()
+        };
+        if p.audio.higgs_seed != new_seed {
+            p.audio.higgs_seed = new_seed;
+            changed = true;
+        }
+    }
+
+    if changed {
+        invalidate_all_audio(p);
+        p.audio.mix_dirty = true;
+    }
+    Ok(())
+}
+
 /// recast — сменить режим/голос дубляжа. Порт api.recast: audio.voice.mode/name; все сегменты dirty
 /// (следующий /render перегенерит дубляж с новым голосом). Порт app.py op=="recast" (раунд 4).
 fn op_recast(p: &mut Project, edit: &Value) -> PatchResult {
@@ -878,6 +997,8 @@ pub fn apply(p: &mut Project, edit: &Value) -> PatchResult {
         "subs_content" => op_subs_content(p, edit),
         "translate" => op_translate(p, edit),
         "translate_style" => op_translate_style(p, edit),
+        "voice_prompt" => op_voice_prompt(p, edit),
+        "tts_settings" => op_tts_settings(p, edit),
         "rewrite" => op_rewrite(p, edit),
         "recast" => op_recast(p, edit),
         "regen" => op_regen(p, edit),
@@ -1243,5 +1364,53 @@ mod tests {
         apply(&mut p, &json!({"op":"regen_all"})).unwrap();
         assert_eq!(p.segments[0].extra.get("regenerated"), None);
         assert_eq!(p.segments[1].extra.get("regenerated"), None);
+    }
+
+    #[test]
+    fn voice_prompt_normalizes_and_marks_dirty() {
+        let mut p = Project::default();
+        apply(&mut p, &json!({"op":"voice_prompt","prompt":"  native Russian speaker,\n  clear articulation  "})).unwrap();
+        assert_eq!(p.audio.voice_prompt, "native Russian speaker, clear articulation");
+        assert!(p.audio.mix_dirty);
+    }
+
+    #[test]
+    fn tts_settings_updates_and_marks_dirty() {
+        let mut p = Project::default();
+        assert_eq!(p.audio.fish_prompt, "");
+        assert_eq!(p.audio.fish_temp, 0.8);
+        assert!(p.audio.fish_clean_ref);
+        assert_eq!(p.audio.fish_seed, None);
+        assert_eq!(p.audio.vox_steps, 20);
+        assert_eq!(p.audio.vox_cfg, 1.6);
+        assert_eq!(p.audio.vox_seed, None);
+        assert_eq!(p.audio.higgs_temp, None);
+        assert_eq!(p.audio.higgs_seed, None);
+
+        apply(&mut p, &json!({
+            "op": "tts_settings",
+            "fish_prompt": " [ru] ",
+            "fish_temp": 0.5,
+            "fish_clean_ref": true,
+            "fish_seed": 42,
+            "vox_prompt": " calm ",
+            "vox_steps": 25,
+            "vox_cfg": 1.8,
+            "vox_seed": 100,
+            "higgs_temp": 0.85,
+            "higgs_seed": 777
+        })).unwrap();
+
+        assert_eq!(p.audio.fish_prompt, "[ru]");
+        assert_eq!(p.audio.fish_temp, 0.5);
+        assert!(p.audio.fish_clean_ref);
+        assert_eq!(p.audio.fish_seed, Some(42));
+        assert_eq!(p.audio.vox_prompt, "calm");
+        assert_eq!(p.audio.vox_steps, 25);
+        assert_eq!(p.audio.vox_cfg, 1.8);
+        assert_eq!(p.audio.vox_seed, Some(100));
+        assert_eq!(p.audio.higgs_temp, Some(0.85));
+        assert_eq!(p.audio.higgs_seed, Some(777));
+        assert!(p.audio.mix_dirty);
     }
 }

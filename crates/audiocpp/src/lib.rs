@@ -5,6 +5,7 @@
 //! возвращающие (Vec<f32>, sample_rate). Кодирование WAV — через AudioResult::encode_pcm16_wav.
 
 mod engine;
+pub mod job_object;
 pub mod server;
 
 pub use engine::{
@@ -13,7 +14,7 @@ pub use engine::{
 };
 pub use server::{
     decode_wav_mono_f32, resolve_audiocpp_bin, resolve_fish_audio_path, resolve_voxcpm2_path,
-    AudiocppClient, AudiocppServer, AudiocppServerError, AudiocppServerOpts,
+    AudiocppClient, AudiocppServer, AudiocppServerError, AudiocppServerOpts, SpeechOptions,
 };
 
 use std::path::Path;

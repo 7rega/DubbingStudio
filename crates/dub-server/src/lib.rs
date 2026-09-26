@@ -60,6 +60,32 @@ pub use jobs::JobQueue;
 
 pub type TtsCache = Arc<Mutex<Option<(render::EngineKey, Arc<audiocpp::AudiocppEngine>)>>>;
 static GLOBAL_TTS_CACHE: OnceLock<TtsCache> = OnceLock::new();
+
+pub type AudiocppServerHandle = Arc<Mutex<audiocpp::AudiocppServer>>;
+static GLOBAL_AUDIOCPP_SERVER: OnceLock<Mutex<Option<AudiocppServerHandle>>> = OnceLock::new();
+
+pub fn global_audiocpp_server() -> &'static Mutex<Option<AudiocppServerHandle>> {
+    GLOBAL_AUDIOCPP_SERVER.get_or_init(|| Mutex::new(None))
+}
+
+/// Принудительно завершить все фоновые сайдкар-серверы (audiocpp, llama и др.) и освободить VRAM.
+/// Вызывается при закрытии приложения, смене проекта или аварийном сбросе.
+pub fn shutdown_all_servers() {
+    let global = global_audiocpp_server();
+    if let Ok(mut guard) = global.lock() {
+        if let Some(srv_arc) = guard.take() {
+            if let Ok(mut srv) = srv_arc.lock() {
+                srv.stop();
+            }
+        }
+    }
+    // Зачистить любые зомби-процессы в ОС в фоне, не блокируя UI
+    std::thread::spawn(|| {
+        audiocpp::AudiocppServer::kill_zombie_processes(&std::path::PathBuf::from("audiocpp_server.exe"));
+        dub_llm::LlamaServer::kill_zombie_processes(&std::path::PathBuf::from("llama-server.exe"));
+    });
+}
+
 pub(crate) static PROJECT_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 static TITLE_HOOK: std::sync::RwLock<Option<Box<dyn Fn(&str) + Send + Sync>>> = std::sync::RwLock::new(None);
@@ -522,7 +548,8 @@ async fn capabilities(State(st): State<AppState>) -> Json<Value> {
         // Видимые лимиты RAM (настройки, не авто-магия): против OOM на слабой памяти. "0" = авто (дефолт).
         "llama_ubatches": ["0","512","256","128"],      // prefill-батч Gemma (меньше = меньше RAM)
         "higgs_ref_secs_opts": ["12","8","6","4"],       // длина реф-клипа клона (сек; <12 спасает 32ГБ)
-        "higgs_max_tokens_opts": ["default","auto","256","512","768","1024"], // лимит токенов TTS
+        "higgs_max_tokens_opts": ["default","auto","256","512","768","1024","1536"], // лимит токенов TTS
+        "higgs_execution_opts": ["server","dll"],        // бэкенд Higgs: server (audiocpp_server) | dll (audiocpp_engine.dll)
     }))
 }
 
@@ -1944,6 +1971,7 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
         tts_engine,
         voxcpm2_quant,
         fish_audio_quant,
+        higgs_execution: models::resolve_higgs_execution(&sel).to_string(),
     };
 
     let dir_for_job = dir.clone();
@@ -2101,6 +2129,7 @@ async fn export_lang(
         tts_engine,
         voxcpm2_quant,
         fish_audio_quant,
+        higgs_execution: models::resolve_higgs_execution(&sel).to_string(),
     };
 
     let dst_for_job = dst_dir.clone();
@@ -2325,6 +2354,7 @@ async fn dub_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         tts_engine,
         voxcpm2_quant,
         fish_audio_quant,
+        higgs_execution: models::resolve_higgs_execution(&sel).to_string(),
     };
     let dir_for_job = dir.clone();
     let job: jobs::JobFn = Box::new(move |progress: jobs::ProgressFn| {
@@ -2390,6 +2420,7 @@ async fn synth_segments_project(State(st): State<AppState>, AxPath(pid): AxPath<
         tts_engine,
         voxcpm2_quant,
         fish_audio_quant,
+        higgs_execution: models::resolve_higgs_execution(&sel).to_string(),
     };
     let dir_for_job = dir.clone();
     let job: jobs::JobFn = Box::new(move |progress: jobs::ProgressFn| {

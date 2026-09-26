@@ -30,7 +30,12 @@ export type Title = {
 export type Project = {
   meta: { video: string; duration: number; width: number; height: number; fps: number; src_codec: string; src_lang?: string; detected_src_lang?: string };
   mode: string; tgt_lang: string;
-  audio: { keep_music: boolean; voice: { mode: string; name?: string | null }; rewrite?: string | null; gain_db?: number; voice_gain_db?: number; music_gain_db?: number; voiceover_gain_db?: number; voiceover_duck?: string; dub_mix_mode?: string; translate_style?: string; keep_original_track?: boolean; container?: string; mix_dirty?: boolean };
+  audio: {
+    keep_music: boolean; voice: { mode: string; name?: string | null }; rewrite?: string | null; gain_db?: number; voice_gain_db?: number; music_gain_db?: number; voiceover_gain_db?: number; voiceover_duck?: string; dub_mix_mode?: string; translate_style?: string; keep_original_track?: boolean; container?: string; mix_dirty?: boolean; voice_prompt?: string;
+    fish_prompt?: string; fish_temp?: number; fish_clean_ref?: boolean; fish_seed?: number | null;
+    vox_prompt?: string; vox_steps?: number; vox_cfg?: number; vox_seed?: number | null;
+    higgs_temp?: number | null; higgs_seed?: number | null;
+  };
   segments: Segment[];
   subs: { mode: string; burn?: boolean };
   captions: {
@@ -53,8 +58,8 @@ export type Capabilities = {
   selection?: Record<string, string>;
   asr_engines?: string[]; whisper_models?: string[]; whisper_computes?: string[];
   alignment?: { languages: string[]; ready: boolean; component: string };
-  // Видимые лимиты RAM (настройки): prefill-батч Gemma + длина реф-клипа клона + лимит токенов TTS.
-  llama_ubatches?: string[]; higgs_ref_secs_opts?: string[]; higgs_max_tokens_opts?: string[];
+  // Видимые лимиты RAM (настройки): prefill-батч Gemma + длина реф-клипа клона + лимит токенов TTS + бэкенд Higgs.
+  llama_ubatches?: string[]; higgs_ref_secs_opts?: string[]; higgs_max_tokens_opts?: string[]; higgs_execution_opts?: string[];
 };
 export type JobEvent = { type: "progress" | "done" | "error"; stage?: string; pct?: number; msg?: string; result?: unknown; error?: string; component?: string; downloaded?: number; total?: number; parts?: { component: string; pct: number }[] };
 export type AlignmentSummary = { changed: number; unchanged: number; skipped: number; review: number; cached: boolean; details: { id: string; reason: string }[] };

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -343,8 +343,47 @@ function ModelsSection() {
           </>
         ) : (
           <>
-            <VariantPicker base="Higgs Audio v3" ids={["higgs", "higgs-q6_k", "higgs-q4_k_m"]} />
-            {rowOf("higgs-engine")}
+            <VariantPicker base="Higgs Audio v3" ids={["higgs", "higgs-bf16", "higgs-q6_k", "higgs-q4_k_m"]} />
+            {(() => {
+              const ttsQuant = selv("tts");
+              const isLegacyQuant = ttsQuant === "q6_k" || ttsQuant === "q4_k_m";
+              const curExec = isLegacyQuant ? "dll" : (cap?.selection?.higgs_execution ?? "server");
+              return (
+                <>
+                  <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-muted)]" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[12px] font-medium truncate">{t("settings.higgsExecution")}</div>
+                        <div className="mono text-[10px] text-[var(--color-muted)] truncate">
+                          {isLegacyQuant ? t("settings.higgsExecutionLegacyHint") : t("settings.higgsExecutionHint")}
+                        </div>
+                      </div>
+                      <select
+                        value={curExec}
+                        disabled={isLegacyQuant}
+                        onChange={(e) => {
+                          api.setSelection("higgs_execution", e.target.value)
+                            .then(loadCap)
+                            .catch((er) => setErr(er instanceof Error ? er.message : String(er)));
+                        }}
+                        className="shrink-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50">
+                        {isLegacyQuant ? (
+                          <option value="dll">{t("settings.higgsBackendDll")}</option>
+                        ) : (
+                          (cap?.higgs_execution_opts ?? ["server", "dll"]).map((o: string) => (
+                            <option key={o} value={o}>
+                              {o === "dll" ? t("settings.higgsBackendDll") : t("settings.higgsBackendServer")}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                  </div>
+                  {curExec === "server" ? rowOf("audiocpp-engine") : rowOf("higgs-engine")}
+                </>
+              );
+            })()}
           </>
         )}
       </Group>
@@ -548,7 +587,7 @@ function ModelsSection() {
             key: "higgs_max_tokens",
             label: t("settings.higgsMaxTokens"),
             hint: t("settings.higgsMaxTokensHint"),
-            opts: cap?.higgs_max_tokens_opts ?? ["default", "auto", "256", "512", "768", "1024"],
+            opts: cap?.higgs_max_tokens_opts ?? ["default", "auto", "256", "512", "768", "1024", "1536"],
             def: "default",
             fmt: (v: string) => {
               if (v === "default") return t("settings.tokenDefault");
@@ -3174,6 +3213,7 @@ function MultiTrackTimeline({
   loopSegId,
   setLoopSegId: _setLoopSegId,
   dubRev,
+  activeTtsEngine,
 }: {
   pid: string;
   duration: number;
@@ -3188,6 +3228,7 @@ function MultiTrackTimeline({
   loopSegId: string | null;
   setLoopSegId?: (id: string | null) => void;
   dubRev?: number;
+  activeTtsEngine?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -3684,7 +3725,9 @@ function MultiTrackTimeline({
 
   const handlePromptTemp = (seg: Project["segments"][number]) => {
     const cur = typeof seg.temp === "number" ? seg.temp : (seg.extra && typeof seg.extra.temp === "number" ? seg.extra.temp : null);
-    const input = window.prompt("Температура сэмплинга (от 0.05 до 0.60, или 'auto' для сброса):", cur !== null ? String(cur) : "0.20");
+    const isHighTemp = activeTtsEngine === "fish_audio" || activeTtsEngine === "higgs";
+    const defHint = isHighTemp ? "0.80" : "0.20";
+    const input = window.prompt("Температура сэмплинга (от 0.05 до 2.00, или 'auto' для сброса):", cur !== null ? String(cur) : defHint);
     if (input !== null) {
       const trimmed = input.trim().toLowerCase();
       if (trimmed === "auto" || trimmed === "" || trimmed === "null") {
@@ -3692,7 +3735,7 @@ function MultiTrackTimeline({
       } else {
         const val = parseFloat(trimmed.replace(",", "."));
         if (!isNaN(val)) {
-          handleSetTemp(seg, Math.max(0.05, Math.min(0.60, Math.round(val * 100) / 100)));
+          handleSetTemp(seg, Math.max(0.05, Math.min(2.00, Math.round(val * 100) / 100)));
         }
       }
     }
@@ -4141,7 +4184,7 @@ function MultiTrackTimeline({
                   </span>
                   <button
                     type="button"
-                    title="Задать точную температуру сэмплинга вручную (0.05 - 0.60)"
+                    title="Задать точную температуру сэмплинга вручную (0.05 - 2.00)"
                     onClick={() => {
                       handlePromptTemp(contextMenu.seg!);
                       setContextMenu(null);
@@ -4153,12 +4196,17 @@ function MultiTrackTimeline({
                   </button>
                 </div>
                 <div className="grid grid-cols-5 gap-1 px-1 pb-0.5">
-                  {[
+                  {(activeTtsEngine === "fish_audio" || activeTtsEngine === "higgs" ? [
+                    { label: "Авто", val: null, title: "По умолчанию (0.80)" },
+                    { label: "0.60", val: 0.60, title: "Мягкий тон" },
+                    { label: "0.80", val: 0.80, title: "Нормальная речь (дефолт)" },
+                    { label: "1.00", val: 1.00, title: "Выразительно" },
+                  ] : [
                     { label: "Авто", val: null, title: "По умолчанию" },
                     { label: "0.10", val: 0.10, title: "Спокойно / Стабильно" },
                     { label: "0.20", val: 0.20, title: "Нормальная речь" },
                     { label: "0.35", val: 0.35, title: "Эмоционально" },
-                  ].map((item) => (
+                  ]).map((item) => (
                     <button
                       key={item.label}
                       type="button"
@@ -4178,7 +4226,7 @@ function MultiTrackTimeline({
                   ))}
                   <button
                     type="button"
-                    title="Ввести точную температуру вручную (0.05 - 0.60)"
+                    title="Ввести точную температуру вручную (0.05 - 2.00)"
                     onClick={() => {
                       handlePromptTemp(contextMenu.seg!);
                       setContextMenu(null);
@@ -4756,6 +4804,9 @@ function Editor() {
   const [donorInput, setDonorInput] = useState<string>("");           // ввод номера фразы-донора для чистого клона
   const [showExportModal, setShowExportModal] = useState(false);
   const [showCastModal, setShowCastModal] = useState(false);
+  const [showHiggsModal, setShowHiggsModal] = useState(false);
+  const [showFishModal, setShowFishModal] = useState(false);
+  const [showVoxModal, setShowVoxModal] = useState(false);
   const [subsViewMode, setSubsViewMode] = useState<"cards" | "table">("cards");
   const [actorPickerState, setActorPickerState] = useState<{ targetIds: string[]; x: number; y: number } | null>(null);
   const [actorInputDraft, setActorInputDraft] = useState("");
@@ -4778,16 +4829,20 @@ function Editor() {
   const [voiceTempDraft, setVoiceTempDraft] = useState<number | null>(null);
   const [autoCastBusy, setAutoCastBusy] = useState(false);
   const autoCastOn = useStore((s) => s.autoCastOn);
+  const [activeTtsEngine, setActiveTtsEngine] = useState<string>("higgs");
+  const [higgsExecution, setHiggsExecution] = useState<string>("server");
   useEffect(() => {
     api.capabilities().then((c) => {
       setDuckOn(c.selection?.duck_on === "1");
       setVoiceManualCtrl(c.selection?.voice_manual_ctrl === "1");
+      if (c.selection?.tts_engine) setActiveTtsEngine(c.selection.tts_engine);
+      if (c.selection?.higgs_execution) setHiggsExecution(c.selection.higgs_execution);
       if (c.selection?.voice_temp) {
         const vt = parseFloat(c.selection.voice_temp);
-        if (!isNaN(vt) && vt >= 0.08 && vt <= 0.50) setVoiceTemp(vt);
+        if (!isNaN(vt) && vt >= 0.05 && vt <= 2.00) setVoiceTemp(vt);
       }
     }).catch(() => {});
-  }, []);
+  }, [editorTab]);
   const setDuckSaved = (v: boolean) => { setDuckOn(v); api.setSelection("duck_on", v ? "1" : "0").catch(() => {}); };
   const [presets, setPresets] = useState<Record<string, Record<string, unknown>>>({});
   useEffect(() => { api.fonts().then((r) => setFonts(r.fonts)).catch(() => {}); }, []);   // bundled caption fonts
@@ -6514,6 +6569,7 @@ function Editor() {
                 loopSegId={loopSegId}
                 setLoopSegId={setLoopSegId}
                 dubRev={dubRev}
+                activeTtsEngine={activeTtsEngine}
               />
             </div>
           )}
@@ -7379,6 +7435,83 @@ function Editor() {
                 })()}
 
                 <div className="pt-2">
+                  <div className="text-[11px] font-medium text-[var(--color-muted)] mb-1.5 flex items-center gap-1">
+                    <Sliders size={12} className="text-[var(--color-accent)]" />
+                    {t("voice.ttsModelSettings", "Настройки моделей синтеза")}
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {/* Кнопка Higgs Audio v3 */}
+                    <button
+                      type="button"
+                      onClick={() => setShowHiggsModal(true)}
+                      className={`flex flex-col items-start p-2 rounded-lg border text-left transition-all ${
+                        activeTtsEngine === "higgs"
+                          ? "bg-[var(--color-accent)]/10 border-[var(--color-accent)] text-[var(--color-text)] shadow-sm"
+                          : "bg-[var(--color-surface)] border-[var(--color-border)] hover:border-[var(--color-muted)] text-[var(--color-text)]"
+                      }`}
+                      title={t("voice.higgsModalTitle", "Higgs Audio v3 — настройки")}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-[11px] font-semibold truncate flex items-center gap-1">
+                          ⚡ Higgs v3
+                        </span>
+                        <Settings2 size={11} className={activeTtsEngine === "higgs" ? "text-[var(--color-accent)]" : "text-[var(--color-muted)]"} />
+                      </div>
+                      <div className="text-[9px] text-[var(--color-muted)] truncate w-full mt-0.5">
+                        {`t: ${(p.audio.higgs_temp ?? 0.8).toFixed(2)}${p.audio.higgs_seed != null ? " • сид" : ""}`}
+                      </div>
+                    </button>
+
+                    {/* Кнопка Fish Audio S2 Pro */}
+                    <button
+                      type="button"
+                      onClick={() => setShowFishModal(true)}
+                      className={`flex flex-col items-start p-2 rounded-lg border text-left transition-all ${
+                        activeTtsEngine === "fish_audio"
+                          ? "bg-[var(--color-accent)]/10 border-[var(--color-accent)] text-[var(--color-text)] shadow-sm"
+                          : "bg-[var(--color-surface)] border-[var(--color-border)] hover:border-[var(--color-muted)] text-[var(--color-text)]"
+                      }`}
+                      title={t("voice.fishModalTitle", "Fish Audio S2 Pro — настройки")}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-[11px] font-semibold truncate flex items-center gap-1">
+                          🐟 Fish S2
+                        </span>
+                        <Settings2 size={11} className={activeTtsEngine === "fish_audio" ? "text-[var(--color-accent)]" : "text-[var(--color-muted)]"} />
+                      </div>
+                      <div className="text-[9px] text-[var(--color-muted)] truncate w-full mt-0.5">
+                        {p.audio.fish_prompt ? p.audio.fish_prompt : `t: ${(p.audio.fish_temp ?? 0.8).toFixed(2)}${p.audio.fish_clean_ref !== false ? " • чистый" : ""}`}
+                      </div>
+                    </button>
+
+                    {/* Кнопка VoxCPM2 */}
+                    <button
+                      type="button"
+                      onClick={() => setShowVoxModal(true)}
+                      className={`flex flex-col items-start p-2 rounded-lg border text-left transition-all ${
+                        activeTtsEngine === "voxcpm2"
+                          ? "bg-[var(--color-accent)]/10 border-[var(--color-accent)] text-[var(--color-text)] shadow-sm"
+                          : "bg-[var(--color-surface)] border-[var(--color-border)] hover:border-[var(--color-muted)] text-[var(--color-text)]"
+                      }`}
+                      title={t("voice.voxModalTitle", "VoxCPM2 — настройки")}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-[11px] font-semibold truncate flex items-center gap-1">
+                          🎙 VoxCPM2
+                        </span>
+                        <Settings2 size={11} className={activeTtsEngine === "voxcpm2" ? "text-[var(--color-accent)]" : "text-[var(--color-muted)]"} />
+                      </div>
+                      <div className="text-[9px] text-[var(--color-muted)] truncate w-full mt-0.5">
+                        {p.audio.vox_prompt ? p.audio.vox_prompt : `${p.audio.vox_steps ?? 20}ш • CFG ${(p.audio.vox_cfg ?? 1.6).toFixed(1)}`}
+                      </div>
+                    </button>
+                  </div>
+                  <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-1">
+                    {t("voice.ttsModelsHint", "Индивидуальные промпты, температура, сиды и параметры генерации для нейросетей.")}
+                  </div>
+                </div>
+
+                <div className="pt-2">
                   <div className="flex items-center justify-between text-[11px] mb-1">
                     <span className="text-[var(--color-muted)]">{t("voice.voiceGain")}</span>
                     <span className="mono text-[11px] text-[var(--color-text)]">{(voiceGainDraft ?? p.audio.voice_gain_db ?? 0) > 0 ? "+" : ""}{(voiceGainDraft ?? p.audio.voice_gain_db ?? 0).toFixed(1)} dB</span>
@@ -7538,35 +7671,53 @@ function Editor() {
                   <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.manualCtrlHint")}</div>
                 </div>
 
-                {voiceManualCtrl && (
-                  <div className="pl-3 py-1 space-y-2 border-l-2 border-[var(--color-accent)]/40 mt-1">
-                    <div>
-                      <div className="flex items-center justify-between text-[11px] mb-1">
-                        <span className="text-[var(--color-muted)]">{t("voice.stability")}</span>
-                        <span className="mono text-[11px] text-[var(--color-text)]">
-                          {(voiceTempDraft ?? voiceTemp).toFixed(2)} {((voiceTempDraft ?? voiceTemp) <= 0.16 ? `(${t("voice.monolithic")})` : (voiceTempDraft ?? voiceTemp) >= 0.28 ? `(${t("voice.lively")})` : `(${t("voice.balanced")})`)}
-                        </span>
+                {voiceManualCtrl && (() => {
+                  const isHighTemp = activeTtsEngine === "fish_audio" || (activeTtsEngine === "higgs" && higgsExecution !== "dll");
+                  const sMin = 0.10;
+                  const sMax = isHighTemp ? 1.50 : 0.50;
+                  const sStep = isHighTemp ? 0.05 : 0.02;
+                  const curVal = voiceTempDraft ?? voiceTemp;
+                  const desc = isHighTemp
+                    ? curVal < 0.65
+                      ? `(${t("voice.monolithic", "собранно")})`
+                      : curVal > 0.90
+                      ? `(${t("voice.lively", "экспрессивно")})`
+                      : `(${t("voice.balanced", "сбалансированно")})`
+                    : curVal <= 0.16
+                    ? `(${t("voice.monolithic", "монолитно")})`
+                    : curVal >= 0.28
+                    ? `(${t("voice.lively", "выразительно")})`
+                    : `(${t("voice.balanced", "сбалансированно")})`;
+                  return (
+                    <div className="pl-3 py-1 space-y-2 border-l-2 border-[var(--color-accent)]/40 mt-1">
+                      <div>
+                        <div className="flex items-center justify-between text-[11px] mb-1">
+                          <span className="text-[var(--color-muted)]">{t("voice.stability")}</span>
+                          <span className="mono text-[11px] text-[var(--color-text)]">
+                            {curVal.toFixed(2)} {desc}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={sMin}
+                          max={sMax}
+                          step={sStep}
+                          value={curVal}
+                          onChange={(e) => setVoiceTempDraft(parseFloat(e.target.value))}
+                          onPointerUp={async () => {
+                            if (voiceTempDraft != null) {
+                              setVoiceTemp(voiceTempDraft);
+                              await api.setSelection("voice_temp", voiceTempDraft.toFixed(2));
+                              setVoiceTempDraft(null);
+                            }
+                          }}
+                          className="w-full accent-[var(--color-accent)]"
+                        />
+                        <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.stabilityHint")}</div>
                       </div>
-                      <input
-                        type="range"
-                        min={0.10}
-                        max={0.36}
-                        step={0.02}
-                        value={voiceTempDraft ?? voiceTemp}
-                        onChange={(e) => setVoiceTempDraft(parseFloat(e.target.value))}
-                        onPointerUp={async () => {
-                          if (voiceTempDraft != null) {
-                            setVoiceTemp(voiceTempDraft);
-                            await api.setSelection("voice_temp", voiceTempDraft.toFixed(2));
-                            setVoiceTempDraft(null);
-                          }
-                        }}
-                        className="w-full accent-[var(--color-accent)]"
-                      />
-                      <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-0.5">{t("voice.stabilityHint")}</div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 <button onClick={doRegenAll} disabled={regenId !== null} title={t("voice.regenAll")}
                   className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">
@@ -7960,6 +8111,39 @@ function Editor() {
           onClose={() => setShowCastModal(false)}
         />
       )}
+      {showHiggsModal && (
+        <HiggsAudioModal
+          p={p}
+          onSave={async (settings, maxTokens) => {
+            await branch("tts_settings", settings);
+            if (maxTokens) {
+              await api.setSelection("higgs_max_tokens", maxTokens);
+            }
+            setShowHiggsModal(false);
+          }}
+          onClose={() => setShowHiggsModal(false)}
+        />
+      )}
+      {showFishModal && (
+        <FishAudioModal
+          p={p}
+          onSave={async (settings) => {
+            await branch("tts_settings", settings);
+            setShowFishModal(false);
+          }}
+          onClose={() => setShowFishModal(false)}
+        />
+      )}
+      {showVoxModal && (
+        <VoxCPM2Modal
+          p={p}
+          onSave={async (settings) => {
+            await branch("tts_settings", settings);
+            setShowVoxModal(false);
+          }}
+          onClose={() => setShowVoxModal(false)}
+        />
+      )}
     </div>
   );
 }
@@ -8167,6 +8351,731 @@ function CastActorsModal({
             className="px-4 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shadow-sm"
           >
             {t("common.close", "Закрыть")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Модальное окно настроек Higgs Audio v3
+function HiggsAudioModal({
+  p,
+  onSave,
+  onClose,
+}: {
+  p: Project;
+  onSave: (
+    settings: {
+      higgs_temp: number;
+      higgs_seed: number | null;
+    },
+    maxTokens: string
+  ) => Promise<void>;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [temp, setTemp] = useState<number>(p.audio.higgs_temp ?? 0.8);
+  const [seedFixed, setSeedFixed] = useState<boolean>(p.audio.higgs_seed != null);
+  const [seed, setSeed] = useState<number>(p.audio.higgs_seed ?? 42);
+  const [maxTokens, setMaxTokens] = useState<string>("default");
+  const [maxTokensOpts, setMaxTokensOpts] = useState<string[]>([
+    "default",
+    "auto",
+    "256",
+    "512",
+    "768",
+    "1024",
+    "1536",
+  ]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api
+      .capabilities()
+      .then((c) => {
+        if (c.selection?.higgs_max_tokens) {
+          setMaxTokens(c.selection.higgs_max_tokens);
+        }
+        if (c.higgs_max_tokens_opts?.length) {
+          setMaxTokensOpts(c.higgs_max_tokens_opts);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave(
+        {
+          higgs_temp: temp,
+          higgs_seed: seedFixed ? seed : null,
+        },
+        maxTokens
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const generateSeed = () => {
+    setSeed(Math.floor(Math.random() * 1000000) + 1);
+  };
+
+  const tokenFmt = (v: string) => {
+    if (v === "default") return t("voice.higgsTokensDefault", "По умолчанию (2048)");
+    if (v === "auto") return t("voice.higgsTokensAuto", "Авто (по длине фразы)");
+    return `${v} ${t("settings.tokens", "токенов")}`;
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-lg flex flex-col rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Шапка */}
+        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-border)]/70">
+          <div className="flex items-start gap-3">
+            <span className="text-2xl leading-none">⚡</span>
+            <div>
+              <h2 className="text-base font-semibold text-[var(--color-text)] leading-tight">
+                {t("voice.higgsModalTitle", "Higgs Audio v3")}
+              </h2>
+              <div className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-relaxed">
+                {t("voice.higgsModalSubtitle", "Параметры инференса и сэмплинга нейросети")}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Тело настроек */}
+        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+          {/* Температура сэмплинга */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {t("voice.higgsTempLabel", "Температура сэмплинга")}
+              </span>
+              <div className="flex items-center gap-2">
+                {Math.abs(temp - 0.8) > 0.001 && (
+                  <button
+                    type="button"
+                    onClick={() => setTemp(0.8)}
+                    className="text-[10px] text-[var(--color-accent)] hover:underline"
+                  >
+                    {t("voice.higgsTempReset", "Сбросить к 0.80")}
+                  </button>
+                )}
+                <span className="mono text-xs font-semibold px-2 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)]">
+                  {temp.toFixed(2)}
+                </span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={0.1}
+              max={2.0}
+              step={0.05}
+              value={temp}
+              onChange={(e) => setTemp(parseFloat(e.target.value))}
+              className="w-full accent-[var(--color-accent)] cursor-pointer"
+            />
+            <div className="text-[10px] text-[var(--color-muted)] leading-snug flex items-start justify-between gap-2">
+              <span>
+                {t(
+                  "voice.higgsTempHint",
+                  "Дефолт модели: 0.80. Рекомендуемый диапазон 0.60–1.00. Значения ниже 0.65 могут вызывать зацикливание."
+                )}
+              </span>
+              <div className="flex items-center gap-1 shrink-0">
+                {Math.abs(temp - 0.6) > 0.001 && (
+                  <button
+                    type="button"
+                    onClick={() => setTemp(0.6)}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
+                    title="0.60 (мягкий тон)"
+                  >
+                    0.60
+                  </button>
+                )}
+                {Math.abs(temp - 0.8) > 0.001 && (
+                  <button
+                    type="button"
+                    onClick={() => setTemp(0.8)}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
+                    title="0.80 (дефолт)"
+                  >
+                    0.80
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Фиксация сида */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {seedFixed
+                  ? t("voice.seedFixed", "Зафиксировать сид")
+                  : t("voice.seedRandom", "Случайный сид")}
+              </span>
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[var(--color-muted)] select-none">
+                <input
+                  type="checkbox"
+                  checked={seedFixed}
+                  onChange={(e) => setSeedFixed(e.target.checked)}
+                  className="accent-[var(--color-accent)] w-3.5 h-3.5 rounded"
+                />
+                <span>{t("voice.seedFixed", "Зафиксировать сид")}</span>
+              </label>
+            </div>
+            {seedFixed ? (
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="number"
+                  min={0}
+                  max={2147483647}
+                  value={seed}
+                  onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
+                  className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-xs font-mono text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={generateSeed}
+                  className="px-2.5 py-1.5 rounded-lg text-xs bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors flex items-center gap-1 font-medium"
+                  title={t("voice.seedGenerate", "Сгенерировать случайный сид")}
+                >
+                  <span>🎲</span>
+                </button>
+              </div>
+            ) : (
+              <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+                {t("voice.seedRandomHint", "Каждая генерация даёт уникальную интонацию")}
+              </div>
+            )}
+          </div>
+
+          {/* Лимит токенов (higgs_max_tokens) */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {t("voice.higgsTokensLabel", "Лимит токенов генерации")}
+              </span>
+              <span className="mono text-xs px-2 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)]">
+                {tokenFmt(maxTokens)}
+              </span>
+            </div>
+            <select
+              value={maxTokens}
+              onChange={(e) => setMaxTokens(e.target.value)}
+              className="w-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-xs text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none transition-colors"
+            >
+              {maxTokensOpts.map((opt) => (
+                <option key={opt} value={opt}>
+                  {tokenFmt(opt)}
+                </option>
+              ))}
+            </select>
+            <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+              {t(
+                "voice.higgsTokensHint",
+                "Максимальный бюджет токенов на фразу. «Авто» адаптивно рассчитывает лимит по длине фразы."
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Подвал */}
+        <div className="px-5 py-3 border-t border-[var(--color-border)]/70 bg-[var(--color-surface-2)]/30 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          >
+            {t("common.cancel", "Отмена")}
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {saving ? <Loader2 size={13} className="animate-spin" /> : null}
+            <span>{t("common.save", "Сохранить")}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Модальное окно настроек Fish Audio S2 Pro
+function FishAudioModal({
+  p,
+  onSave,
+  onClose,
+}: {
+  p: Project;
+  onSave: (settings: {
+    fish_prompt: string;
+    fish_temp: number;
+    fish_clean_ref: boolean;
+    fish_seed: number | null;
+  }) => Promise<void>;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [prompt, setPrompt] = useState(p.audio.fish_prompt ?? "");
+  const [temp, setTemp] = useState<number>(p.audio.fish_temp ?? 0.8);
+  const [cleanRef, setCleanRef] = useState<boolean>(p.audio.fish_clean_ref ?? true);
+  const [seedFixed, setSeedFixed] = useState<boolean>(p.audio.fish_seed != null);
+  const [seed, setSeed] = useState<number>(p.audio.fish_seed ?? 42);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave({
+        fish_prompt: prompt.trim(),
+        fish_temp: temp,
+        fish_clean_ref: cleanRef,
+        fish_seed: seedFixed ? seed : null,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const generateSeed = () => {
+    setSeed(Math.floor(Math.random() * 1000000) + 1);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative w-full max-w-lg flex flex-col rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        {/* Шапка */}
+        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-border)]/70">
+          <div className="flex items-start gap-3">
+            <span className="text-2xl leading-none">🐟</span>
+            <div>
+              <h2 className="text-base font-semibold text-[var(--color-text)] leading-tight">
+                {t("voice.fishModalTitle", "Fish Audio S2 Pro")}
+              </h2>
+              <div className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-relaxed">
+                {t("voice.fishModalSubtitle", "Параметры синтеза и подавления акцента")}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Тело настроек */}
+        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+          {/* Глобальный промпт */}
+          <div>
+            <div className="flex items-center justify-between text-[11px] mb-1">
+              <label className="font-medium text-[var(--color-text)]">
+                {t("voice.fishPromptLabel", "Глобальный промпт стиля/акцента")}
+              </label>
+              {prompt ? (
+                <button
+                  type="button"
+                  onClick={() => setPrompt("")}
+                  className="text-[10px] text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"
+                >
+                  {t("common.clear", "Очистить")}
+                </button>
+              ) : null}
+            </div>
+            <input
+              type="text"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder={t("voice.fishPromptPlaceholder", "например: [ru], [Russian]...")}
+              className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-xs text-[var(--color-text)] placeholder-[var(--color-muted)]/60 focus:border-[var(--color-accent)] outline-none transition-colors"
+            />
+            <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-1">
+              {t("voice.fishPromptHint", "Задаёт языковую принадлежность и эмоциональные теги для Fish Audio. Оставьте пустым или укажите [ru] для чистой русской речи.")}
+            </div>
+          </div>
+
+          {/* Температура сэмплинга */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {t("voice.fishTempLabel", "Температура сэмплинга")}
+              </span>
+              <div className="flex items-center gap-2">
+                {Math.abs(temp - 0.8) > 0.001 && (
+                  <button
+                    type="button"
+                    onClick={() => setTemp(0.8)}
+                    className="text-[10px] text-[var(--color-accent)] hover:underline"
+                  >
+                    {t("voice.fishTempReset", "Сбросить к 0.80")}
+                  </button>
+                )}
+                <span className="mono text-xs font-semibold px-2 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)]">
+                  {temp.toFixed(2)}
+                </span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={0.0}
+              max={2.0}
+              step={0.05}
+              value={temp}
+              onChange={(e) => setTemp(parseFloat(e.target.value))}
+              className="w-full accent-[var(--color-accent)] cursor-pointer"
+            />
+            <div className="text-[10px] text-[var(--color-muted)] leading-snug flex items-start justify-between gap-2">
+              <span>{t("voice.fishTempHint", "Дефолт модели: 0.80. Для устранения иностранного акцента на фразах рекомендуется снизить до 0.50.")}</span>
+              {Math.abs(temp - 0.5) > 0.001 && (
+                <button
+                  type="button"
+                  onClick={() => setTemp(0.5)}
+                  className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors text-[var(--color-text)] font-mono"
+                  title="Установить 0.50"
+                >
+                  0.50
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Изоляция референса */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-1">
+            <label className="flex items-start gap-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={cleanRef}
+                onChange={(e) => setCleanRef(e.target.checked)}
+                className="mt-0.5 accent-[var(--color-accent)] w-4 h-4 rounded"
+              />
+              <div className="flex-1 min-w-0">
+                <span className="text-xs font-medium text-[var(--color-text)] block">
+                  {t("voice.fishCleanRefLabel", "Изолировать референс от иностранного текста")}
+                </span>
+                <span className="text-[10px] text-[var(--color-muted)] leading-snug block mt-0.5">
+                  {t("voice.fishCleanRefHint", "Передаёт чистый аудио-образец без исходного английского текста транскрипции. Устраняет проникновение английской фонетики и акцента.")}
+                </span>
+              </div>
+            </label>
+          </div>
+
+          {/* Фиксация сида */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {seedFixed ? t("voice.seedFixed", "Зафиксировать сид") : t("voice.seedRandom", "Случайный сид")}
+              </span>
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[var(--color-muted)] select-none">
+                <input
+                  type="checkbox"
+                  checked={seedFixed}
+                  onChange={(e) => setSeedFixed(e.target.checked)}
+                  className="accent-[var(--color-accent)] w-3.5 h-3.5 rounded"
+                />
+                <span>{t("voice.seedFixed", "Зафиксировать сид")}</span>
+              </label>
+            </div>
+            {seedFixed ? (
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="number"
+                  min={0}
+                  max={2147483647}
+                  value={seed}
+                  onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
+                  className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-xs font-mono text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={generateSeed}
+                  className="px-2.5 py-1.5 rounded-lg text-xs bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors flex items-center gap-1 font-medium"
+                  title={t("voice.seedGenerate", "Сгенерировать случайный сид")}
+                >
+                  <span>🎲</span>
+                </button>
+              </div>
+            ) : (
+              <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+                {t("voice.seedRandomHint", "Каждая генерация даёт уникальную интонацию")}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Подвал */}
+        <div className="px-5 py-3 border-t border-[var(--color-border)]/70 bg-[var(--color-surface-2)]/30 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          >
+            {t("common.cancel", "Отмена")}
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {saving ? <Loader2 size={13} className="animate-spin" /> : null}
+            <span>{t("common.save", "Сохранить")}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Модальное окно настроек VoxCPM2
+function VoxCPM2Modal({
+  p,
+  onSave,
+  onClose,
+}: {
+  p: Project;
+  onSave: (settings: {
+    vox_prompt: string;
+    vox_steps: number;
+    vox_cfg: number;
+    vox_seed: number | null;
+  }) => Promise<void>;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [prompt, setPrompt] = useState(p.audio.vox_prompt ?? "");
+  const [steps, setSteps] = useState<number>(p.audio.vox_steps ?? 20);
+  const [cfg, setCfg] = useState<number>(p.audio.vox_cfg ?? 1.6);
+  const [seedFixed, setSeedFixed] = useState<boolean>(p.audio.vox_seed != null);
+  const [seed, setSeed] = useState<number>(p.audio.vox_seed ?? 42);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave({
+        vox_prompt: prompt.trim(),
+        vox_steps: steps,
+        vox_cfg: cfg,
+        vox_seed: seedFixed ? seed : null,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const generateSeed = () => {
+    setSeed(Math.floor(Math.random() * 1000000) + 1);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative w-full max-w-lg flex flex-col rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        {/* Шапка */}
+        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-border)]/70">
+          <div className="flex items-start gap-3">
+            <span className="text-2xl leading-none">🎙</span>
+            <div>
+              <h2 className="text-base font-semibold text-[var(--color-text)] leading-tight">
+                {t("voice.voxModalTitle", "VoxCPM2")}
+              </h2>
+              <div className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-relaxed">
+                {t("voice.voxModalSubtitle", "Параметры диффузии и манеры речи")}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Тело настроек */}
+        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+          {/* Глобальный промпт */}
+          <div>
+            <div className="flex items-center justify-between text-[11px] mb-1">
+              <label className="font-medium text-[var(--color-text)]">
+                {t("voice.voxPromptLabel", "Манера и стиль речи (Промпт)")}
+              </label>
+              {prompt ? (
+                <button
+                  type="button"
+                  onClick={() => setPrompt("")}
+                  className="text-[10px] text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"
+                >
+                  {t("common.clear", "Очистить")}
+                </button>
+              ) : null}
+            </div>
+            <input
+              type="text"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder={t("voice.voxPromptPlaceholder", "например: slowly pace, calm tone...")}
+              className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-xs text-[var(--color-text)] placeholder-[var(--color-muted)]/60 focus:border-[var(--color-accent)] outline-none transition-colors"
+            />
+            <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-1">
+              {t("voice.voxPromptHint", "Стилевые инструкции для VoxCPM2 на английском языке (автоматически оборачиваются в скобки).")}
+            </div>
+          </div>
+
+          {/* Шаги диффузии */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {t("voice.voxStepsLabel", "Шаги диффузии (качество)")}
+              </span>
+              <div className="flex items-center gap-2">
+                {steps !== 20 && (
+                  <button
+                    type="button"
+                    onClick={() => setSteps(20)}
+                    className="text-[10px] text-[var(--color-accent)] hover:underline"
+                  >
+                    {t("voice.voxStepsReset", "Сбросить к 20")}
+                  </button>
+                )}
+                <span className="mono text-xs font-semibold px-2 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)]">
+                  {steps}
+                </span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={10}
+              max={50}
+              step={1}
+              value={steps}
+              onChange={(e) => setSteps(parseInt(e.target.value, 10))}
+              className="w-full accent-[var(--color-accent)] cursor-pointer"
+            />
+            <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+              {t("voice.voxStepsHint", "Дефолт: 20 шагов. Больше шагов = более чистый тембр, но медленнее генерация.")}
+            </div>
+          </div>
+
+          {/* CFG Scale */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {t("voice.voxCfgLabel", "Шкала соответствия (CFG Scale)")}
+              </span>
+              <div className="flex items-center gap-2">
+                {Math.abs(cfg - 1.6) > 0.001 && (
+                  <button
+                    type="button"
+                    onClick={() => setCfg(1.6)}
+                    className="text-[10px] text-[var(--color-accent)] hover:underline"
+                  >
+                    {t("voice.voxCfgReset", "Сбросить к 1.6")}
+                  </button>
+                )}
+                <span className="mono text-xs font-semibold px-2 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)]">
+                  {cfg.toFixed(1)}
+                </span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={1.0}
+              max={3.0}
+              step={0.1}
+              value={cfg}
+              onChange={(e) => setCfg(parseFloat(e.target.value))}
+              className="w-full accent-[var(--color-accent)] cursor-pointer"
+            />
+            <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+              {t("voice.voxCfgHint", "Дефолт: 1.6. Регулирует силу следования стилевому промпту и референсу.")}
+            </div>
+          </div>
+
+          {/* Фиксация сида */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {seedFixed ? t("voice.seedFixed", "Зафиксировать сид") : t("voice.seedRandom", "Случайный сид")}
+              </span>
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[var(--color-muted)] select-none">
+                <input
+                  type="checkbox"
+                  checked={seedFixed}
+                  onChange={(e) => setSeedFixed(e.target.checked)}
+                  className="accent-[var(--color-accent)] w-3.5 h-3.5 rounded"
+                />
+                <span>{t("voice.seedFixed", "Зафиксировать сид")}</span>
+              </label>
+            </div>
+            {seedFixed ? (
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="number"
+                  min={0}
+                  max={2147483647}
+                  value={seed}
+                  onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
+                  className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-xs font-mono text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={generateSeed}
+                  className="px-2.5 py-1.5 rounded-lg text-xs bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors flex items-center gap-1 font-medium"
+                  title={t("voice.seedGenerate", "Сгенерировать случайный сид")}
+                >
+                  <span>🎲</span>
+                </button>
+              </div>
+            ) : (
+              <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+                {t("voice.seedRandomHint", "Каждая генерация даёт уникальную интонацию")}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Подвал */}
+        <div className="px-5 py-3 border-t border-[var(--color-border)]/70 bg-[var(--color-surface-2)]/30 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          >
+            {t("common.cancel", "Отмена")}
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {saving ? <Loader2 size={13} className="animate-spin" /> : null}
+            <span>{t("common.save", "Сохранить")}</span>
           </button>
         </div>
       </div>
@@ -8801,7 +9710,7 @@ function fmtBytes(n: number) {
 // Семейства квантов: разные варианты ОДНОЙ модели (выбор одного, «ИЛИ»). Явная карта по id — надёжнее
 // префикса (higgs — квант TTS, higgs-engine — движок, это РАЗНЫЕ вещи). Остальные компоненты — одиночные.
 const QUANT_GROUP: Record<string, string> = {
-  higgs: "higgs", "higgs-q6_k": "higgs", "higgs-q4_k_m": "higgs",
+  higgs: "higgs", "higgs-bf16": "higgs", "higgs-q6_k": "higgs", "higgs-q4_k_m": "higgs",
   gemma: "gemma", "gemma-q5_0": "gemma", "gemma-q6_k": "gemma", "gemma-q8_0": "gemma",
   parakeet: "parakeet", "parakeet-fp32": "parakeet",
   roformer: "roformer", "roformer-q5": "roformer", "roformer-q4": "roformer",
