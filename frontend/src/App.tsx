@@ -1243,7 +1243,8 @@ function TopBar() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"models" | "components" | "mcp">("models");
-  const [mcpConnected, setMcpConnected] = useState(false);
+  const mcpEnabled = useStore((s) => s.mcpEnabled);
+  const setMcpEnabled = useStore((s) => s.setMcpEnabled);
 
   useEffect(() => {
     const openComp = () => { setSettingsTab("components"); setSettings(true); };
@@ -1254,22 +1255,6 @@ function TopBar() {
       window.removeEventListener("dub-open-components", openComp);
       window.removeEventListener("dub-open-mcp", openMcp);
     };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    const base = (import.meta.env.VITE_API as string | undefined) ?? (import.meta.env.DEV ? "http://127.0.0.1:8765" : "");
-    const poll = () => {
-      fetch(`${base}/mcp/status`)
-        .then((r) => r.ok ? r.json() : null)
-        .then((d) => {
-          if (alive && d) setMcpConnected(Boolean(d.agent_connected));
-        })
-        .catch(() => {});
-    };
-    poll();
-    const interval = setInterval(poll, 4000);
-    return () => { alive = false; clearInterval(interval); };
   }, []);
 
   const [help, setHelp] = useState(false);
@@ -1333,17 +1318,35 @@ function TopBar() {
           <span className="text-[9px] text-[var(--color-muted)] font-normal leading-none mt-0.5">ручная настройка</span>
         </button>
         <button
-          onClick={() => { setSettingsTab("mcp"); setSettings(true); }}
-          title={mcpConnected ? "AI-агент подключён (MCP)" : "Подключить AI-агента (MCP)"}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
-            mcpConnected
-              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20"
-              : "text-[var(--color-muted)] border-[var(--color-border)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]"
+          type="button"
+          onClick={() => setMcpEnabled(!mcpEnabled)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setSettingsTab("mcp");
+            setSettings(true);
+          }}
+          title={
+            mcpEnabled
+              ? "ЛКМ: Выключить MCP | ПКМ: Настройки агента (Сейчас: Включен)"
+              : "ЛКМ: Включить MCP | ПКМ: Настройки агента (Сейчас: Выключен)"
+          }
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors select-none shadow-sm ${
+            !mcpEnabled
+              ? "bg-red-500/10 border-red-500/35 text-red-400 hover:bg-red-500/20"
+              : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
           }`}
         >
-          <Bot size={15} />
-          {mcpConnected && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
-          <span className="text-[11px]">MCP</span>
+          {!mcpEnabled ? (
+            <div className="relative inline-flex items-center justify-center">
+              <Bot size={15} />
+              <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <span className="w-[18px] h-[2px] bg-red-400 rotate-45 rounded-full shadow-[0_0_2px_rgba(0,0,0,0.8)]" />
+              </span>
+            </div>
+          ) : (
+            <Bot size={15} />
+          )}
+          <span className={`text-[11px] ${!mcpEnabled ? "line-through decoration-red-400/80" : ""}`}>MCP</span>
         </button>
         <button onClick={() => setHelp(true)} title={t("help.title")}
           className="p-1.5 rounded-md text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><HelpCircle size={18} /></button>
@@ -10717,6 +10720,7 @@ export default function App() {
 
     const interval = window.setInterval(async () => {
       try {
+        if (!useStore.getState().mcpEnabled) return;
         const curStage = useStore.getState().stage;
         const curPid = useStore.getState().pid;
         if (curStage !== "editor" || !curPid) return;

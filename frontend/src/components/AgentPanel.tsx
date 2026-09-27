@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Check, Copy, Bot, Terminal, Code2, Sparkles, Layers } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useStore } from "../store";
 
 const SERVER_NAME = "dubstudio";
 
@@ -63,11 +64,18 @@ const CopyField: React.FC<{
 
 export const AgentPanel: React.FC = () => {
   const { t } = useTranslation();
+  const mcpEnabled = useStore((s) => s.mcpEnabled);
+  const setMcpEnabled = useStore((s) => s.setMcpEnabled);
   const [status, setStatus] = useState<McpStatus | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [clientTab, setClientTab] = useState<"claude" | "cursor" | "antigravity" | "opencode">("claude");
 
   useEffect(() => {
+    if (!mcpEnabled) {
+      setStatus(null);
+      setFailed(null);
+      return;
+    }
     let alive = true;
     const base =
       (import.meta.env.VITE_API as string | undefined) ??
@@ -95,7 +103,7 @@ export const AgentPanel: React.FC = () => {
       alive = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [mcpEnabled]);
 
   const endpointUrl = getEndpoint();
 
@@ -154,6 +162,47 @@ export const AgentPanel: React.FC = () => {
             )}
           </p>
         </div>
+      </div>
+      {/* Server Status & Kill-switch Toggle Card */}
+      <div className="flex items-center justify-between p-3.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+        <div className="flex items-center gap-3">
+          <div className="relative inline-flex items-center justify-center">
+            <Bot size={20} className={mcpEnabled ? "text-emerald-400" : "text-red-400"} />
+            {!mcpEnabled && (
+              <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <span className="w-[22px] h-[2px] bg-red-400 rotate-45 rounded-full shadow-[0_0_2px_rgba(0,0,0,0.8)]" />
+              </span>
+            )}
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-[var(--color-text)]">
+              {mcpEnabled ? "MCP Сервер: ВКЛЮЧЁН" : "MCP Сервер: ВЫКЛЮЧЕН"}
+            </div>
+            <div className="text-[11px] text-[var(--color-muted)] mt-0.5">
+              {mcpEnabled
+                ? "Агент может подключаться и управлять проектом"
+                : "Все функции заблокированы, фоновые запросы полностью остановлены"}
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setMcpEnabled(!mcpEnabled)}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+            mcpEnabled
+              ? "bg-red-500/10 border-red-500/35 text-red-400 hover:bg-red-500/20"
+              : "bg-emerald-500/10 border-emerald-500/35 text-emerald-400 hover:bg-emerald-500/20"
+          }`}
+        >
+          {mcpEnabled ? "Выключить" : "Включить"}
+        </button>
+      </div>
+
+      <div className="px-1 text-[11px] text-[var(--color-muted)] flex items-center gap-1.5">
+        <span>💡</span>
+        <span>
+          <strong>Быстрое переключение:</strong> в верхней шапке программы клик <strong>ЛКМ</strong> по кнопке <strong>[MCP]</strong> мгновенно переключает Вкл/Выкл, а клик <strong>ПКМ</strong> открывает эту панель.
+        </span>
       </div>
 
       {/* Live Status Card */}

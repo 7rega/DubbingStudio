@@ -57,6 +57,7 @@ def discover_mcp_url():
     candidates = [
         os.path.join(temp_dir, "dubstudio.port"),
         os.path.join(os.path.dirname(__file__), ".port"),
+        r"E:\DubStudioPro\workspace\.port",
         r"F:\DubStudio\workspace\.port",
         r"F:\DubbingStudio\workspace\.port",
     ]
@@ -166,6 +167,49 @@ def read_message():
                 continue
 
 
+def is_mcp_disabled():
+    temp_dir = os.environ.get("TEMP", os.environ.get("TMP", "/tmp"))
+    # 1. Root workspace/temp flags
+    root_candidates = [
+        os.path.join(temp_dir, "dubstudio.mcp_disabled"),
+        os.path.join(os.path.dirname(__file__), ".mcp_disabled"),
+        r"E:\DubStudioPro\workspace\.mcp_disabled",
+        r"F:\DubStudio\workspace\.mcp_disabled",
+        r"F:\DubbingStudio\workspace\.mcp_disabled",
+    ]
+    for p in root_candidates:
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    val = f.read().strip()
+                    if val == "1":
+                        return True
+                    elif val == "0":
+                        return False
+            except Exception:
+                pass
+
+    # 2. Project-level flags
+    workspace_dirs = [
+        r"E:\DubStudioPro\workspace",
+        r"F:\DubStudio\workspace",
+        r"F:\DubbingStudio\workspace",
+    ]
+    for wdir in workspace_dirs:
+        if os.path.isdir(wdir):
+            try:
+                for entry in os.listdir(wdir):
+                    proj_flag = os.path.join(wdir, entry, ".mcp_disabled")
+                    if os.path.isfile(proj_flag):
+                        with open(proj_flag, "r", encoding="utf-8") as f:
+                            val = f.read().strip()
+                            if val == "1":
+                                return True
+            except Exception:
+                pass
+    return False
+
+
 def main():
     url = get_url()
     log(f"=== DubStudio MCP Bridge Started -> {url} ===")
@@ -176,6 +220,7 @@ def main():
             break
 
         msg_id = None
+        method = ""
         try:
             req_obj = json.loads(msg_bytes.decode("utf-8", errors="replace"))
             msg_id = req_obj.get("id")
@@ -183,6 +228,27 @@ def main():
             log(f">> REQ [{method}]: {str(req_obj)[:180]}")
         except Exception:
             pass
+
+        # Kill-Switch: If user disabled MCP in DubStudio, reject any request
+        if is_mcp_disabled():
+            log(f"MCP disabled by user; rejecting {method} (id={msg_id})")
+            if msg_id is not None:
+                err_payload = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "error": {
+                        "code": -32000,
+                        "message": "MCP server is disabled by the user in DubStudio",
+                    },
+                }
+                err_bytes = json.dumps(err_payload, ensure_ascii=False).encode("utf-8")
+                if is_header_framed:
+                    hdr = f"Content-Length: {len(err_bytes)}\r\n\r\n".encode("ascii")
+                    sys.stdout.buffer.write(hdr + err_bytes)
+                else:
+                    sys.stdout.buffer.write(err_bytes + b"\n")
+                sys.stdout.buffer.flush()
+            continue
 
         try:
             resp_bytes = send_to_mcp(msg_bytes)

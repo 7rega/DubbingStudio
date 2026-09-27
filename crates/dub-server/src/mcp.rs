@@ -56,6 +56,27 @@ fn agent_present() -> bool {
         .is_some_and(|(at, _)| at.elapsed() < AGENT_PRESENT)
 }
 
+pub fn is_disabled() -> bool {
+    let temp = std::env::var("TEMP").unwrap_or_else(|_| ".".into());
+    let temp_flag = std::path::Path::new(&temp).join("dubstudio.mcp_disabled");
+    if temp_flag.is_file() {
+        if let Ok(s) = std::fs::read_to_string(&temp_flag) {
+            if s.trim() == "1" { return true; }
+            if s.trim() == "0" { return false; }
+        }
+    }
+    for cand in &["workspace/.mcp_disabled", ".mcp_disabled"] {
+        let p = std::path::Path::new(cand);
+        if p.is_file() {
+            if let Ok(s) = std::fs::read_to_string(p) {
+                if s.trim() == "1" { return true; }
+                if s.trim() == "0" { return false; }
+            }
+        }
+    }
+    false
+}
+
 /// GET /mcp/status — whether an agent is connected, for the settings page.
 pub async fn status() -> Json<Value> {
     let last = agent()
@@ -65,6 +86,7 @@ pub async fn status() -> Json<Value> {
         .clone();
     Json(json!({
         "server_name": SERVER_NAME,
+        "enabled": !is_disabled(),
         "agent_connected": agent_present(),
         "agent_last_call": last.as_ref().map(|(_, what)| what.clone()),
         "agent_seconds_ago": last.as_ref().map(|(at, _)| at.elapsed().as_secs()),
@@ -619,6 +641,10 @@ pub async fn handle(_headers: HeaderMap, body: axum::body::Bytes) -> Response {
     // Notifications acknowledge with 202 Accepted
     if message.get("id").is_none() {
         return StatusCode::ACCEPTED.into_response();
+    }
+
+    if is_disabled() {
+        return rpc_error(id, -32000, "MCP server is disabled by the user in DubStudio".into());
     }
 
     if method != "tools/call" {

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Project, ProjectSummary } from "./lib/api";
+import { api, type Project, type ProjectSummary } from "./lib/api";
 
 type Stage = "boot" | "setup" | "empty" | "analyzing" | "editor" | "batch" | "multilang";
 export type ExportItem = { id: string; name: string; status: "rendering" | "done" | "error"; msg: string; url?: string; pid?: string };
@@ -29,6 +29,8 @@ type State = {
   setVisionOn: (b: boolean) => void;
   autoCastOn: boolean;               // глобальная доступность автоподбора голосов (Auto-Cast); синхронизируется между Settings, DropZone и Editor
   setAutoCastOn: (b: boolean) => void;
+  mcpEnabled: boolean;               // статус MCP-сервера для ИИ-агента (Вкл / Выкл)
+  setMcpEnabled: (b: boolean) => void;
   recent: ProjectSummary[];
   setRecent: (recent: ProjectSummary[] | ((prev: ProjectSummary[]) => ProjectSummary[])) => void;
   activeName: string | null;         // исходное имя видеофайла открытого проекта для отображения в шапке/заголовке
@@ -90,8 +92,29 @@ export const useStore = create<State>((set, get) => ({
     }
     set({ autoCastOn });
   },
+  mcpEnabled: typeof window !== "undefined" ? localStorage.getItem("dub-mcp-enabled") !== "0" : true,
+  setMcpEnabled: (mcpEnabled) => {
+    if (typeof window !== "undefined") {
+      try { localStorage.setItem("dub-mcp-enabled", mcpEnabled ? "1" : "0"); } catch {}
+    }
+    set({ mcpEnabled });
+    const s = get();
+    const curPid = s.pid || s.recent[0]?.pid;
+    if (curPid) {
+      api.saveText(curPid, ".mcp_disabled", mcpEnabled ? "0" : "1", undefined, false, "..").catch(() => {});
+      if (s.pid) {
+        api.saveText(s.pid, ".mcp_disabled", mcpEnabled ? "0" : "1", undefined, false).catch(() => {});
+      }
+    }
+  },
   setStage: (stage) => set({ stage }),
-  setPid: (pid) => set({ pid }),
+  setPid: (pid) => {
+    set({ pid });
+    if (pid && !get().mcpEnabled) {
+      api.saveText(pid, ".mcp_disabled", "1", undefined, false).catch(() => {});
+      api.saveText(pid, ".mcp_disabled", "1", undefined, false, "..").catch(() => {});
+    }
+  },
   setProject: (project) => set({ project }),
   setProgress: (stage, msg, pct = null) => set((s) => {   // keep the last message on a stage-only tick; pct only during a download
     const progress = {
