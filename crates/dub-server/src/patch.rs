@@ -517,6 +517,112 @@ fn op_add_segment(p: &mut Project, edit: &Value) -> PatchResult {
     Ok(())
 }
 
+/// split_segment — разрезать сегмент на 2 части по временной отсечке split_at.
+/// Вход: id, split_at (секунды), опционально tgt_text_1, tgt_text_2, src_text_1, src_text_2.
+fn op_split_segment(p: &mut Project, edit: &Value) -> PatchResult {
+    let sid = s(edit, "id").ok_or((400, "missing segment id".into()))?;
+    let idx = p.segments.iter().position(|x| x.id == sid).ok_or((404, format!("segment {sid:?} not found")))?;
+    let orig = p.segments[idx].clone();
+
+    let split_at = f(edit, "split_at").ok_or((400, "missing split_at (seconds)".into()))?;
+    if split_at <= orig.start + 0.05 || split_at >= orig.end - 0.05 {
+        return Err((400, format!("split_at ({split_at}) must be between {} and {}", orig.start, orig.end)));
+    }
+
+    let new_id = s(edit, "new_id").filter(|s| !s.is_empty()).unwrap_or_else(|| {
+        let mut u = uuid::Uuid::new_v4().simple().to_string();
+        u.truncate(8);
+        format!("s_{u}")
+    });
+
+    // 1-я часть (обновляет текущий сегмент по индексу)
+    let seg1 = &mut p.segments[idx];
+    seg1.end = split_at;
+    if let Some(t) = s(edit, "tgt_text_1") {
+        seg1.tgt_text = t;
+    }
+    if let Some(t) = s(edit, "src_text_1") {
+        seg1.src_text = t;
+    }
+    crate::segment_cache::invalidate_audio(seg1);
+    seg1.dirty = true;
+
+    // 2-я часть (новый сегмент)
+    let mut seg2 = orig.clone();
+    seg2.id = new_id;
+    seg2.start = split_at;
+    seg2.end = orig.end;
+    if let Some(t) = s(edit, "tgt_text_2") {
+        seg2.tgt_text = t;
+    }
+    if let Some(t) = s(edit, "src_text_2") {
+        seg2.src_text = t;
+    }
+    crate::segment_cache::invalidate_audio(&mut seg2);
+    seg2.dirty = true;
+
+    p.segments.insert(idx + 1, seg2);
+    p.audio.mix_dirty = true;
+    Ok(())
+}
+
+/// merge_segments — склеить 2 или более последовательных сегментов в один.
+/// Вход: ids (массив id сегментов по порядку).
+fn op_merge_segments(p: &mut Project, edit: &Value) -> PatchResult {
+    let ids_list = ids(edit);
+    if ids_list.len() < 2 {
+        return Err((400, "merge_segments requires at least 2 segment ids".into()));
+    }
+
+    let mut indices: Vec<usize> = Vec::new();
+    for target_id in &ids_list {
+        let pos = p.segments.iter().position(|s| s.id == *target_id)
+            .ok_or_else(|| (404, format!("segment {target_id:?} not found")))?;
+        indices.push(pos);
+    }
+
+    let first_idx = indices[0];
+    let min_start = p.segments[first_idx].start;
+    let mut max_end = p.segments[first_idx].end;
+    let mut combined_src = Vec::new();
+    let mut combined_tgt = Vec::new();
+
+    for &idx in &indices {
+        let seg = &p.segments[idx];
+        if seg.end > max_end {
+            max_end = seg.end;
+        }
+        if !seg.src_text.trim().is_empty() {
+            combined_src.push(seg.src_text.trim().to_string());
+        }
+        if !seg.tgt_text.trim().is_empty() {
+            combined_tgt.push(seg.tgt_text.trim().to_string());
+        }
+    }
+
+    let first_seg = &mut p.segments[first_idx];
+    first_seg.start = min_start;
+    first_seg.end = max_end;
+    if let Some(explicit_tgt) = s(edit, "combined_tgt_text") {
+        first_seg.tgt_text = explicit_tgt;
+    } else if !combined_tgt.is_empty() {
+        first_seg.tgt_text = combined_tgt.join(" ");
+    }
+    if let Some(explicit_src) = s(edit, "combined_src_text") {
+        first_seg.src_text = explicit_src;
+    } else if !combined_src.is_empty() {
+        first_seg.src_text = combined_src.join(" ");
+    }
+    crate::segment_cache::invalidate_audio(first_seg);
+    first_seg.dirty = true;
+
+    let to_remove: std::collections::BTreeSet<String> = ids_list[1..].iter().cloned().collect();
+    p.segments.retain(|s| !to_remove.contains(&s.id));
+    p.audio.mix_dirty = true;
+    Ok(())
+}
+
+
 /// gain — монтажный гейн всей дорожки (dB). НЕ помечает dirty: ре-TTS не нужен, применяется на рендере
 /// поверх нормализации (сегменты берутся из кэша).
 fn op_gain(p: &mut Project, edit: &Value) -> PatchResult {
@@ -939,6 +1045,8 @@ pub fn apply(p: &mut Project, edit: &Value) -> PatchResult {
     match op.as_str() {
         "caption" => op_caption(p, edit),
         "segment" => op_segment(p, edit),
+        "split_segment" => op_split_segment(p, edit),
+        "merge_segments" => op_merge_segments(p, edit),
         "del_segment" => op_del_segment(p, edit),
         "add_segment" => op_add_segment(p, edit),
         "hide_segment" => op_hide_segment(p, edit),
@@ -1027,6 +1135,73 @@ mod tests {
         apply(&mut p, &json!({"op":"segment","id":"s0","tgt_text":"привет"})).unwrap();
         assert_eq!(p.segments[0].tgt_text, "привет");
         assert!(p.segments[0].dirty);
+    }
+
+    #[test]
+    fn split_segment_divides_text_and_time() {
+        let mut p = proj_with_seg();
+        apply(
+            &mut p,
+            &json!({
+                "op": "split_segment",
+                "id": "s0",
+                "split_at": 0.5,
+                "tgt_text_1": "часть 1",
+                "tgt_text_2": "часть 2"
+            }),
+        )
+        .unwrap();
+        assert_eq!(p.segments.len(), 2);
+        assert_eq!(p.segments[0].id, "s0");
+        assert_eq!(p.segments[0].start, 0.0);
+        assert_eq!(p.segments[0].end, 0.5);
+        assert_eq!(p.segments[0].tgt_text, "часть 1");
+        assert!(p.segments[0].dirty);
+
+        assert_eq!(p.segments[1].start, 0.5);
+        assert_eq!(p.segments[1].end, 1.0);
+        assert_eq!(p.segments[1].tgt_text, "часть 2");
+        assert!(p.segments[1].dirty);
+        assert!(p.audio.mix_dirty);
+    }
+
+    #[test]
+    fn merge_segments_combines_range_and_text() {
+        let mut p = Project::default();
+        p.segments.push(dub_core::Segment {
+            id: "s1".into(),
+            start: 0.0,
+            end: 1.0,
+            src_text: "hello".into(),
+            tgt_text: "привет".into(),
+            ..Default::default()
+        });
+        p.segments.push(dub_core::Segment {
+            id: "s2".into(),
+            start: 1.0,
+            end: 2.5,
+            src_text: "world".into(),
+            tgt_text: "мир".into(),
+            ..Default::default()
+        });
+
+        apply(
+            &mut p,
+            &json!({
+                "op": "merge_segments",
+                "ids": ["s1", "s2"]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(p.segments.len(), 1);
+        assert_eq!(p.segments[0].id, "s1");
+        assert_eq!(p.segments[0].start, 0.0);
+        assert_eq!(p.segments[0].end, 2.5);
+        assert_eq!(p.segments[0].src_text, "hello world");
+        assert_eq!(p.segments[0].tgt_text, "привет мир");
+        assert!(p.segments[0].dirty);
+        assert!(p.audio.mix_dirty);
     }
 
     #[test]

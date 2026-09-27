@@ -25,6 +25,7 @@ mod frame;
 mod hw;
 mod presets;
 mod jobs;
+pub mod mcp;
 mod media;
 mod models;
 mod ocr;
@@ -422,7 +423,7 @@ pub fn build_router(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    Router::new()
+    let app = Router::new()
         .route("/engine/capabilities", get(capabilities))
         .route("/engine/opts", axum::routing::patch(endpoints::set_opts))
         .route("/engine/select", post(endpoints::select_model))
@@ -500,13 +501,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/projects/{pid}/audio-bgm", get(audio_bgm))
         .route("/jobs/{job_id}/events", get(job_events))
         .route("/window/title", post(set_window_title))
+        .route("/mcp", get(mcp::discover).post(mcp::handle))
+        .route("/mcp/status", get(mcp::status))
         // SPA fallback — монтируется последним, чтобы не затенять API.
         .fallback(spa_fallback)
         // Видео-аплоад — большие тела. axum по дефолту режет на 2МБ (multipart ломается на
         // реальном ролике). Питон (Starlette) лимита не ставит -> снимаем и мы.
         .layer(axum::extract::DefaultBodyLimit::disable())
         .layer(cors)
-        .with_state(state)
+        .with_state(state);
+
+    mcp::install(app.clone());
+    app
 }
 
 // ─── /engine/capabilities ───────────────────────────────────────────────────

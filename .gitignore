@@ -34,3 +34,5 @@ Cargo.status
 # Operating System files
 Thumbs.db
 .DS_Store
+*.log
+

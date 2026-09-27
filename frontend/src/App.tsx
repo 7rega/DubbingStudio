@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones, Bot } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -10,6 +10,7 @@ import { useStore } from "./store";
 import PreviewCanvas from "./components/PreviewCanvas";
 import { playSfx, sfxEnabled, setSfxEnabled } from "./lib/sfx";
 import ResourceMonitor from "./components/ResourceMonitor";
+import { AgentPanel } from "./components/AgentPanel";
 import { HiggsContextMenu, type HiggsContextMenuState, stripHiggsTags } from "./components/HiggsTagMenu";
 import { useVideoLifecycle, type SeekRequest } from "./hooks/useVideoLifecycle";
 import { decimatePeaks, clampTime, computeFallbackPeaks } from "./lib/timelineUtils";
@@ -809,9 +810,9 @@ function PresetsSection({ onApplied }: { onApplied?: () => void }) {
   );
 }
 
-function SettingsModal({ onClose, initialTab = "models" }: { onClose: () => void; initialTab?: "models" | "components" }) {
+function SettingsModal({ onClose, initialTab = "models" }: { onClose: () => void; initialTab?: "models" | "components" | "mcp" }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<"models" | "components">(initialTab);
+  const [tab, setTab] = useState<"models" | "components" | "mcp">(initialTab);
   const [sfx, setSfx] = useState(sfxEnabled());
   // Пер-стадийный бенчмарк (bench.json + ⏱ в журнале) — ВЫКЛ по умолчанию, состояние на бэке (active.json).
   const [bench, setBench] = useState(false);
@@ -867,6 +868,16 @@ function SettingsModal({ onClose, initialTab = "models" }: { onClose: () => void
                 }`}
               >
                 {t("settings.componentsTab")}
+              </button>
+              <button
+                onClick={() => setTab("mcp")}
+                className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                  tab === "mcp"
+                    ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm"
+                    : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                }`}
+              >
+                {t("settings.mcpTab", "MCP / Агенты")}
               </button>
             </div>
           </div>
@@ -1043,6 +1054,9 @@ function SettingsModal({ onClose, initialTab = "models" }: { onClose: () => void
           </div>
           <div className={tab === "components" ? "block space-y-1" : "hidden"}>
             <FirstRun embedded onClose={onClose} />
+          </div>
+          <div className={tab === "mcp" ? "block space-y-3" : "hidden"}>
+            <AgentPanel />
           </div>
         </div>
       </div>
@@ -1228,12 +1242,36 @@ function StatusBar() {
 function TopBar() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"models" | "components">("models");
+  const [settingsTab, setSettingsTab] = useState<"models" | "components" | "mcp">("models");
+  const [mcpConnected, setMcpConnected] = useState(false);
+
   useEffect(() => {
-    const open = () => { setSettingsTab("components"); setSettings(true); };
-    window.addEventListener("dub-open-components", open);
-    return () => window.removeEventListener("dub-open-components", open);
+    const openComp = () => { setSettingsTab("components"); setSettings(true); };
+    const openMcp = () => { setSettingsTab("mcp"); setSettings(true); };
+    window.addEventListener("dub-open-components", openComp);
+    window.addEventListener("dub-open-mcp", openMcp);
+    return () => {
+      window.removeEventListener("dub-open-components", openComp);
+      window.removeEventListener("dub-open-mcp", openMcp);
+    };
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const base = (import.meta.env.VITE_API as string | undefined) ?? (import.meta.env.DEV ? "http://127.0.0.1:8765" : "");
+    const poll = () => {
+      fetch(`${base}/mcp/status`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((d) => {
+          if (alive && d) setMcpConnected(Boolean(d.agent_connected));
+        })
+        .catch(() => {});
+    };
+    poll();
+    const interval = setInterval(poll, 4000);
+    return () => { alive = false; clearInterval(interval); };
+  }, []);
+
   const [help, setHelp] = useState(false);
   const setStage = useStore((s) => s.setStage);
   const setPid = useStore((s) => s.setPid);
@@ -1293,6 +1331,19 @@ function TopBar() {
           className="inline-flex flex-col items-center justify-center px-3 py-1 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shadow-sm">
           <span className="text-[12px] font-bold flex items-center gap-1"><Plus size={13} /> {t("nav.new")}</span>
           <span className="text-[9px] text-[var(--color-muted)] font-normal leading-none mt-0.5">ручная настройка</span>
+        </button>
+        <button
+          onClick={() => { setSettingsTab("mcp"); setSettings(true); }}
+          title={mcpConnected ? "AI-агент подключён (MCP)" : "Подключить AI-агента (MCP)"}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+            mcpConnected
+              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20"
+              : "text-[var(--color-muted)] border-[var(--color-border)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)]"
+          }`}
+        >
+          <Bot size={15} />
+          {mcpConnected && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
+          <span className="text-[11px]">MCP</span>
         </button>
         <button onClick={() => setHelp(true)} title={t("help.title")}
           className="p-1.5 rounded-md text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><HelpCircle size={18} /></button>
@@ -10658,6 +10709,40 @@ export default function App() {
     if (pid) { api.getProject(pid).then((p) => { setPid(pid); setProject(p); setStage("editor"); }).catch(() => setStage("empty")); return; }
     setStage("empty");
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live auto-sync: automatically update project in editor whenever an AI agent makes MCP changes
+  useEffect(() => {
+    let lastCalls: number | null = null;
+    let alive = true;
+
+    const interval = window.setInterval(async () => {
+      try {
+        const curStage = useStore.getState().stage;
+        const curPid = useStore.getState().pid;
+        if (curStage !== "editor" || !curPid) return;
+
+        const base = (import.meta.env.VITE_API as string | undefined) ?? (import.meta.env.DEV ? "http://127.0.0.1:8765" : "");
+        const res = await fetch(`${base}/mcp/status`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const calls = data.agent_calls as number;
+        if (lastCalls !== null && calls > lastCalls && alive) {
+          const updated = await api.getProject(curPid);
+          if (alive) {
+            useStore.getState().setProject(updated);
+          }
+        }
+        lastCalls = calls;
+      } catch {
+        // ignore offline / transient errors
+      }
+    }, 1500);
+
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
+  }, []);
   return (
     <div className="h-full flex flex-col">
       <TopBar />

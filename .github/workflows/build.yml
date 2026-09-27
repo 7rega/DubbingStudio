@@ -108,7 +108,13 @@ jobs:
           New-Item -ItemType Directory -Force "$portableDir/frontend"
           Copy-Item -Path "frontend/dist" -Destination "$portableDir/frontend/dist" -Recurse -Force
 
-          # 4. Архивируем в ZIP-архив
+          # 4. Копируем tools/mcp (мост для MCP-агентов)
+          if (Test-Path "tools/mcp") {
+              New-Item -ItemType Directory -Force "$portableDir/tools/mcp"
+              Copy-Item -Path "tools/mcp/*" -Destination "$portableDir/tools/mcp" -Recurse -Force
+          }
+
+          # 5. Архивируем в ZIP-архив
           $zipName = "DubStudio-Portable-${{ github.ref_name }}-Windows.zip"
           Compress-Archive -Path "$portableDir" -DestinationPath "$zipName" -Force
 
