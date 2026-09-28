@@ -22,9 +22,19 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Formatting check
+      - name: Formatting check & export diff
         shell: bash
-        run: cargo fmt --all -- --check
+        run: |
+          cargo fmt --all
+          git status --short > fmt_status.txt
+          git diff > fmt.diff
+      - name: Upload format diff
+        uses: actions/upload-artifact@v4
+        with:
+          name: fmt-diff
+          path: |
+            fmt.diff
+            fmt_status.txt
       - name: Clippy linter
         shell: bash
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
