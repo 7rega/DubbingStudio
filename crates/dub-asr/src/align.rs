@@ -92,8 +92,8 @@ impl Biquad {
 /// Полосовая фильтрация вокала (130 Гц – 4000 Гц): убирает низкочастотный гул и высокочастотный шум/шипение.
 fn filter_speech_band(samples: &[f32], sr: u32) -> Vec<f32> {
     let fs = sr as f64;
-    let mut hp = Biquad::highpass(130.0, 0.7071, fs);
-    let mut lp = Biquad::lowpass(4000.0, 0.7071, fs);
+    let mut hp = Biquad::highpass(130.0, std::f64::consts::FRAC_1_SQRT_2, fs);
+    let mut lp = Biquad::lowpass(4000.0, std::f64::consts::FRAC_1_SQRT_2, fs);
     let mut filtered = Vec::with_capacity(samples.len());
     for &s in samples {
         let h = hp.process(s);
@@ -252,7 +252,8 @@ pub fn extract_vocal_spans(samples: &[f32], sr: u32) -> Vec<SpeechSpan> {
             in_span = false;
             let span_end = i;
             // Исключаем вздохи и чистый шум воздуха: ОБЯЗАТЕЛЬНО наличие голосовых гармоник (max_v >= 0.30)
-            let is_genuine_speech = first_core_idx.is_some() && max_v >= 0.30 && max_e > low_thr * 1.3;
+            let is_genuine_speech =
+                first_core_idx.is_some() && max_v >= 0.30 && max_e > low_thr * 1.3;
 
             if is_genuine_speech {
                 let core = first_core_idx.unwrap_or(span_start);
@@ -261,9 +262,11 @@ pub fn extract_vocal_spans(samples: &[f32], sr: u32) -> Vec<SpeechSpan> {
         }
     }
 
-    if in_span && first_core_idx.is_some() && max_v >= 0.30 && max_e > low_thr * 1.3 {
-        let span_end = energies.len();
-        raw_spans.push((span_start, span_end, first_core_idx.unwrap(), max_e, true));
+    if in_span && max_v >= 0.30 && max_e > low_thr * 1.3 {
+        if let Some(core_idx) = first_core_idx {
+            let span_end = energies.len();
+            raw_spans.push((span_start, span_end, core_idx, max_e, true));
+        }
     }
 
     // 5. Преобразование индексов в секунды с отсечением предвдоха

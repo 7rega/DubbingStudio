@@ -7,7 +7,7 @@ impl Envelope {
     }
     /// Max RMS over [a,b] seconds (frame time = i*0.005+0.005). Empty range -> 0.
     pub fn max_rms(&self,a:f64,b:f64)->f64 {
-        if !(b>a) {return 0.0;}
+        if b <= a {return 0.0;}
         let i0=(((a-0.005)/0.005).ceil().max(0.0)) as usize;
         let mut m=0.0f64;
         for i in i0..self.rms.len() {
@@ -130,6 +130,7 @@ mod tests {
         assert!(env.expand(&word,false,0.0,2.0)>1.1);
     }
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn sustained_shout_tail_is_not_cropped() {
         // Burst 0.50-0.90, decaying tail 0.90-1.00, short dip, then a loud sustained
         // shout 1.05-1.60 fading out: variant B must bridge the dip and keep the
