@@ -22,41 +22,24 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Formatting check & export diff
+      - name: Formatting check dub-asr
         shell: bash
         run: |
-          cargo fmt --all > fmt_output.txt 2>&1 || true
-          git status --short > fmt_status.txt
-          git diff > fmt.diff
-      - name: Upload format diff
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fmt-diff
-          path: |
-            fmt_output.txt
-            fmt.diff
-            fmt_status.txt
-      - name: Clippy linter
+          cargo fmt -p dub-asr -- --check
+      - name: Clippy dub-asr
         shell: bash
         run: |
-          cargo clippy --workspace --all-targets --locked -- -D warnings > clippy.log 2>&1 || true
+          cargo clippy -p dub-asr --all-targets --locked -- -D warnings
+      - name: Workspace Clippy diagnostics
+        shell: bash
+        run: |
+          cargo clippy --workspace --all-targets --locked 2>&1 | head -n 40 || true
       - name: Tests & Property tests
         env:
           PROPTEST_CASES: 256
         shell: bash
         run: |
-          cargo test --workspace --locked > test.log 2>&1 || true
-      - name: Upload diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: diagnostics
-          path: |
-            clippy.log
-            test.log
-            fmt_output.txt
-            fmt_status.txt
+          cargo test --workspace --locked
 
   generate-lockfile:
     if: github.event_name == 'workflow_dispatch'
