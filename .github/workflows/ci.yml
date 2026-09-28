@@ -22,22 +22,17 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Formatting check & diagnostic
+      - name: Formatting check
         shell: bash
-        run: |
-          cargo fmt --all 2>&1 | while IFS= read -r line; do echo "::warning title=rustfmt::$line"; done || true
-          git status --short 2>&1 | while IFS= read -r line; do echo "::notice title=git-status::$line"; done
-          git diff --stat 2>&1 | while IFS= read -r line; do echo "::notice title=git-diff::$line"; done
+        run: cargo fmt --all -- --check
       - name: Clippy linter
         shell: bash
-        run: |
-          cargo clippy --workspace --all-targets --locked -- -D warnings 2>&1 | while IFS= read -r line; do echo "::warning title=clippy::$line"; done || true
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests & Property tests
         env:
           PROPTEST_CASES: 256
         shell: bash
-        run: |
-          cargo test --workspace --locked 2>&1 | while IFS= read -r line; do echo "::notice title=test::$line"; done || true
+        run: cargo test --workspace --locked
 
   generate-lockfile:
     if: github.event_name == 'workflow_dispatch'
