@@ -36,9 +36,12 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo clippy -p dub-asr --all-targets --locked -- -D warnings 2>&1 | while IFS= read -r line; do
-            echo "::error file=.github/workflows/ci.yml,line=25,title=clippy::$line"
-          done
+          cargo clippy -p dub-asr --all-targets --locked -- -D warnings 2>&1 | tee clippy.log || {
+            cat clippy.log | grep -E "(error|warning):" | head -n 10 | while IFS= read -r line; do
+              echo "::error file=.github/workflows/ci.yml,line=25,title=clippy::$line"
+            done
+            exit 1
+          }
       - name: Tests & Property tests
         env:
           PROPTEST_CASES: 256
