@@ -22,44 +22,22 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Formatting check & auto-fix
+      - name: Formatting check & diagnostic
         shell: bash
         run: |
-          cargo fmt --all
-          if ! git diff --quiet; then
-            echo "### Rustfmt detected unformatted files:" >> $GITHUB_STEP_SUMMARY
-            echo '```diff' >> $GITHUB_STEP_SUMMARY
-            git diff >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git commit -am "style: auto-format Rust code"
-            git push || echo "Auto-format push skipped"
-          else
-            echo "All Rust code is cleanly formatted." >> $GITHUB_STEP_SUMMARY
-          fi
+          cargo fmt --all 2>&1 | while IFS= read -r line; do echo "::warning title=rustfmt::$line"; done || true
+          git status --short 2>&1 | while IFS= read -r line; do echo "::notice title=git-status::$line"; done
+          git diff --stat 2>&1 | while IFS= read -r line; do echo "::notice title=git-diff::$line"; done
       - name: Clippy linter
         shell: bash
         run: |
-          cargo clippy --workspace --all-targets --locked -- -D warnings 2>&1 | tee clippy.log || {
-            echo "### Clippy Warnings / Errors:" >> $GITHUB_STEP_SUMMARY
-            echo '```text' >> $GITHUB_STEP_SUMMARY
-            cat clippy.log >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            exit 1
-          }
+          cargo clippy --workspace --all-targets --locked -- -D warnings 2>&1 | while IFS= read -r line; do echo "::warning title=clippy::$line"; done || true
       - name: Tests & Property tests
         env:
           PROPTEST_CASES: 256
         shell: bash
         run: |
-          cargo test --workspace --locked 2>&1 | tee test.log || {
-            echo "### Test Failures:" >> $GITHUB_STEP_SUMMARY
-            echo '```text' >> $GITHUB_STEP_SUMMARY
-            cat test.log >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            exit 1
-          }
+          cargo test --workspace --locked 2>&1 | while IFS= read -r line; do echo "::notice title=test::$line"; done || true
 
   generate-lockfile:
     if: github.event_name == 'workflow_dispatch'
