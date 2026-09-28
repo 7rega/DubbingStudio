@@ -3,17 +3,55 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: [main, Dev]
+    branches: [main, Dev, 'feat/**']
   pull_request:
+  schedule:
+    # Еженедельный глубокий фаззинг (проптесты на 10 000 итераций)
+    - cron: '0 2 * * 0'
 
 jobs:
-  rust:
+  rust-check:
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --locked
+      - name: Formatting check
+        run: cargo fmt --all -- --check
+      - name: Clippy linter
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests & Property tests
+        env:
+          PROPTEST_CASES: 256
+        run: cargo test --workspace --locked
+
+  generate-lockfile:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Check workspace and create minimal lockfile
+        run: cargo check --workspace --all-targets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cargo.lock
+          path: Cargo.lock
+
+  weekly-proptest:
+    if: github.event_name == 'schedule'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Deep property tests (10 000 iterations)
+        env:
+          PROPTEST_CASES: 10000
+        run: cargo test -p dub-asr --test property_tests --locked -- --nocapture
 
   frontend:
     runs-on: ubuntu-latest
