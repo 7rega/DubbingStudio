@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref_name }}
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -34,11 +34,7 @@ jobs:
           fi
       - name: Clippy dub-asr
         shell: bash
-        run: |
-          cargo clippy -p dub-asr --all-targets --locked -- -D warnings 2>&1 | while IFS= read -r line; do
-            echo "::error file=.github/workflows/ci.yml,line=25,title=clippy::$line"
-          done
-          cargo clippy -p dub-asr --all-targets --locked -- -D warnings
+        run: cargo clippy -p dub-asr --all-targets --locked -- -D warnings
       - name: Tests & Property tests
         env:
           PROPTEST_CASES: 256
@@ -50,7 +46,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@stable
       - name: Check workspace and create minimal lockfile
         run: cargo check --workspace --all-targets
       - uses: actions/upload-artifact@v4
@@ -63,7 +59,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Deep property tests (10 000 iterations)
         env:
