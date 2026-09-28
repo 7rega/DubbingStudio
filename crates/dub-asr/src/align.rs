@@ -252,7 +252,8 @@ pub fn extract_vocal_spans(samples: &[f32], sr: u32) -> Vec<SpeechSpan> {
             in_span = false;
             let span_end = i;
             // Исключаем вздохи и чистый шум воздуха: ОБЯЗАТЕЛЬНО наличие голосовых гармоник (max_v >= 0.30)
-            let is_genuine_speech = first_core_idx.is_some() && max_v >= 0.30 && max_e > low_thr * 1.3;
+            let is_genuine_speech =
+                first_core_idx.is_some() && max_v >= 0.30 && max_e > low_thr * 1.3;
 
             if is_genuine_speech {
                 let core = first_core_idx.unwrap_or(span_start);
