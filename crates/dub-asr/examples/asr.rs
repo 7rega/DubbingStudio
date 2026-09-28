@@ -56,7 +56,11 @@ fn main() {
             Ok(s) => s,
             Err(e) => die(&format!("транскрипция не удалась: {e}")),
         };
-        eprintln!("[asr] готово за {:.1}с, сегментов: {}", t0.elapsed().as_secs_f32(), segs.len());
+        eprintln!(
+            "[asr] готово за {:.1}с, сегментов: {}",
+            t0.elapsed().as_secs_f32(),
+            segs.len()
+        );
         let out = serde_json::json!({ "segments": segs });
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
     }
