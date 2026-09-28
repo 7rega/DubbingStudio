@@ -25,14 +25,16 @@ jobs:
       - name: Formatting check & export diff
         shell: bash
         run: |
-          cargo fmt --all
+          cargo fmt --all > fmt_output.txt 2>&1 || true
           git status --short > fmt_status.txt
           git diff > fmt.diff
       - name: Upload format diff
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fmt-diff
           path: |
+            fmt_output.txt
             fmt.diff
             fmt_status.txt
       - name: Clippy linter
