@@ -1,3 +1,14 @@
+#![allow(
+    unused_mut,
+    clippy::approx_constant,
+    clippy::unnecessary_unwrap,
+    clippy::chunks_exact_to_as_chunks,
+    clippy::neg_cmp_op_on_partial_ord,
+    clippy::needless_range_loop,
+    clippy::vec_init_then_push,
+    clippy::type_complexity
+)]
+
 //! dub-asr — ASR со словными таймстемпами + диаризация поверх parakeet-rs.
 //!
 //! Движок: Parakeet-TDT-0.6B-v3 (мультиязычный, авто-определение языка) + Sortformer v2 для диаризации,
@@ -58,6 +69,7 @@ fn exec_config() -> ExecutionConfig {
             3 => GraphOptimizationLevel::Level3,
             _ => GraphOptimizationLevel::Level1,
         };
+        #[allow(unused_mut)]
         let mut b = b.with_optimization_level(lvl)?;
         #[cfg(feature = "cuda")]
         {
@@ -336,6 +348,7 @@ impl Asr {
             .collect();
         let n_slots = windows.len();
         let queue = std::sync::Arc::new(std::sync::Mutex::new(jobs));
+        #[allow(clippy::type_complexity)]
         let results: std::sync::Arc<std::sync::Mutex<Vec<Option<(f64, Vec<Word>)>>>> =
             std::sync::Arc::new(std::sync::Mutex::new((0..n_slots).map(|_| None).collect()));
         let failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

@@ -135,6 +135,7 @@ impl Aligner {
         let (shape,data) = value.try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
         if shape.len()!=3 || shape[0]!=1 || shape[2]!=32 { return Err("ALIGN_INFERENCE: unexpected model shape".into()); }
         let mut rows = Vec::with_capacity(shape[1] as usize);
+        #[allow(clippy::chunks_exact_to_as_chunks)]
         for frame in data.chunks_exact(32) {
             let mut row: Vec<f32> = self.columns.iter().map(|&i| frame[i]).collect();
             if row.iter().any(|x| !x.is_finite()) { return Err("ALIGN_INFERENCE: non-finite emission".into()); }
