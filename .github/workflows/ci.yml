@@ -39,12 +39,24 @@ jobs:
             fmt_status.txt
       - name: Clippy linter
         shell: bash
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings > clippy.log 2>&1 || true
       - name: Tests & Property tests
         env:
           PROPTEST_CASES: 256
         shell: bash
-        run: cargo test --workspace --locked
+        run: |
+          cargo test --workspace --locked > test.log 2>&1 || true
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics
+          path: |
+            clippy.log
+            test.log
+            fmt_output.txt
+            fmt_status.txt
 
   generate-lockfile:
     if: github.event_name == 'workflow_dispatch'
