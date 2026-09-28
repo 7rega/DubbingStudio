@@ -35,8 +35,8 @@ fn main() {
     let mut asr = Asr::new(&tdt);
 
     if do_diarize {
-        let sf = sortformer
-            .unwrap_or_else(|| die("--diarize требует --sortformer <sortformer.onnx>"));
+        let sf =
+            sortformer.unwrap_or_else(|| die("--diarize требует --sortformer <sortformer.onnx>"));
         eprintln!("диаризация: {sf}");
         let turns = match diarize(&wav, &sf) {
             Ok(t) => t,

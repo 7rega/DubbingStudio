@@ -25,19 +25,17 @@ jobs:
       - name: Formatting check dub-asr
         shell: bash
         run: |
+          set -o pipefail
           cargo fmt -p dub-asr -- --check 2>&1 | while IFS= read -r line; do
             echo "::error file=.github/workflows/ci.yml,line=25,title=fmt::$line"
           done
       - name: Clippy dub-asr
         shell: bash
         run: |
+          set -o pipefail
           cargo clippy -p dub-asr --all-targets --locked -- -D warnings 2>&1 | while IFS= read -r line; do
             echo "::error file=.github/workflows/ci.yml,line=30,title=clippy::$line"
           done
-      - name: Workspace Clippy diagnostics
-        shell: bash
-        run: |
-          cargo clippy --workspace --all-targets --locked 2>&1 | head -n 40 || true
       - name: Tests & Property tests
         env:
           PROPTEST_CASES: 256
