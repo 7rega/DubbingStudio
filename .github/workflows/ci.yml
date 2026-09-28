@@ -25,11 +25,15 @@ jobs:
       - name: Formatting check dub-asr
         shell: bash
         run: |
-          cargo fmt -p dub-asr -- --check
+          cargo fmt -p dub-asr -- --check 2>&1 | while IFS= read -r line; do
+            echo "::error file=.github/workflows/ci.yml,line=25,title=fmt::$line"
+          done
       - name: Clippy dub-asr
         shell: bash
         run: |
-          cargo clippy -p dub-asr --all-targets --locked -- -D warnings
+          cargo clippy -p dub-asr --all-targets --locked -- -D warnings 2>&1 | while IFS= read -r line; do
+            echo "::error file=.github/workflows/ci.yml,line=30,title=clippy::$line"
+          done
       - name: Workspace Clippy diagnostics
         shell: bash
         run: |
