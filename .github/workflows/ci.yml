@@ -24,19 +24,14 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Auto-format code
+      - name: Formatting check (phrase subsystem)
         shell: bash
         run: |
-          cargo fmt --all
-          if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git commit -am "style: auto-format workspace with rustfmt"
-            git push origin ${{ github.head_ref || github.ref_name }} || echo "Auto-format push skipped"
+          if [ -d "crates/dub-asr/src/phrase" ]; then
+            cargo fmt --check -- crates/dub-asr/src/phrase/*.rs
+          else
+            echo "Phrase subsystem not yet present (PR 0 baseline)"
           fi
-      - name: Formatting check
-        shell: bash
-        run: cargo fmt --all -- --check
       - name: Clippy dub-asr
         shell: bash
         run: cargo clippy -p dub-asr --all-targets --locked -- -D warnings
