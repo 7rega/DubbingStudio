@@ -36,3 +36,10 @@ path = "examples/asr.rs"
 [[example]]
 name = "phrase_dump"
 path = "examples/phrase_dump.rs"
+
+[dev-dependencies]
+proptest = "1"
+
+[[test]]
+name = "property_tests"
+path = "tests/property_tests.rs"
