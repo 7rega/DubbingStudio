@@ -1,5 +1,14 @@
-use crate::phrase::time::Seconds;
+use crate::phrase::{config::ConfigError, time::Seconds};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Error, Debug, Clone, PartialEq)]
+pub enum SegmentationError {
+    #[error("невалидная конфигурация сегментации: {0}")]
+    Config(#[from] ConfigError),
+    #[error("невалидные временные метки (NaN/Inf/отрицательные): {0}")]
+    InvalidTimestamps(String),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SegmentationReason {
@@ -216,6 +225,31 @@ pub struct Utterance {
     pub boundary_candidates: Vec<BoundaryCandidate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dp_cost_breakdown: Option<DpCostBreakdown>,
+}
+
+impl Utterance {
+    pub fn to_extra_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "source_language": self.source_language,
+            "segmentation": {
+                "reason": self.segmentation.reason,
+                "confidence": self.segmentation.confidence,
+                "is_oversize": self.segmentation.is_oversize,
+                "is_soft_max_exceeded": self.segmentation.is_soft_max_exceeded,
+            },
+            "internal_pauses": self.internal_pauses,
+            "is_overlap": self.overlap,
+            "context_group_id": self.context_group_id,
+            "continues_from": self.continues_from,
+            "speaker_turn_id": self.speaker_turn_id,
+            "boundary_candidates": self.boundary_candidates,
+            "words": self.units.iter().map(|u| serde_json::json!({
+                "word": u.text,
+                "start": u.start.as_f64(),
+                "end": u.end.as_f64(),
+            })).collect::<Vec<_>>(),
+        })
+    }
 }
 
 #[cfg(test)]
