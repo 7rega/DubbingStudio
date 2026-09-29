@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           if [ -d "crates/dub-asr/src/phrase" ]; then
-            cargo fmt --check -- crates/dub-asr/src/phrase/*.rs
+            rustfmt --check crates/dub-asr/src/phrase/*.rs
           else
             echo "Phrase subsystem not yet present (PR 0 baseline)"
           fi

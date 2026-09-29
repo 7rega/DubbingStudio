@@ -110,7 +110,10 @@ impl SegmentationConfig {
         check_finite_non_neg(self.dp_segment_penalty, "dp_segment_penalty")?;
         check_finite_non_neg(self.dp_weight_ideal_dev, "dp_weight_ideal_dev")?;
         check_finite_non_neg(self.dp_weight_short_penalty, "dp_weight_short_penalty")?;
-        check_finite_non_neg(self.dp_weight_soft_max_penalty, "dp_weight_soft_max_penalty")?;
+        check_finite_non_neg(
+            self.dp_weight_soft_max_penalty,
+            "dp_weight_soft_max_penalty",
+        )?;
         check_finite_non_neg(self.dp_weight_hard_max_slope, "dp_weight_hard_max_slope")?;
         check_finite_non_neg(self.dp_weight_boundary_reward, "dp_weight_boundary_reward")?;
 
