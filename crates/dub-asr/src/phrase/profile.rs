@@ -1,8 +1,4 @@
-use crate::phrase::{
-    config::SegmentationConfig,
-    time::Seconds,
-    types::TextUnit,
-};
+use crate::phrase::{config::SegmentationConfig, time::Seconds, types::TextUnit};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -26,10 +22,7 @@ pub fn normalize_language_tag(lang: Option<&str>) -> Option<String> {
 /// 1. Пользовательский оверрайд (из config.language)
 /// 2. Детектированный ASR язык (asr.language)
 /// 3. Fallback "und" (DefaultProfile)
-pub fn resolve_source_language(
-    user_override: Option<&str>,
-    asr_detected: Option<&str>,
-) -> String {
+pub fn resolve_source_language(user_override: Option<&str>, asr_detected: Option<&str>) -> String {
     normalize_language_tag(user_override)
         .or_else(|| normalize_language_tag(asr_detected))
         .unwrap_or_else(|| "und".to_string())
@@ -63,10 +56,8 @@ pub fn is_cjk_punct(c: char) -> bool {
 
 /// Очистка текста от пунктуации и пробелов с приведением к нижнему регистру.
 pub fn clean_word(text: &str) -> String {
-    text.trim_matches(|c: char| {
-        c.is_ascii_punctuation() || c.is_whitespace() || is_cjk_punct(c)
-    })
-    .to_lowercase()
+    text.trim_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace() || is_cjk_punct(c))
+        .to_lowercase()
 }
 
 /// Проверка завершения строки терминальной пунктуацией (с учётом кавычек и скобок).
@@ -300,12 +291,11 @@ impl LanguageProfile for RussianProfile {
             0.0
         };
 
-        let backward_penalty =
-            if Self::is_backward_binding(&next_clean) && gap.as_f64() < 0.30 {
-                -1.5
-            } else {
-                0.0
-            };
+        let backward_penalty = if Self::is_backward_binding(&next_clean) && gap.as_f64() < 0.30 {
+            -1.5
+        } else {
+            0.0
+        };
 
         (forward_penalty + backward_penalty).max(-1.5)
     }
@@ -468,12 +458,11 @@ impl LanguageProfile for EnglishProfile {
             0.0
         };
 
-        let backward_penalty =
-            if Self::is_backward_binding(&next_clean) && gap.as_f64() < 0.30 {
-                -1.5
-            } else {
-                0.0
-            };
+        let backward_penalty = if Self::is_backward_binding(&next_clean) && gap.as_f64() < 0.30 {
+            -1.5
+        } else {
+            0.0
+        };
 
         (forward_penalty + backward_penalty).max(-1.5)
     }
@@ -740,16 +729,7 @@ impl LanguageProfile for DefaultProfile {
         let first_word = clean_word(trimmed.split_whitespace().next().unwrap_or(trimmed));
         matches!(
             first_word.as_str(),
-            "and"
-                | "but"
-                | "or"
-                | "so"
-                | "because"
-                | "that"
-                | "which"
-                | "if"
-                | "when"
-                | "while"
+            "and" | "but" | "or" | "so" | "because" | "that" | "which" | "if" | "when" | "while"
         )
     }
 
@@ -807,13 +787,28 @@ mod tests {
 
     #[test]
     fn test_normalize_language_tag() {
-        assert_eq!(normalize_language_tag(Some("ru-RU")), Some("ru".to_string()));
-        assert_eq!(normalize_language_tag(Some("ru_RU")), Some("ru".to_string()));
+        assert_eq!(
+            normalize_language_tag(Some("ru-RU")),
+            Some("ru".to_string())
+        );
+        assert_eq!(
+            normalize_language_tag(Some("ru_RU")),
+            Some("ru".to_string())
+        );
         assert_eq!(normalize_language_tag(Some("RU")), Some("ru".to_string()));
-        assert_eq!(normalize_language_tag(Some("en-US")), Some("en".to_string()));
+        assert_eq!(
+            normalize_language_tag(Some("en-US")),
+            Some("en".to_string())
+        );
         assert_eq!(normalize_language_tag(Some("JA")), Some("ja".to_string()));
-        assert_eq!(normalize_language_tag(Some("zh-CN")), Some("zh".to_string()));
-        assert_eq!(normalize_language_tag(Some("ko-KR")), Some("ko".to_string()));
+        assert_eq!(
+            normalize_language_tag(Some("zh-CN")),
+            Some("zh".to_string())
+        );
+        assert_eq!(
+            normalize_language_tag(Some("ko-KR")),
+            Some("ko".to_string())
+        );
         assert_eq!(normalize_language_tag(Some("auto")), None);
         assert_eq!(normalize_language_tag(Some("  ")), None);
         assert_eq!(normalize_language_tag(None), None);
@@ -822,10 +817,7 @@ mod tests {
     #[test]
     fn test_source_language_resolution_priority() {
         // config (Some) > asr (Some) > fallback "und"
-        assert_eq!(
-            resolve_source_language(Some("ru-RU"), Some("en-US")),
-            "ru"
-        );
+        assert_eq!(resolve_source_language(Some("ru-RU"), Some("en-US")), "ru");
         assert_eq!(resolve_source_language(None, Some("EN")), "en");
         assert_eq!(resolve_source_language(Some("auto"), Some("ja")), "ja");
         assert_eq!(resolve_source_language(None, None), "und");
@@ -854,10 +846,7 @@ mod tests {
         assert!(!ja.uses_whitespace_join());
 
         let zh = ChineseProfile;
-        assert_eq!(
-            zh.join_units(&["这", "是", "测试"]),
-            "这是测试"
-        );
+        assert_eq!(zh.join_units(&["这", "是", "测试"]), "这是测试");
         assert!(!zh.uses_whitespace_join());
 
         let ru = RussianProfile;
@@ -865,11 +854,17 @@ mod tests {
         assert!(ru.uses_whitespace_join());
 
         let en = EnglishProfile;
-        assert_eq!(en.join_units(&["This", "is", "a", "test"]), "This is a test");
+        assert_eq!(
+            en.join_units(&["This", "is", "a", "test"]),
+            "This is a test"
+        );
         assert!(en.uses_whitespace_join());
 
         let ko = KoreanProfile;
-        assert_eq!(ko.join_units(&["이것은", "테스트입니다"]), "이것은 테스트입니다");
+        assert_eq!(
+            ko.join_units(&["이것은", "테스트입니다"]),
+            "이것은 테스트입니다"
+        );
         assert!(ko.uses_whitespace_join());
     }
 
