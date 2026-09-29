@@ -309,7 +309,10 @@ mod tests {
         assert!(!utterances[0].segmentation.is_oversize);
         assert!(!utterances[0].segmentation.is_soft_max_exceeded);
         // Ручной расчёт DP: D=2.90, penalty=0.5*|2.9-4.0|=0.55 => Cost = 2.5 + 0.55 = 3.05
-        assert_approx_eq!(utterances[0].dp_cost_breakdown.unwrap().total_cost, 3.05);
+        assert_approx_eq!(
+            utterances[0].dp_cost_breakdown.as_ref().unwrap().total_cost,
+            3.05
+        );
 
         // Реплика 2
         assert_eq!(utterances[1].id, "utt_002");
@@ -324,7 +327,10 @@ mod tests {
         assert!(!utterances[1].segmentation.is_oversize);
         assert!(!utterances[1].segmentation.is_soft_max_exceeded);
         // Ручной расчёт DP: D=0.40, penalty=0.5*|0.4-4.0|=1.80 => Cost = 2.5 + 1.80 = 4.30
-        assert_approx_eq!(utterances[1].dp_cost_breakdown.unwrap().total_cost, 4.30);
+        assert_approx_eq!(
+            utterances[1].dp_cost_breakdown.as_ref().unwrap().total_cost,
+            4.30
+        );
 
         // Реплика 3
         assert_eq!(utterances[2].id, "utt_003");
@@ -339,7 +345,10 @@ mod tests {
         assert!(!utterances[2].segmentation.is_oversize);
         assert!(!utterances[2].segmentation.is_soft_max_exceeded);
         // Ручной расчёт DP: D=1.70, penalty=0.5*|1.7-4.0|=1.15 => Cost = 2.5 + 1.15 = 3.65
-        assert_approx_eq!(utterances[2].dp_cost_breakdown.unwrap().total_cost, 3.65);
+        assert_approx_eq!(
+            utterances[2].dp_cost_breakdown.as_ref().unwrap().total_cost,
+            3.65
+        );
 
         // Проверка инварианта связывания бэкчанела:
         // Первая реплика завершается точкой («мы уезжаем.»),

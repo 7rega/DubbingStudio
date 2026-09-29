@@ -232,8 +232,8 @@ pub fn finalize_utterances(
     // 1. Каноническая сортировка по таймкодам
     utterances.sort_by(|a, b| {
         a.start
-            .total_cmp(&b.start)
-            .then_with(|| a.end.total_cmp(&b.end))
+            .total_cmp(b.start)
+            .then_with(|| a.end.total_cmp(b.end))
     });
 
     // 2. Детерминированное присвоение сквозных ID
@@ -262,10 +262,12 @@ mod tests {
     use crate::phrase::{
         profile::{DefaultProfile, JapaneseProfile, RussianProfile},
         test_utils::make_aligned_unit,
-        types::{AmbiguityStatus, DpCostBreakdown, SegmentationReason},
+        types::{DpCostBreakdown, SegmentationReason},
     };
 
     fn make_test_utterance(id: &str, speaker: &str, start: f64, end: f64, text: &str) -> Utterance {
+        let mut u = make_aligned_unit(text, start, end, true);
+        u.speaker = speaker.to_string();
         Utterance {
             id: id.to_string(),
             speaker: speaker.to_string(),
@@ -276,7 +278,7 @@ mod tests {
             start: Seconds(start),
             end: Seconds(end),
             text: text.to_string(),
-            units: vec![make_aligned_unit(text, start, end, speaker)],
+            units: vec![u],
             internal_pauses: Vec::new(),
             segmentation: SegmentationMeta {
                 reason: SegmentationReason::PunctuationPause,
@@ -446,9 +448,11 @@ mod tests {
         let profile = RussianProfile;
         let cfg = SegmentationConfig::default();
 
-        let u0 = make_aligned_unit("Слово", 1.0, 1.5, "S0");
+        let mut u0 = make_aligned_unit("Слово", 1.0, 1.5, true);
+        u0.speaker = "S0".to_string();
         // пауза 0.3с >= min_internal_pause (0.1с)
-        let u1 = make_aligned_unit("пауза", 1.8, 2.3, "S0");
+        let mut u1 = make_aligned_unit("пауза", 1.8, 2.3, true);
+        u1.speaker = "S0".to_string();
 
         let turn = SpeakerTurn {
             id: "turn_001".to_string(),

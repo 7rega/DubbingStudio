@@ -198,7 +198,7 @@ pub struct BoundaryCandidate {
     pub can_split_after: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct DpCostBreakdown {
     pub segment_penalty: f64,
     pub length_penalty: f64,
