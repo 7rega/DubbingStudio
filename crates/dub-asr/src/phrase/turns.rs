@@ -47,11 +47,7 @@ pub fn build_speaker_turns(
 
     // Сохраняем последний ход
     if !current_units.is_empty() {
-        turns.push(create_turn(
-            turn_counter,
-            current_speaker,
-            current_units,
-        ));
+        turns.push(create_turn(turn_counter, current_speaker, current_units));
     }
 
     // Детекция наложений речи
@@ -61,15 +57,8 @@ pub fn build_speaker_turns(
 }
 
 /// Вспомогательное создание объекта `SpeakerTurn` из накопленных юнитов.
-fn create_turn(
-    index: usize,
-    speaker: String,
-    units: Vec<AlignedUnit>,
-) -> SpeakerTurn {
-    let start = units
-        .first()
-        .map(|u| u.start)
-        .unwrap_or(Seconds::ZERO);
+fn create_turn(index: usize, speaker: String, units: Vec<AlignedUnit>) -> SpeakerTurn {
+    let start = units.first().map(|u| u.start).unwrap_or(Seconds::ZERO);
     let end = units
         .iter()
         .map(|u| u.end)
@@ -93,10 +82,7 @@ fn create_turn(
 /// 1. Хотя бы один юнит хода имеет статус `MultipleSpeakersOverlap` или `alternative_speaker`.
 /// 2. Внешний интервал диаризации другого диктора перекрывает временной отрезок хода.
 /// 3. Два хода разных дикторов акустически пересекаются во времени.
-pub fn detect_overlaps(
-    turns: &mut [SpeakerTurn],
-    diarization: Option<&DiarizationResult>,
-) {
+pub fn detect_overlaps(turns: &mut [SpeakerTurn], diarization: Option<&DiarizationResult>) {
     if turns.is_empty() {
         return;
     }
