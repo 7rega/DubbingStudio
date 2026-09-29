@@ -8,6 +8,7 @@ pub mod aligner;
 pub mod config;
 pub mod profile;
 pub mod time;
+pub mod turns;
 pub mod types;
 
 pub use aligner::{align_and_smooth, align_units, smooth_aligned_units};
@@ -18,4 +19,5 @@ pub use profile::{
     RussianProfile,
 };
 pub use time::{Millis, Seconds};
+pub use turns::{build_speaker_turns, detect_overlaps};
 pub use types::*;
