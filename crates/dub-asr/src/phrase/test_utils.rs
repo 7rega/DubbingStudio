@@ -75,10 +75,7 @@ pub fn make_aligned_unit(text: &str, start: f64, end: f64, can_split_after: bool
 /// Создание `SpeakerTurn` из списка юнитов для тестов.
 pub fn make_turn(units: Vec<AlignedUnit>) -> SpeakerTurn {
     let start = units.first().map(|u| u.start).unwrap_or(Seconds::ZERO);
-    let end = units
-        .iter()
-        .map(|u| u.end)
-        .fold(start, |acc, e| acc.max(e));
+    let end = units.iter().map(|u| u.end).fold(start, |acc, e| acc.max(e));
     SpeakerTurn {
         id: "turn_001".to_string(),
         speaker: "SPEAKER_00".to_string(),
