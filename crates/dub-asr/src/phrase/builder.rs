@@ -492,7 +492,7 @@ mod tests {
         assert_eq!(utt.end, Seconds(2.3));
         assert_eq!(utt.internal_pauses.len(), 1);
         assert_eq!(utt.internal_pauses[0].after_unit_index, 0);
-        assert_eq!(utt.internal_pauses[0].duration, Seconds(0.3));
+        assert!((utt.internal_pauses[0].duration.0 - 0.3).abs() < 1e-6);
         assert_eq!(utt.boundary_candidates.len(), 1);
         assert_eq!(utt.boundary_candidates[0].after_unit_index, 0);
     }
