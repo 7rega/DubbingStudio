@@ -1,0 +1,23 @@
+{
+  "language": "ru",
+  "units": [
+    { "text": "Я", "start": 10.10, "end": 10.25, "can_split_after": true },
+    { "text": "хотел", "start": 10.27, "end": 10.60, "can_split_after": true },
+    { "text": "тебе", "start": 10.62, "end": 10.85, "can_split_after": true },
+    { "text": "сказать,", "start": 10.88, "end": 11.40, "can_split_after": true },
+    { "text": "что", "start": 11.45, "end": 11.65, "can_split_after": true },
+    { "text": "завтра", "start": 11.68, "end": 12.10, "can_split_after": true },
+    { "text": "мы", "start": 12.12, "end": 12.30, "can_split_after": true },
+    { "text": "уезжаем.", "start": 12.33, "end": 13.00, "is_whisper_boundary": true, "can_split_after": true },
+    { "text": "Ага.", "start": 14.00, "end": 14.40, "is_whisper_boundary": true, "can_split_after": true },
+    { "text": "И", "start": 15.20, "end": 15.35, "can_split_after": true },
+    { "text": "вернёмся", "start": 15.38, "end": 16.00, "can_split_after": true },
+    { "text": "через", "start": 16.03, "end": 16.35, "can_split_after": true },
+    { "text": "неделю.", "start": 16.38, "end": 16.90, "is_whisper_boundary": true, "can_split_after": true }
+  ],
+  "diarization": [
+    { "speaker": "SPEAKER_00", "start": 10.00, "end": 13.20 },
+    { "speaker": "SPEAKER_01", "start": 13.90, "end": 14.60 },
+    { "speaker": "SPEAKER_00", "start": 15.10, "end": 17.00 }
+  ]
+}

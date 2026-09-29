@@ -2,6 +2,23 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      fixtures_dir:
+        description: 'Directory with input JSON files'
+        required: false
+        default: 'fixtures'
+      input_artifact:
+        description: 'Artifact name containing JSON files to evaluate (optional)'
+        required: false
+        default: ''
+      task:
+        description: 'Task: eval (default) or lockfile'
+        required: false
+        default: 'eval'
+      extra_args:
+        description: 'Additional flags for phrase_dump (e.g. --lambda 3.0)'
+        required: false
+        default: ''
   push:
     branches: [main, Dev, 'feat/**']
   pull_request:
@@ -44,7 +61,7 @@ jobs:
         run: cargo test --workspace --locked
 
   generate-lockfile:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.task == 'lockfile'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +72,50 @@ jobs:
         with:
           name: Cargo.lock
           path: Cargo.lock
+
+  evaluate-phrases:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.task != 'lockfile'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Download input artifact if specified
+        if: ${{ github.event.inputs.input_artifact != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.inputs.input_artifact }}
+          path: ${{ github.event.inputs.fixtures_dir }}
+      - name: Run phrase evaluation
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path eval_results
+          $dir = "${{ github.event.inputs.fixtures_dir }}"
+          if (!(Test-Path $dir)) {
+            Write-Host "Directory '$dir' does not exist, creating..."
+            New-Item -ItemType Directory -Force -Path $dir
+          }
+          $files = Get-ChildItem -Path $dir -Filter "*.json" -Recurse
+          if ($files.Count -eq 0) {
+            Write-Host "No JSON files found in $dir."
+            exit 1
+          }
+          foreach ($file in $files) {
+            $stem = [System.IO.Path]::GetFileNameWithoutExtension($file.FullName)
+            $outPath = Join-Path "eval_results" "$($stem)_eval.txt"
+            Write-Host "=== Evaluating $($file.FullName) -> $outPath ==="
+            $extra = "${{ github.event.inputs.extra_args }}"
+            if ($extra -ne "") {
+              cargo run -p dub-asr --example phrase_dump -- --input "$($file.FullName)" $extra.Split(' ') | Tee-Object -FilePath $outPath
+            } else {
+              cargo run -p dub-asr --example phrase_dump -- --input "$($file.FullName)" | Tee-Object -FilePath $outPath
+            }
+          }
+      - name: Upload evaluation results
+        uses: actions/upload-artifact@v4
+        with:
+          name: phrase-eval-results
+          path: eval_results/
 
   weekly-proptest:
     if: github.event_name == 'schedule'
