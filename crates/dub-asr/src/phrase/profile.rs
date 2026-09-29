@@ -1,5 +1,4 @@
 use crate::phrase::{config::SegmentationConfig, time::Seconds, types::TextUnit};
-use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Нормализация тега языка по BCP-47.
@@ -286,15 +285,15 @@ impl LanguageProfile for RussianProfile {
         let next_clean = clean_word(next.text());
 
         let forward_penalty = if Self::is_forward_binding(&cur_clean) {
-            -1.5
+            -1.5f64
         } else {
-            0.0
+            0.0f64
         };
 
         let backward_penalty = if Self::is_backward_binding(&next_clean) && gap.as_f64() < 0.30 {
-            -1.5
+            -1.5f64
         } else {
-            0.0
+            0.0f64
         };
 
         (forward_penalty + backward_penalty).max(-1.5)
@@ -453,15 +452,15 @@ impl LanguageProfile for EnglishProfile {
         let next_clean = clean_word(next.text());
 
         let forward_penalty = if Self::is_forward_binding(&cur_clean) {
-            -1.5
+            -1.5f64
         } else {
-            0.0
+            0.0f64
         };
 
         let backward_penalty = if Self::is_backward_binding(&next_clean) && gap.as_f64() < 0.30 {
-            -1.5
+            -1.5f64
         } else {
-            0.0
+            0.0f64
         };
 
         (forward_penalty + backward_penalty).max(-1.5)
