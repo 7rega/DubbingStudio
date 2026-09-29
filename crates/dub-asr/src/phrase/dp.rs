@@ -117,11 +117,13 @@ pub fn compute_boundary_score(
     };
 
     // 2. Паузный скор S_pause по 4 полосам
-    let s_pause = if is_negative || eff_gap < cfg.pause_min_sec().as_f64() {
+    // Защита от машинной погрешности f64 (например, 3.3 - 2.5 = 0.7999999999999998)
+    const EPSILON: f64 = 1e-6;
+    let s_pause = if is_negative || eff_gap < cfg.pause_min_sec().as_f64() - EPSILON {
         -0.6
-    } else if eff_gap < cfg.pause_soft_sec().as_f64() {
+    } else if eff_gap < cfg.pause_soft_sec().as_f64() - EPSILON {
         0.3
-    } else if eff_gap < cfg.pause_strong_sec().as_f64() {
+    } else if eff_gap < cfg.pause_strong_sec().as_f64() - EPSILON {
         0.7
     } else {
         1.1
@@ -325,10 +327,11 @@ pub fn segment_turn_dp(
         } else {
             let (eff_gap, _) =
                 compute_effective_gap(units[k - 1].end, units[k].start, speech_regions);
-            if eff_gap >= cfg.pause_strong_sec().as_f64() {
+            const EPSILON: f64 = 1e-6;
+            if eff_gap >= cfg.pause_strong_sec().as_f64() - EPSILON {
                 SegmentationReason::LongPause
             } else if profile.ends_clause(&units[k - 1].text)
-                && eff_gap >= cfg.pause_min_sec().as_f64()
+                && eff_gap >= cfg.pause_min_sec().as_f64() - EPSILON
             {
                 SegmentationReason::SyntaxPause
             } else {
