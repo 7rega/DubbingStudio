@@ -218,6 +218,7 @@ impl SegmentationConfig {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
@@ -239,9 +240,11 @@ mod tests {
     #[test]
     fn test_validate_all_error_branches() {
         // InvalidDurationOrder: min >= ideal
-        let mut cfg = SegmentationConfig::default();
-        cfg.min_utterance_sec = Seconds(5.0);
-        cfg.ideal_utterance_sec = Seconds(4.0);
+        let cfg = SegmentationConfig {
+            min_utterance_sec: Seconds(5.0),
+            ideal_utterance_sec: Seconds(4.0),
+            ..Default::default()
+        };
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::InvalidDurationOrder {
@@ -253,8 +256,10 @@ mod tests {
         );
 
         // InvalidDurationOrder: ideal > soft
-        let mut cfg = SegmentationConfig::default();
-        cfg.ideal_utterance_sec = Seconds(9.0);
+        let cfg = SegmentationConfig {
+            ideal_utterance_sec: Seconds(9.0),
+            ..Default::default()
+        };
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::InvalidDurationOrder {
@@ -266,8 +271,10 @@ mod tests {
         );
 
         // InvalidDurationOrder: soft > hard
-        let mut cfg = SegmentationConfig::default();
-        cfg.soft_max_utterance_sec = Seconds(16.0);
+        let cfg = SegmentationConfig {
+            soft_max_utterance_sec: Seconds(16.0),
+            ..Default::default()
+        };
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::InvalidDurationOrder {
@@ -279,8 +286,10 @@ mod tests {
         );
 
         // InvalidPauseOrder: min > soft
-        let mut cfg = SegmentationConfig::default();
-        cfg.pause_min_ms = Millis(600.0);
+        let cfg = SegmentationConfig {
+            pause_min_ms: Millis(600.0),
+            ..Default::default()
+        };
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::InvalidPauseOrder {
@@ -291,8 +300,10 @@ mod tests {
         );
 
         // InvalidPauseOrder: soft > strong
-        let mut cfg = SegmentationConfig::default();
-        cfg.pause_soft_ms = Millis(900.0);
+        let cfg = SegmentationConfig {
+            pause_soft_ms: Millis(900.0),
+            ..Default::default()
+        };
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::InvalidPauseOrder {
@@ -303,8 +314,10 @@ mod tests {
         );
 
         // InvalidRatio: min_overlap_ratio
-        let mut cfg = SegmentationConfig::default();
-        cfg.min_overlap_ratio = 1.2;
+        let cfg = SegmentationConfig {
+            min_overlap_ratio: 1.2,
+            ..Default::default()
+        };
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::InvalidRatio {
@@ -313,8 +326,10 @@ mod tests {
             })
         );
 
-        let mut cfg = SegmentationConfig::default();
-        cfg.min_overlap_ratio = -0.1;
+        let cfg = SegmentationConfig {
+            min_overlap_ratio: -0.1,
+            ..Default::default()
+        };
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::InvalidRatio {
@@ -323,8 +338,10 @@ mod tests {
             })
         );
 
-        let mut cfg = SegmentationConfig::default();
-        cfg.smoothing_confidence_threshold = 2.0;
+        let cfg = SegmentationConfig {
+            smoothing_confidence_threshold: 2.0,
+            ..Default::default()
+        };
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::InvalidRatio {
@@ -334,8 +351,10 @@ mod tests {
         );
 
         // InvalidNumericValue: negative penalty
-        let mut cfg = SegmentationConfig::default();
-        cfg.dp_segment_penalty = -1.0;
+        let cfg = SegmentationConfig {
+            dp_segment_penalty: -1.0,
+            ..Default::default()
+        };
         assert_eq!(
             cfg.validate(),
             Err(ConfigError::InvalidNumericValue {
@@ -345,8 +364,10 @@ mod tests {
         );
 
         // InvalidNumericValue: NaN weight
-        let mut cfg = SegmentationConfig::default();
-        cfg.dp_weight_boundary_reward = f64::NAN;
+        let cfg = SegmentationConfig {
+            dp_weight_boundary_reward: f64::NAN,
+            ..Default::default()
+        };
         match cfg.validate() {
             Err(ConfigError::InvalidNumericValue { field, .. }) => {
                 assert_eq!(field, "dp_weight_boundary_reward");
@@ -355,8 +376,10 @@ mod tests {
         }
 
         // InvalidNumericValue: infinite buffer
-        let mut cfg = SegmentationConfig::default();
-        cfg.dp_window_buffer_sec = Seconds(f64::INFINITY);
+        let cfg = SegmentationConfig {
+            dp_window_buffer_sec: Seconds(f64::INFINITY),
+            ..Default::default()
+        };
         match cfg.validate() {
             Err(ConfigError::InvalidNumericValue { field, .. }) => {
                 assert_eq!(field, "dp_window_buffer_sec");
