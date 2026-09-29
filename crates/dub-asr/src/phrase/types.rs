@@ -9,6 +9,7 @@ pub enum SegmentationReason {
     SyntaxPause,
     OptimalDpSplit,
     OversizeExceeded,
+    TurnEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

@@ -30,6 +30,11 @@ impl Seconds {
     pub fn min(self, other: Seconds) -> Seconds {
         Seconds(self.0.min(other.0))
     }
+
+    #[inline]
+    pub fn total_cmp(self, other: Seconds) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
 }
 
 impl Default for Seconds {
@@ -66,6 +71,11 @@ impl Millis {
     #[inline]
     pub fn min(self, other: Millis) -> Millis {
         Millis(self.0.min(other.0))
+    }
+
+    #[inline]
+    pub fn total_cmp(self, other: Millis) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
     }
 }
 
