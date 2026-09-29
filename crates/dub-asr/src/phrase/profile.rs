@@ -256,7 +256,7 @@ impl LanguageProfile for RussianProfile {
 
     fn starts_with_continuation(&self, text: &str) -> bool {
         let trimmed = text.trim_start();
-        if trimmed.chars().next().map_or(false, |c| c.is_lowercase()) {
+        if trimmed.chars().next().is_some_and(|c| c.is_lowercase()) {
             return true;
         }
         let first_word = clean_word(trimmed.split_whitespace().next().unwrap_or(trimmed));
@@ -421,7 +421,7 @@ impl LanguageProfile for EnglishProfile {
 
     fn starts_with_continuation(&self, text: &str) -> bool {
         let trimmed = text.trim_start();
-        if trimmed.chars().next().map_or(false, |c| c.is_lowercase()) {
+        if trimmed.chars().next().is_some_and(|c| c.is_lowercase()) {
             return true;
         }
         let first_word = clean_word(trimmed.split_whitespace().next().unwrap_or(trimmed));
@@ -722,7 +722,7 @@ impl LanguageProfile for DefaultProfile {
 
     fn starts_with_continuation(&self, text: &str) -> bool {
         let trimmed = text.trim_start();
-        if trimmed.chars().next().map_or(false, |c| c.is_lowercase()) {
+        if trimmed.chars().next().is_some_and(|c| c.is_lowercase()) {
             return true;
         }
         let first_word = clean_word(trimmed.split_whitespace().next().unwrap_or(trimmed));
