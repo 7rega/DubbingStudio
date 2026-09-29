@@ -787,10 +787,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{} ({:.1}%)", base_stats.over_15s, pct(base_stats.over_15s, base_stats.total)),
         format!("{} ({:.1}%)", dp_stats.over_15s, pct(dp_stats.over_15s, dp_stats.total))
     );
-    println!("{:<35} | {:<25.1}% | {:<25.1}%",
+    println!("{:<35} | {:<25} | {:<25}",
         "Доля реплик 2.0 - 8.0 с",
-        base_stats.share_2_to_8s(),
-        dp_stats.share_2_to_8s()
+        format!("{:.1}%", base_stats.share_2_to_8s()),
+        format!("{:.1}%", dp_stats.share_2_to_8s())
     );
     println!("{:<35} | {:<25} | {:<25}",
         "Число oversize (> 15.0 с)", base_stats.over_15s, dp_stats.over_15s
