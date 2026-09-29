@@ -20,6 +20,16 @@ impl Seconds {
     pub fn as_f64(self) -> f64 {
         self.0
     }
+
+    #[inline]
+    pub fn max(self, other: Seconds) -> Seconds {
+        Seconds(self.0.max(other.0))
+    }
+
+    #[inline]
+    pub fn min(self, other: Seconds) -> Seconds {
+        Seconds(self.0.min(other.0))
+    }
 }
 
 impl Default for Seconds {
@@ -46,6 +56,16 @@ impl Millis {
     #[inline]
     pub fn as_f64(self) -> f64 {
         self.0
+    }
+
+    #[inline]
+    pub fn max(self, other: Millis) -> Millis {
+        Millis(self.0.max(other.0))
+    }
+
+    #[inline]
+    pub fn min(self, other: Millis) -> Millis {
+        Millis(self.0.min(other.0))
     }
 }
 
@@ -118,6 +138,11 @@ mod tests {
 
         assert!(Seconds(0.4) < Seconds(4.0));
         assert!(Millis(250.0) < Millis(500.0));
+
+        assert_eq!(Seconds(1.0).max(Seconds(2.0)), Seconds(2.0));
+        assert_eq!(Seconds(1.0).min(Seconds(2.0)), Seconds(1.0));
+        assert_eq!(Millis(100.0).max(Millis(200.0)), Millis(200.0));
+        assert_eq!(Millis(100.0).min(Millis(200.0)), Millis(100.0));
 
         // Serde roundtrip
         let json_s = serde_json::to_string(&Seconds(4.25)).unwrap();
