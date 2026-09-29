@@ -167,6 +167,8 @@ pub enum AsrError {
     Io(String),
     #[error("диаризация: {0}")]
     Diarize(String),
+    #[error("сегментация: {0}")]
+    Segmentation(#[from] phrase::SegmentationError),
 }
 
 /// Одна реплика диаризации: [start, end] в секундах, speaker — контиг. id (0..k-1).
