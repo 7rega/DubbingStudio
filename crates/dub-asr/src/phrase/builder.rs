@@ -95,8 +95,7 @@ pub fn build_utterance(
     // Проекция boundary_candidates, попавших внутрь реплики
     let mut boundary_candidates = Vec::new();
     for cand in all_candidates {
-        if cand.after_unit_index >= raw_seg.start_idx
-            && cand.after_unit_index + 1 < raw_seg.end_idx
+        if cand.after_unit_index >= raw_seg.start_idx && cand.after_unit_index + 1 < raw_seg.end_idx
         {
             boundary_candidates.push(BoundaryCandidate {
                 after_unit_index: cand.after_unit_index - raw_seg.start_idx,
@@ -266,13 +265,7 @@ mod tests {
         types::{AmbiguityStatus, DpCostBreakdown, SegmentationReason},
     };
 
-    fn make_test_utterance(
-        id: &str,
-        speaker: &str,
-        start: f64,
-        end: f64,
-        text: &str,
-    ) -> Utterance {
+    fn make_test_utterance(id: &str, speaker: &str, start: f64, end: f64, text: &str) -> Utterance {
         Utterance {
             id: id.to_string(),
             speaker: speaker.to_string(),

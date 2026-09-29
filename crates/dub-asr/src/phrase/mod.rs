@@ -63,21 +63,15 @@ pub fn segment(
         return Ok(Vec::new());
     }
 
-    let aligned_units =
-        aligner::align_and_smooth(&sanitized_units, diar, config, profile.as_ref());
+    let aligned_units = aligner::align_and_smooth(&sanitized_units, diar, config, profile.as_ref());
     let turns = turns::build_speaker_turns(&aligned_units, Some(diar));
 
     let mut raw_utterances = Vec::new();
     let turns_count = turns.len();
     for (turn_idx, turn) in turns.iter().enumerate() {
         let is_last_turn = turn_idx + 1 == turns_count;
-        let dp_res = dp::segment_turn_dp(
-            turn,
-            profile.as_ref(),
-            config,
-            speech_regions,
-            is_last_turn,
-        );
+        let dp_res =
+            dp::segment_turn_dp(turn, profile.as_ref(), config, speech_regions, is_last_turn);
         for seg in &dp_res.segments {
             raw_utterances.push(builder::build_utterance(
                 turn,
@@ -338,7 +332,10 @@ mod tests {
         assert_eq!(utterances[2].start, Seconds(15.20));
         assert_eq!(utterances[2].end, Seconds(16.90));
         assert_eq!(utterances[2].text, "И вернёмся через неделю.");
-        assert_eq!(utterances[2].segmentation.reason, SegmentationReason::TurnEnd);
+        assert_eq!(
+            utterances[2].segmentation.reason,
+            SegmentationReason::TurnEnd
+        );
         assert!(!utterances[2].segmentation.is_oversize);
         assert!(!utterances[2].segmentation.is_soft_max_exceeded);
         // Ручной расчёт DP: D=1.70, penalty=0.5*|1.7-4.0|=1.15 => Cost = 2.5 + 1.15 = 3.65
