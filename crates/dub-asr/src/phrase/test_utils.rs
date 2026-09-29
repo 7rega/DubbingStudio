@@ -78,8 +78,7 @@ pub fn make_turn(units: Vec<AlignedUnit>) -> SpeakerTurn {
     let end = units
         .iter()
         .map(|u| u.end)
-        .max_by(|a, b| a.total_cmp(b))
-        .unwrap_or(Seconds::ZERO);
+        .fold(start, |acc, e| acc.max(e));
     SpeakerTurn {
         id: "turn_001".to_string(),
         speaker: "SPEAKER_00".to_string(),

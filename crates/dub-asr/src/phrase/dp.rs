@@ -156,8 +156,8 @@ pub fn compute_length_penalty(dur: f64, cfg: &SegmentationConfig) -> f64 {
         soft_penalty + cfg.dp_weight_soft_max_penalty * (dur - soft_max_sec).powi(2)
     } else {
         let soft_penalty = cfg.dp_weight_ideal_dev * (soft_max_sec - ideal_sec);
-        let hard_base = soft_penalty
-            + cfg.dp_weight_soft_max_penalty * (hard_max_sec - soft_max_sec).powi(2);
+        let hard_base =
+            soft_penalty + cfg.dp_weight_soft_max_penalty * (hard_max_sec - soft_max_sec).powi(2);
         hard_base + cfg.dp_weight_hard_max_slope * (dur - hard_max_sec)
     }
 }
@@ -368,23 +368,11 @@ mod tests {
     macro_rules! assert_approx_eq {
         ($a:expr, $b:expr) => {
             let diff = ($a - $b).abs();
-            assert!(
-                diff < 1e-4,
-                "Expected {} ≈ {}, diff = {}",
-                $a,
-                $b,
-                diff
-            );
+            assert!(diff < 1e-4, "Expected {} ≈ {}, diff = {}", $a, $b, diff);
         };
         ($a:expr, $b:expr, $tol:expr) => {
             let diff = ($a - $b).abs();
-            assert!(
-                diff < $tol,
-                "Expected {} ≈ {}, diff = {}",
-                $a,
-                $b,
-                diff
-            );
+            assert!(diff < $tol, "Expected {} ≈ {}, diff = {}", $a, $b, diff);
         };
     }
 
@@ -578,7 +566,11 @@ mod tests {
 
         let res_a = segment_turn_dp(&turn_a, &profile, &cfg, None, true);
         assert_approx_eq!(res_a.boundary_candidates[0].boundary_score, 1.9);
-        assert_eq!(res_a.segments.len(), 1, "При паузе 0.7с реплики CJK должны объединиться");
+        assert_eq!(
+            res_a.segments.len(),
+            1,
+            "При паузе 0.7с реплики CJK должны объединиться"
+        );
         assert_approx_eq!(res_a.segments[0].cost.total_cost, 3.35);
 
         let split_cost_a = compute_segment_cost(0, 1, &turn_a.units, &[1.9], &cfg).total_cost
@@ -592,7 +584,11 @@ mod tests {
 
         let res_b = segment_turn_dp(&turn_b, &profile, &cfg, None, true);
         assert_approx_eq!(res_b.boundary_candidates[0].boundary_score, 2.3);
-        assert_eq!(res_b.segments.len(), 2, "При паузе 0.8с реплики CJK должны разделиться");
+        assert_eq!(
+            res_b.segments.len(),
+            2,
+            "При паузе 0.8с реплики CJK должны разделиться"
+        );
 
         let total_split_b: f64 = res_b.segments.iter().map(|s| s.cost.total_cost).sum();
         assert_approx_eq!(total_split_b, 3.05);
@@ -621,7 +617,11 @@ mod tests {
 
         let res_400 = segment_turn_dp(&turn_400, &profile, &cfg, None, true);
         assert_approx_eq!(res_400.boundary_candidates[0].boundary_score, 1.5);
-        assert_eq!(res_400.segments.len(), 1, "При паузе 0.4с должно побеждать объединение");
+        assert_eq!(
+            res_400.segments.len(),
+            1,
+            "При паузе 0.4с должно побеждать объединение"
+        );
         assert_approx_eq!(res_400.segments[0].cost.total_cost, 3.70);
 
         let split_cost_400 = compute_segment_cost(0, 1, &turn_400.units, &[1.5], &cfg).total_cost
@@ -638,7 +638,11 @@ mod tests {
 
         let res_500 = segment_turn_dp(&turn_500, &profile, &cfg, None, true);
         assert_approx_eq!(res_500.boundary_candidates[0].boundary_score, 1.9);
-        assert_eq!(res_500.segments.len(), 2, "При паузе 0.5с должен побеждать сплит");
+        assert_eq!(
+            res_500.segments.len(),
+            2,
+            "При паузе 0.5с должен побеждать сплит"
+        );
 
         let total_split_500: f64 = res_500.segments.iter().map(|s| s.cost.total_cost).sum();
         assert_approx_eq!(total_split_500, 3.15);
@@ -684,9 +688,18 @@ mod tests {
         // Слитый интервал: [1.0 .. 1.6] длительностью 0.6с
         // Эффективный зазор тишины: 1.0 - 0.6 = 0.4с (полоса 250..500мс => S_pause = +0.3)
         let regions = vec![
-            SpeechSpan { start: Seconds(0.8), end: Seconds(1.3) },
-            SpeechSpan { start: Seconds(1.2), end: Seconds(1.6) },
-            SpeechSpan { start: Seconds(2.1), end: Seconds(2.5) },
+            SpeechSpan {
+                start: Seconds(0.8),
+                end: Seconds(1.3),
+            },
+            SpeechSpan {
+                start: Seconds(1.2),
+                end: Seconds(1.6),
+            },
+            SpeechSpan {
+                start: Seconds(2.1),
+                end: Seconds(2.5),
+            },
         ];
         let (eff_gap_vad, is_neg_vad) =
             compute_effective_gap(Seconds(1.0), Seconds(2.0), Some(&regions));
@@ -730,7 +743,10 @@ mod tests {
 
         // Проверка при is_last_turn = false -> SpeakerChange
         let res_mid = segment_turn_dp(&turn, &profile, &cfg, None, false);
-        assert_eq!(res_mid.segments[0].reason, SegmentationReason::SpeakerChange);
+        assert_eq!(
+            res_mid.segments[0].reason,
+            SegmentationReason::SpeakerChange
+        );
     }
 
     /// Тест 13: неразрывный участок монолога внутри хода сохраняет внешние границы
@@ -775,7 +791,11 @@ mod tests {
         let turn = make_turn(units);
         let res = segment_turn_dp(&turn, &profile, &cfg, None, true);
 
-        assert_eq!(res.segments.len(), 3, "Должно сформироваться ровно 3 реплики");
+        assert_eq!(
+            res.segments.len(),
+            3,
+            "Должно сформироваться ровно 3 реплики"
+        );
 
         // Сегмент 1
         assert_eq!(res.segments[0].start_idx, 0);
