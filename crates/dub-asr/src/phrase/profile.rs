@@ -628,16 +628,7 @@ pub struct ChineseProfile;
 impl ChineseProfile {
     fn is_continuation_marker(text: &str) -> bool {
         const MARKERS: &[&str] = &[
-            "而且",
-            "但是",
-            "所以",
-            "然后",
-            "并且",
-            "不过",
-            "然而",
-            "因为",
-            "如果",
-            "虽然",
+            "而且", "但是", "所以", "然后", "并且", "不过", "然而", "因为", "如果", "虽然",
         ];
         MARKERS.iter().any(|&m| text.starts_with(m))
     }
