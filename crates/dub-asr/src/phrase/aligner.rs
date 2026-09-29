@@ -51,16 +51,16 @@ pub fn align_units(
                 let o_end = u.end.min(interval.end);
                 if o_start < o_end {
                     let o_sec = (o_end - o_start).as_f64();
-                    *speaker_overlaps.entry(interval.speaker.clone()).or_insert(0.0) += o_sec;
+                    *speaker_overlaps
+                        .entry(interval.speaker.clone())
+                        .or_insert(0.0) += o_sec;
                 }
             }
         }
 
         let mut sorted_speakers: Vec<(String, f64)> = speaker_overlaps.into_iter().collect();
         // Стабильная сортировка по убыванию перекрытия
-        sorted_speakers.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted_speakers.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Случай A: Есть перекрытие с диаризацией
         if !sorted_speakers.is_empty() && sorted_speakers[0].1 > 0.0 {
@@ -100,7 +100,11 @@ pub fn align_units(
                 speaker_confidence,
                 overlap_ratio,
                 ambiguity,
-                alternative_speaker: if secondary_overlap > 0.0 { alt_speaker } else { None },
+                alternative_speaker: if secondary_overlap > 0.0 {
+                    alt_speaker
+                } else {
+                    None
+                },
                 alternative_overlap_ratio: secondary_ratio,
                 is_whisper_boundary: u.is_whisper_boundary,
                 can_split_after: u.can_split_after,
@@ -202,7 +206,11 @@ pub fn smooth_aligned_units(
     for i in 1..units.len() - 1 {
         let (left_speaker, left_end, left_ends_sentence) = {
             let u_a1 = &units[i - 1];
-            (u_a1.speaker.clone(), u_a1.end, profile.ends_sentence(&u_a1.text))
+            (
+                u_a1.speaker.clone(),
+                u_a1.end,
+                profile.ends_sentence(&u_a1.text),
+            )
         };
         let (right_speaker, right_start) = {
             let u_a2 = &units[i + 1];
@@ -328,7 +336,10 @@ mod tests {
 
         assert_eq!(aligned.len(), 1);
         assert_eq!(aligned[0].speaker, "S0");
-        assert_eq!(aligned[0].ambiguity, AmbiguityStatus::MultipleSpeakersOverlap);
+        assert_eq!(
+            aligned[0].ambiguity,
+            AmbiguityStatus::MultipleSpeakersOverlap
+        );
         assert_eq!(aligned[0].alternative_speaker, Some("S1".to_string()));
         assert!((aligned[0].alternative_overlap_ratio - 0.4).abs() < 1e-4);
         // margin = 0.6 - 0.4 = 0.2
@@ -362,7 +373,10 @@ mod tests {
 
         assert_eq!(aligned.len(), 1);
         assert_eq!(aligned[0].speaker, "S0");
-        assert_eq!(aligned[0].ambiguity, AmbiguityStatus::MultipleSpeakersOverlap);
+        assert_eq!(
+            aligned[0].ambiguity,
+            AmbiguityStatus::MultipleSpeakersOverlap
+        );
         assert_eq!(aligned[0].alternative_speaker, Some("S1".to_string()));
         assert!((aligned[0].alternative_overlap_ratio - 0.25).abs() < 1e-4);
     }
@@ -416,10 +430,7 @@ mod tests {
     fn test_align_gap_inherited() {
         // Юнит 0: Clear (1.0с)
         // Юнит 1: [2.0, 2.5], интервал на расстоянии > 0.5с -> наследует от левого
-        let units = vec![
-            make_unit("Первый", 0.0, 1.0),
-            make_unit("Второй", 2.0, 2.5),
-        ];
+        let units = vec![make_unit("Первый", 0.0, 1.0), make_unit("Второй", 2.0, 2.5)];
         let diarization = DiarizationResult {
             intervals: vec![DiarInterval {
                 speaker: "S0".to_string(),
@@ -513,7 +524,10 @@ mod tests {
         ];
 
         smooth_aligned_units(&mut units_noise, &cfg, &profile);
-        assert_eq!(units_noise[1].speaker, "S0", "Шумовой юнит должен быть сглажен в S0");
+        assert_eq!(
+            units_noise[1].speaker, "S0",
+            "Шумовой юнит должен быть сглажен в S0"
+        );
 
         // 2. Короткое слово «Да.» 250мс с уверенностью 0.90 и статусом Clear -> НЕ сглаживается!
         let mut units_confident = vec![
