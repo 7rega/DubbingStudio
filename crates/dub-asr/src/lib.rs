@@ -18,6 +18,7 @@
 //! Сегментация словного потока (_segment), transcribe / diarize / transcribe_turns — порт
 //! dubengine/asr.py и dubengine/diarize.py: паузы >0.6с, конец предложения .!?…, макс 8.0с.
 
+pub mod phrase;
 mod align;
 pub mod forced;
 pub mod speech_edges;
