@@ -204,6 +204,79 @@ pub trait AsrEngine {
         let words = self.transcribe_words(wav, lang)?;
         Ok(segment_words_with_diarization(&words, turns, SEG_MAX_GAP, SEG_MAX_DUR))
     }
+    /// Транскрипция с разделением на естественные фразы (Natural Phrases DP).
+    ///
+    /// Получает пословный поток через `transcribe_words`, формирует `AsrResult` и `DiarizationResult`
+    /// (с фолбэком на спикера "0" при отсутствии диаризации) и запускает `phrase::segment`.
+    fn transcribe_utterances(
+        &mut self,
+        wav: &Path,
+        turns: &[Turn],
+        lang: &str,
+        config: &phrase::SegmentationConfig,
+    ) -> Result<Vec<phrase::Utterance>, AsrError> {
+        self.transcribe_utterances_with_vad(wav, turns, lang, config, None)
+    }
+    /// Транскрипция с разделением на естественные фразы (Natural Phrases DP) с опциональными VAD-регионами.
+    fn transcribe_utterances_with_vad(
+        &mut self,
+        wav: &Path,
+        turns: &[Turn],
+        lang: &str,
+        config: &phrase::SegmentationConfig,
+        speech_regions: Option<&[phrase::SpeechSpan]>,
+    ) -> Result<Vec<phrase::Utterance>, AsrError> {
+        let words = self.transcribe_words(wav, lang)?;
+        let asr_units: Vec<phrase::AsrUnit> = words
+            .into_iter()
+            .map(|w| phrase::AsrUnit {
+                text: w.word,
+                start: phrase::Seconds(w.start),
+                end: phrase::Seconds(w.end),
+                confidence: None,
+                is_whisper_boundary: w.is_asr_boundary,
+                can_split_after: true,
+            })
+            .collect();
+        let asr_res = phrase::AsrResult {
+            units: asr_units,
+            raw_segments: Vec::new(),
+            language: self.detected_language().or_else(|| {
+                if lang.is_empty() || lang.eq_ignore_ascii_case("auto") {
+                    None
+                } else {
+                    Some(lang.to_string())
+                }
+            }),
+        };
+        let diar_res = if turns.is_empty() {
+            let max_time = asr_res
+                .units
+                .last()
+                .map(|u| u.end.as_f64() + 10.0)
+                .unwrap_or(3600.0);
+            phrase::DiarizationResult {
+                intervals: vec![phrase::DiarInterval {
+                    speaker: "0".to_string(),
+                    start: phrase::Seconds::ZERO,
+                    end: phrase::Seconds(max_time),
+                    confidence: Some(1.0),
+                }],
+            }
+        } else {
+            let intervals = turns
+                .iter()
+                .map(|t| phrase::DiarInterval {
+                    speaker: t.speaker.to_string(),
+                    start: phrase::Seconds(t.start),
+                    end: phrase::Seconds(t.end),
+                    confidence: Some(1.0),
+                })
+                .collect();
+            phrase::DiarizationResult { intervals }
+        };
+        phrase::segment(&asr_res, &diar_res, config, speech_regions).map_err(AsrError::from)
+    }
     /// Пакетная транскрипция МНОГИХ коротких файлов → полный текст каждого (None = не распознан/сбой).
     /// Дефолт — цикл transcribe (Parakeet in-process и так быстр); Whisper переопределяет ОДНИМ
     /// сабпроцессом на весь список (старт процесса дорогой, 333 файла по-одному — минуты впустую).
@@ -964,3 +1037,69 @@ mod dedup_tests {
         assert_eq!(norm_word("well-known"), "well-known");
     }
 }
+
+#[cfg(test)]
+mod asr_engine_tests {
+    use super::*;
+
+    struct MockEngine {
+        words: Vec<Word>,
+        detected: Option<String>,
+    }
+
+    impl AsrEngine for MockEngine {
+        fn detected_language(&self) -> Option<String> {
+            self.detected.clone()
+        }
+        fn transcribe(&mut self, _wav: &Path, _lang: &str) -> Result<Vec<Segment>, AsrError> {
+            unimplemented!()
+        }
+        fn transcribe_turns(&mut self, _wav: &Path, _turns: &[Turn], _lang: &str) -> Result<Vec<SpeakerSegment>, AsrError> {
+            unimplemented!()
+        }
+        fn transcribe_words(&mut self, _wav: &Path, _lang: &str) -> Result<Vec<Word>, AsrError> {
+            Ok(self.words.clone())
+        }
+    }
+
+    #[test]
+    fn test_transcribe_utterances_default_impl() {
+        let mut engine = MockEngine {
+            words: vec![
+                Word::new("Привет", 0.0, 0.5),
+                Word::new("мир.", 0.6, 1.0),
+            ],
+            detected: Some("ru".to_string()),
+        };
+        let cfg = phrase::SegmentationConfig::default();
+        let utts = engine.transcribe_utterances(Path::new("dummy.wav"), &[], "auto", &cfg).unwrap();
+        assert_eq!(utts.len(), 1);
+        assert_eq!(utts[0].speaker, "0");
+        assert_eq!(utts[0].text, "Привет мир.");
+        assert_eq!(utts[0].source_language, "ru");
+        assert_eq!(utts[0].units.len(), 2);
+    }
+
+    #[test]
+    fn test_transcribe_utterances_with_diarization() {
+        let mut engine = MockEngine {
+            words: vec![
+                Word::new("Привет", 0.0, 0.5),
+                Word::new("Здравствуйте.", 1.2, 2.0),
+            ],
+            detected: Some("ru".to_string()),
+        };
+        let turns = vec![
+            Turn { start: 0.0, end: 0.8, speaker: 1 },
+            Turn { start: 1.0, end: 2.5, speaker: 2 },
+        ];
+        let cfg = phrase::SegmentationConfig::default();
+        let utts = engine.transcribe_utterances(Path::new("dummy.wav"), &turns, "auto", &cfg).unwrap();
+        assert_eq!(utts.len(), 2);
+        assert_eq!(utts[0].speaker, "1");
+        assert_eq!(utts[0].text, "Привет");
+        assert_eq!(utts[1].speaker, "2");
+        assert_eq!(utts[1].text, "Здравствуйте.");
+    }
+}
+

@@ -434,7 +434,7 @@ fn win_target_sec() -> f64 {
 
 const EXTRACT_VER: &str = "extract-16kmono-v1";
 const DIAR_VER: &str = "sortformer-4spk-v2 · merge_gap=0.8 · min_spk=2.5";
-const ASR_VER: &str = "asr-v1";
+const ASR_VER: &str = "asr-v2";
 const TRANSLATE_VER: &str = "gemma-ctx-v1";
 const OCR_VER: &str = "ppocr-onnx-v1";
 
@@ -467,81 +467,6 @@ impl WindowPlan {
         }
         WindowPlan { n_windows: n, windows }
     }
-}
-
-/// Слить короткие огрызки ОДНОГО спикера в одну фразу (#115). Whisper дробит предложение на «If» +
-/// «they find you.» — каждый огрызок озвучивается отдельно и звучит рвано. Клеим сосед в предыдущий,
-fn ends_sentence_text(text: &str) -> bool {
-    let trimmed = text.trim_end_matches(|c: char| {
-        c.is_whitespace()
-            || c == '"'
-            || c == '\''
-            || c == '»'
-            || c == '”'
-            || c == '’'
-            || c == ')'
-            || c == ']'
-            || c == '}'
-    });
-    trimmed.ends_with(['.', '!', '?', '…', '。', '！', '？', '؟', '۔']) || trimmed.ends_with("...")
-}
-
-/// Слить короткие огрызки ОДНОГО спикера в одну фразу (#115). Whisper дробит предложение на «If» +
-/// «they find you.» — каждый огрызок озвучивается отдельно и звучит рвано. Клеим сосед в предыдущий,
-/// если: тот же спикер, зазор < 0.35с, хотя бы один из двух короткий (<1.6с), суммарно ≤12с и <200 симв.
-/// Так «одна фраза, разбитая таймингом» снова становится одной; две полные разные фразы НЕ склеиваются.
-fn merge_short_turns(segs: &mut Vec<Segment>) {
-    if segs.len() < 2 {
-        return;
-    }
-    const GAP: f64 = 0.35;
-    // Whisper иногда даёт лёгкое ПЕРЕКРЫТИЕ соседних слов (w[i+1].start < w[i].end) -> отрицательный зазор
-    // на границе огрызков ОДНОЙ фразы. Допускаем небольшой overlap, иначе «If|they find you» с −0.02с не
-    // склеится и озвучится рвано (ровно то, что merge и должен убирать).
-    const OVERLAP: f64 = 0.2;
-    const SHORT: f64 = 1.6;
-    const MAX_DUR: f64 = 12.0;
-    const MAX_CH: usize = 200;
-    let src = std::mem::take(segs);
-    let mut out: Vec<Segment> = Vec::with_capacity(src.len());
-    for s in src {
-        if let Some(last) = out.last_mut() {
-            let same_spk = last.speaker == s.speaker;
-            let gap = s.start - last.end;
-            let short = (last.end - last.start) < SHORT || (s.end - s.start) < SHORT;
-            let dur_ok = (s.end - last.start) <= MAX_DUR;
-            let ch_ok = last.src_text.chars().count() + s.src_text.chars().count() < MAX_CH;
-            let last_finished = ends_sentence_text(&last.src_text);
-            // Если предыдущее предложение уже грамматически завершено точкой, склеиваем лишь при плотном примыкании микро-осколка
-            let can_merge = if last_finished {
-                gap > -OVERLAP && gap < 0.12 && ((last.end - last.start) < 0.8 || (s.end - s.start) < 0.8)
-            } else {
-                gap > -OVERLAP && gap < GAP && short
-            };
-            if same_spk && can_merge && dur_ok && ch_ok {
-                let lt = last.src_text.trim_end();
-                let rt = s.src_text.trim_start();
-                let sep = if lt.is_empty() || rt.is_empty() { "" } else { " " };
-                last.src_text = format!("{lt}{sep}{rt}");
-                last.end = last.end.max(s.end); // overlap: не укорачивать вложенным сегментом
-                // слить пословный тайминг (karaoke) если есть у обоих.
-                if let Some(Value::Array(wr)) = s.extra.get("words") {
-                    match last.extra.get_mut("words") {
-                        Some(Value::Array(wl)) => wl.extend(wr.clone()),
-                        _ => {
-                            last.extra.insert("words".into(), Value::Array(wr.clone()));
-                        }
-                    }
-                }
-                continue;
-            }
-        }
-        out.push(s);
-    }
-    for (i, s) in out.iter_mut().enumerate() {
-        s.id = format!("s{i}");
-    }
-    *segs = out;
 }
 
 /// Запустить analyze: extract -> diarize -> transcribe -> Project. Возвращает готовый Project.
@@ -827,34 +752,27 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
             "asr",
             &format!("транскрипция единым прогоном на GPU ({} спикер(ов))", nsp),
         );
-        let ts = asr
-            .transcribe_with_diar(&asr_wav, turns, &args.src_lang)
+        let mut seg_config = dub_asr::phrase::SegmentationConfig::default();
+        if !args.src_lang.is_empty() && !args.src_lang.eq_ignore_ascii_case("auto") {
+            seg_config.language = Some(args.src_lang.clone());
+        }
+        let utterances = asr
+            .transcribe_utterances(&asr_wav, turns, &args.src_lang, &seg_config)
             .map_err(|e| format!("transcribe: {e}"))?;
         detected_language = asr.detected_language();
-        let segs: Vec<Segment> = ts
+        let segs: Vec<Segment> = utterances
             .into_iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let words: Vec<Value> = s
-                    .words
-                    .iter()
-                    .map(|w| json!({ "word": w.word, "start": w.start, "end": w.end }))
-                    .collect();
-                let mut extra = serde_json::Map::new();
-                extra.insert("words".into(), Value::Array(words));
-                let spk = s.speaker.unwrap_or_else(|| {
-                    if turns.is_empty() {
-                        "0".to_string()
-                    } else {
-                        speaker_for(s.start, s.end, turns)
-                    }
-                });
+            .map(|u| {
+                let extra = match u.to_extra_value() {
+                    Value::Object(m) => m,
+                    _ => serde_json::Map::new(),
+                };
                 Segment {
-                    id: format!("s{i}"),
-                    start: s.start,
-                    end: s.end,
-                    speaker: Some(spk),
-                    src_text: s.text,
+                    id: u.id,
+                    start: u.start.as_f64(),
+                    end: u.end.as_f64(),
+                    speaker: Some(u.speaker),
+                    src_text: u.text,
                     tgt_text: String::new(),
                     voice: None,
                     dirty: false,
@@ -865,17 +783,6 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
             .collect();
         (segs, nsp)
     };
-
-    // Слияние коротких огрызков (#115): whisper режет «If they find you» на «If» + «they find you.» —
-    // каждый огрызок TTS-ится отдельно и звучит рвано. Клеим near-continuous короткие реплики ОДНОГО
-    // спикера в одну фразу (не для import_subs — там реплики уже цельные из сабов).
-    if paths.import_subs.is_none() {
-        let before = segments.len();
-        merge_short_turns(&mut segments);
-        if segments.len() != before {
-            emit(progress, "asr", &format!("слияние огрызков: {before} -> {} сегментов", segments.len()));
-        }
-    }
 
     // Голосовая переразметка спикеров (#115 / WeSpeaker): при кастинге или при явном указании числа
     // спикеров (num_speakers > 0) распределяем сегменты по голосам через WeSpeaker голосовые эмбеддинги.
