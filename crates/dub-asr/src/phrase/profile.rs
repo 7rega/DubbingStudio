@@ -488,23 +488,20 @@ impl LanguageProfile for EnglishProfile {
 pub struct JapaneseProfile;
 
 impl JapaneseProfile {
-    fn is_continuation_marker(clean_first: &str) -> bool {
-        matches!(
-            clean_first,
-            "そして"
-                | "でも"
-                | "だから"
-                | "しかし"
-                | "また"
-                | "ので"
-                | "のに"
-                | "から"
-                | "と"
-                | "て"
-                | "なら"
-                | "けれど"
-                | "けれども"
-        )
+    fn is_continuation_marker(text: &str) -> bool {
+        const MARKERS: &[&str] = &[
+            "そして",
+            "でも",
+            "だから",
+            "しかし",
+            "また",
+            "ので",
+            "のに",
+            "から",
+            "けれど",
+            "けれども",
+        ];
+        MARKERS.iter().any(|&m| text.starts_with(m))
     }
 }
 
@@ -530,10 +527,10 @@ impl LanguageProfile for JapaneseProfile {
     }
 
     fn starts_with_continuation(&self, text: &str) -> bool {
-        let trimmed = text.trim_start();
-        let first_unit = trimmed.split_whitespace().next().unwrap_or(trimmed);
-        let clean_first = clean_word(first_unit);
-        Self::is_continuation_marker(&clean_first)
+        let trimmed = text.trim_start_matches(|c: char| {
+            c.is_whitespace() || is_cjk_punct(c) || c.is_ascii_punctuation()
+        });
+        Self::is_continuation_marker(trimmed)
     }
 
     fn syntax_boundary_modifier(
@@ -629,20 +626,20 @@ impl LanguageProfile for KoreanProfile {
 pub struct ChineseProfile;
 
 impl ChineseProfile {
-    fn is_continuation_marker(clean_first: &str) -> bool {
-        matches!(
-            clean_first,
-            "而且"
-                | "但是"
-                | "所以"
-                | "然后"
-                | "并且"
-                | "不过"
-                | "然而"
-                | "因为"
-                | "如果"
-                | "虽然"
-        )
+    fn is_continuation_marker(text: &str) -> bool {
+        const MARKERS: &[&str] = &[
+            "而且",
+            "但是",
+            "所以",
+            "然后",
+            "并且",
+            "不过",
+            "然而",
+            "因为",
+            "如果",
+            "虽然",
+        ];
+        MARKERS.iter().any(|&m| text.starts_with(m))
     }
 }
 
@@ -668,10 +665,10 @@ impl LanguageProfile for ChineseProfile {
     }
 
     fn starts_with_continuation(&self, text: &str) -> bool {
-        let trimmed = text.trim_start();
-        let first_unit = trimmed.split_whitespace().next().unwrap_or(trimmed);
-        let clean_first = clean_word(first_unit);
-        Self::is_continuation_marker(&clean_first)
+        let trimmed = text.trim_start_matches(|c: char| {
+            c.is_whitespace() || is_cjk_punct(c) || c.is_ascii_punctuation()
+        });
+        Self::is_continuation_marker(trimmed)
     }
 
     fn syntax_boundary_modifier(
