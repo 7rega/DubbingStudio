@@ -13,8 +13,8 @@ use std::time::Instant;
 use proptest::prelude::*;
 
 use dub_asr::phrase::{
-    self, AsrResult, AsrUnit, DiarizationSegment, Seconds, SegmentationConfig, SegmentationError,
-    Utterance,
+    self, AsrResult, AsrUnit, DiarInterval, DiarizationResult, Seconds, SegmentationConfig,
+    SegmentationError, Utterance,
 };
 
 #[derive(Debug, Clone)]
@@ -59,7 +59,7 @@ fn arb_unit_gen() -> impl Strategy<Value = RawUnitGen> {
         })
 }
 
-fn arb_valid_session() -> impl Strategy<Value = (AsrResult, Vec<DiarizationSegment>, SegmentationConfig)> {
+fn arb_valid_session() -> impl Strategy<Value = (AsrResult, DiarizationResult, SegmentationConfig)> {
     (
         prop::collection::vec(arb_unit_gen(), 1..40),
         prop_oneof![Just("ru"), Just("en"), Just("ja"), Just("und")],
@@ -86,47 +86,44 @@ fn arb_valid_session() -> impl Strategy<Value = (AsrResult, Vec<DiarizationSegme
                 });
             }
 
-            let full_text = units
-                .iter()
-                .map(|u| u.text.as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
-
             let asr = AsrResult {
-                text: full_text,
-                language: Some(lang.to_string()),
                 units,
+                raw_segments: Vec::new(),
+                language: Some(lang.to_string()),
             };
 
             let total_dur = cur_time + 1.0;
-            let mut diar = Vec::new();
+            let mut intervals = Vec::new();
             let mut d_cur = 0.0f64;
             for (dur, spk) in diar_specs {
                 if d_cur >= total_dur {
                     break;
                 }
                 let d_end = (d_cur + dur).min(total_dur);
-                diar.push(DiarizationSegment {
+                intervals.push(DiarInterval {
                     speaker: spk.to_string(),
                     start: Seconds(d_cur),
                     end: Seconds(d_end),
+                    confidence: Some(0.95),
                 });
                 d_cur = d_end;
             }
             if d_cur < total_dur {
-                diar.push(DiarizationSegment {
+                intervals.push(DiarInterval {
                     speaker: "S0".to_string(),
                     start: Seconds(d_cur),
                     end: Seconds(total_dur),
+                    confidence: Some(0.95),
                 });
             }
 
+            let diar = DiarizationResult { intervals };
             let config = SegmentationConfig::default();
             (asr, diar, config)
         })
 }
 
-fn arb_jittered_session() -> impl Strategy<Value = (AsrResult, Vec<DiarizationSegment>, SegmentationConfig)> {
+fn arb_jittered_session() -> impl Strategy<Value = (AsrResult, DiarizationResult, SegmentationConfig)> {
     (
         prop::collection::vec(
             (
@@ -155,22 +152,24 @@ fn arb_jittered_session() -> impl Strategy<Value = (AsrResult, Vec<DiarizationSe
                 .collect::<Vec<_>>();
 
             let asr = AsrResult {
-                text: "jittered".to_string(),
-                language: Some("ru".to_string()),
                 units,
+                raw_segments: Vec::new(),
+                language: Some("ru".to_string()),
             };
 
-            let mut diar = Vec::new();
+            let mut intervals = Vec::new();
             let mut d_cur = 0.0f64;
             for (dur, spk) in diar_specs {
-                diar.push(DiarizationSegment {
+                intervals.push(DiarInterval {
                     speaker: spk.to_string(),
                     start: Seconds(d_cur),
                     end: Seconds(d_cur + dur),
+                    confidence: Some(0.9),
                 });
                 d_cur += dur;
             }
 
+            let diar = DiarizationResult { intervals };
             let config = SegmentationConfig::default();
             (asr, diar, config)
         })
@@ -229,7 +228,7 @@ fn check_speaker_purity(utts: &[Utterance]) {
 
 fn check_determinism(
     asr: &AsrResult,
-    diar: &[DiarizationSegment],
+    diar: &DiarizationResult,
     cfg: &SegmentationConfig,
     first_res: &[Utterance],
 ) {
@@ -357,16 +356,19 @@ fn test_stress_10000_words_monologue() {
     }
 
     let asr = AsrResult {
-        text: "10000 words stress monologue".to_string(),
-        language: Some("ru".to_string()),
         units,
+        raw_segments: Vec::new(),
+        language: Some("ru".to_string()),
     };
 
-    let diar = vec![DiarizationSegment {
-        speaker: "SPEAKER_00".to_string(),
-        start: Seconds::ZERO,
-        end: Seconds(cur_time + 10.0),
-    }];
+    let diar = DiarizationResult {
+        intervals: vec![DiarInterval {
+            speaker: "SPEAKER_00".to_string(),
+            start: Seconds::ZERO,
+            end: Seconds(cur_time + 10.0),
+            confidence: Some(1.0),
+        }],
+    };
 
     let cfg = SegmentationConfig::default();
 
@@ -401,11 +403,11 @@ fn test_stress_10000_words_monologue() {
 #[test]
 fn test_empty_asr_input() {
     let asr = AsrResult {
-        text: String::new(),
-        language: Some("ru".to_string()),
         units: Vec::new(),
+        raw_segments: Vec::new(),
+        language: Some("ru".to_string()),
     };
-    let diar = Vec::new();
+    let diar = DiarizationResult::default();
     let cfg = SegmentationConfig::default();
 
     let utts = phrase::segment(&asr, &diar, &cfg, None).expect("Empty input must succeed");
@@ -415,8 +417,6 @@ fn test_empty_asr_input() {
 #[test]
 fn test_single_unit_input() {
     let asr = AsrResult {
-        text: "Привет.".to_string(),
-        language: Some("ru".to_string()),
         units: vec![AsrUnit {
             text: "Привет.".to_string(),
             start: Seconds(1.0),
@@ -425,12 +425,17 @@ fn test_single_unit_input() {
             is_whisper_boundary: true,
             can_split_after: true,
         }],
+        raw_segments: Vec::new(),
+        language: Some("ru".to_string()),
     };
-    let diar = vec![DiarizationSegment {
-        speaker: "S0".to_string(),
-        start: Seconds(0.0),
-        end: Seconds(3.0),
-    }];
+    let diar = DiarizationResult {
+        intervals: vec![DiarInterval {
+            speaker: "S0".to_string(),
+            start: Seconds(0.0),
+            end: Seconds(3.0),
+            confidence: Some(1.0),
+        }],
+    };
     let cfg = SegmentationConfig::default();
 
     let utts = phrase::segment(&asr, &diar, &cfg, None).expect("Single unit input must succeed");
@@ -445,16 +450,17 @@ fn test_single_unit_input() {
 #[test]
 fn test_invalid_timestamps_strictly_error() {
     let cfg = SegmentationConfig::default();
-    let diar = vec![DiarizationSegment {
-        speaker: "S0".to_string(),
-        start: Seconds::ZERO,
-        end: Seconds(10.0),
-    }];
+    let diar = DiarizationResult {
+        intervals: vec![DiarInterval {
+            speaker: "S0".to_string(),
+            start: Seconds::ZERO,
+            end: Seconds(10.0),
+            confidence: Some(1.0),
+        }],
+    };
 
     // 1. NaN в start
     let asr_nan_start = AsrResult {
-        text: "тест".to_string(),
-        language: Some("ru".to_string()),
         units: vec![AsrUnit {
             text: "тест".to_string(),
             start: Seconds(f64::NAN),
@@ -463,16 +469,16 @@ fn test_invalid_timestamps_strictly_error() {
             is_whisper_boundary: false,
             can_split_after: true,
         }],
+        raw_segments: Vec::new(),
+        language: Some("ru".to_string()),
     };
     assert!(matches!(
         phrase::segment(&asr_nan_start, &diar, &cfg, None),
-        Err(SegmentationError::InvalidTimestamps)
+        Err(SegmentationError::InvalidTimestamps(_))
     ));
 
     // 2. NaN в end
     let asr_nan_end = AsrResult {
-        text: "тест".to_string(),
-        language: Some("ru".to_string()),
         units: vec![AsrUnit {
             text: "тест".to_string(),
             start: Seconds(1.0),
@@ -481,16 +487,16 @@ fn test_invalid_timestamps_strictly_error() {
             is_whisper_boundary: false,
             can_split_after: true,
         }],
+        raw_segments: Vec::new(),
+        language: Some("ru".to_string()),
     };
     assert!(matches!(
         phrase::segment(&asr_nan_end, &diar, &cfg, None),
-        Err(SegmentationError::InvalidTimestamps)
+        Err(SegmentationError::InvalidTimestamps(_))
     ));
 
     // 3. +INFINITY
     let asr_inf = AsrResult {
-        text: "тест".to_string(),
-        language: Some("ru".to_string()),
         units: vec![AsrUnit {
             text: "тест".to_string(),
             start: Seconds(f64::INFINITY),
@@ -499,16 +505,16 @@ fn test_invalid_timestamps_strictly_error() {
             is_whisper_boundary: false,
             can_split_after: true,
         }],
+        raw_segments: Vec::new(),
+        language: Some("ru".to_string()),
     };
     assert!(matches!(
         phrase::segment(&asr_inf, &diar, &cfg, None),
-        Err(SegmentationError::InvalidTimestamps)
+        Err(SegmentationError::InvalidTimestamps(_))
     ));
 
     // 4. -INFINITY
     let asr_neg_inf = AsrResult {
-        text: "тест".to_string(),
-        language: Some("ru".to_string()),
         units: vec![AsrUnit {
             text: "тест".to_string(),
             start: Seconds(1.0),
@@ -517,16 +523,16 @@ fn test_invalid_timestamps_strictly_error() {
             is_whisper_boundary: false,
             can_split_after: true,
         }],
+        raw_segments: Vec::new(),
+        language: Some("ru".to_string()),
     };
     assert!(matches!(
         phrase::segment(&asr_neg_inf, &diar, &cfg, None),
-        Err(SegmentationError::InvalidTimestamps)
+        Err(SegmentationError::InvalidTimestamps(_))
     ));
 
     // 5. Отрицательный start
     let asr_neg_start = AsrResult {
-        text: "тест".to_string(),
-        language: Some("ru".to_string()),
         units: vec![AsrUnit {
             text: "тест".to_string(),
             start: Seconds(-0.5),
@@ -535,16 +541,16 @@ fn test_invalid_timestamps_strictly_error() {
             is_whisper_boundary: false,
             can_split_after: true,
         }],
+        raw_segments: Vec::new(),
+        language: Some("ru".to_string()),
     };
     assert!(matches!(
         phrase::segment(&asr_neg_start, &diar, &cfg, None),
-        Err(SegmentationError::InvalidTimestamps)
+        Err(SegmentationError::InvalidTimestamps(_))
     ));
 
     // 6. Отрицательный end
     let asr_neg_end = AsrResult {
-        text: "тест".to_string(),
-        language: Some("ru".to_string()),
         units: vec![AsrUnit {
             text: "тест".to_string(),
             start: Seconds(0.0),
@@ -553,9 +559,11 @@ fn test_invalid_timestamps_strictly_error() {
             is_whisper_boundary: false,
             can_split_after: true,
         }],
+        raw_segments: Vec::new(),
+        language: Some("ru".to_string()),
     };
     assert!(matches!(
         phrase::segment(&asr_neg_end, &diar, &cfg, None),
-        Err(SegmentationError::InvalidTimestamps)
+        Err(SegmentationError::InvalidTimestamps(_))
     ));
 }
