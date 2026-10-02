@@ -120,6 +120,33 @@ impl DiarIndex {
             .or_else(|| self.nearest(start, end))
             .unwrap_or(0)
     }
+
+    /// Найти акустический конец реплики спикера, охватывающей `start`.
+    /// Если спикер говорит несколькими turn'ами подряд (с паузами < 0.6с), находит конец всей цепочки.
+    pub fn active_turn_end(&self, start: f64, speaker: i32) -> Option<f64> {
+        if self.turns.is_empty() {
+            return None;
+        }
+        let from = self.first_candidate((start - 0.5).max(0.0));
+        let mut cur_end: Option<f64> = None;
+        for t in &self.turns[from..] {
+            if t.speaker != speaker {
+                continue;
+            }
+            if let Some(end) = cur_end {
+                // Если цепочка реплик этого спикера продолжается с небольшим зазором (до 0.6с)
+                if t.start <= end + 0.6 {
+                    cur_end = Some(end.max(t.end));
+                    continue;
+                } else if t.start > end + 0.6 {
+                    break;
+                }
+            } else if t.start <= start + 0.5 && t.end >= (start - 0.3).max(0.0) {
+                cur_end = Some(t.end);
+            }
+        }
+        cur_end
+    }
 }
 
 /// Удобный свободный вызов: спикер для одной реплики по срезу turn'ов (строит временный индекс).
@@ -211,5 +238,14 @@ mod tests {
         let turns = vec![t(0.0, 1.0, 0), t(1.0, 2.0, 0), t(50.0, 60.0, 1)];
         let idx = DiarIndex::new(&turns);
         assert_eq!(idx.assign(52.0, 58.0), 1);
+    }
+
+    #[test]
+    fn active_turn_end_finds_correct_boundary() {
+        let turns = vec![t(13.4, 15.3, 0), t(15.5, 15.8, 0), t(24.9, 27.0, 1)];
+        let idx = DiarIndex::new(&turns);
+        assert_eq!(idx.active_turn_end(13.5, 0), Some(15.8));
+        assert_eq!(idx.active_turn_end(24.9, 1), Some(27.0));
+        assert_eq!(idx.active_turn_end(18.0, 0), None);
     }
 }

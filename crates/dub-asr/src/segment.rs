@@ -46,19 +46,78 @@ pub struct Segment {
     pub speaker: Option<String>,
 }
 
-fn ends_sentence(word: &str) -> bool {
-    let trimmed = word.trim_end_matches(|c: char| {
-        c.is_whitespace()
-            || c == '"'
-            || c == '\''
-            || c == '»'
-            || c == '”'
-            || c == '’'
-            || c == ')'
-            || c == ']'
-            || c == '}'
-    });
-    trimmed.ends_with(['.', '!', '?', '…', '。', '！', '？', '؟', '۔']) || trimmed.ends_with("...")
+/// Сокращения, за которыми фраза всегда продолжается (титул перед именем, «т.е.», «z.B.»). Нижний регистр, с точкой.
+pub const PREFIX_ABBREVIATIONS: &[&str] = &[
+    // en
+    "mr.", "mrs.", "ms.", "dr.", "st.", "sr.", "prof.", "vs.", "e.g.", "i.e.",
+    // ru
+    "т.е.", "ул.",
+    // de
+    "z.b.", "bzw.", "hr.", "fr.",
+    // fr
+    "mme.",
+    // es, pt
+    "sra.", "dra.", "srta.",
+];
+
+/// Сокращения, которыми предложение может и закончиться («… и т.д.», «at 5 p.m.»): конец предложения
+/// только перед словом с заглавной буквы или в конце потока.
+pub const TERMINAL_ABBREVIATIONS: &[&str] = &[
+    // en
+    "etc.", "a.m.", "p.m.", "jr.", "no.",
+    // ru
+    "т.д.", "т.п.", "г.", "гг.", "им.", "др.", "стр.", "рис.", "см.",
+    // de
+    "u.a.", "usw.", "nr.",
+];
+
+/// Открывающие кавычки и скобки перед словом.
+const OPENING: &[char] = &['"', '\'', '«', '„', '“', '‘', '(', '[', '{', '¿', '¡'];
+
+/// Закрывающие кавычки и скобки после слова.
+const CLOSING: &[char] = &['"', '\'', '»', '”', '’', ')', ']', '}'];
+
+/// Одна заглавная буква с точкой — инициал («J.», «А.»). «I.» — английское местоимение в конце фразы.
+fn is_initial(core: &str) -> bool {
+    let mut chars = core.chars();
+    matches!((chars.next(), chars.next(), chars.next()), (Some(c), Some('.'), None) if c.is_uppercase() && c != 'I')
+}
+
+/// Буквы через точку, не меньше двух: «U.S.», «a.m.».
+fn is_dotted_letters(core: &str) -> bool {
+    let chars: Vec<char> = core.chars().collect();
+    chars.len() >= 4
+        && chars.len() % 2 == 0
+        && chars.iter().enumerate().all(|(i, c)| if i % 2 == 0 { c.is_alphabetic() } else { *c == '.' })
+}
+
+/// Кончается ли на слове `word` предложение; `next` — следующее слово потока (None если слово последнее).
+pub fn ends_sentence(word: &str, next: Option<&str>) -> bool {
+    let trimmed = word.trim_end().trim_end_matches(|c: char| CLOSING.contains(&c));
+    if !trimmed.ends_with(['.', '!', '?', '…', '。', '！', '？', '؟', '۔']) && !trimmed.ends_with("...") {
+        return false;
+    }
+    // Восклицательный/вопросительный знаки, многоточие или специальные символы всегда завершают фразу
+    if !trimmed.ends_with('.') || trimmed.ends_with("..") {
+        return true;
+    }
+    let core = trimmed.trim_start_matches(OPENING);
+    let lower = core.to_lowercase();
+    let next_first = next.and_then(|n| n.trim_start_matches(OPENING).chars().next());
+    let next_capital = next_first.map_or(true, char::is_uppercase);
+    let next_digit = next_first.map_or(false, |c| c.is_ascii_digit());
+
+    if PREFIX_ABBREVIATIONS.contains(&lower.as_str()) || is_initial(core) {
+        return false;
+    }
+    if TERMINAL_ABBREVIATIONS.contains(&lower.as_str()) || is_dotted_letters(core) {
+        return next_capital;
+    }
+    let before_dot = core.trim_end_matches('.').chars().last();
+    if before_dot.map_or(false, |c| c.is_ascii_digit()) && next_digit {
+        return false;
+    }
+    true
 }
 
 fn ends_clause(word: &str) -> bool {
@@ -96,7 +155,7 @@ pub fn segment_words(words: &[Word], max_gap: f64, max_dur: f64) -> Vec<Segment>
     let mut segs: Vec<Vec<Word>> = Vec::new();
     let mut cur: Vec<Word> = Vec::new();
 
-    for w in words {
+    for (i, w) in words.iter().enumerate() {
         if let (Some(last), Some(first)) = (cur.last(), cur.first()) {
             let gap = (w.start - last.end).max(0.0);
             let dur = (last.end - first.start).max(0.0);
@@ -116,7 +175,8 @@ pub fn segment_words(words: &[Word], max_gap: f64, max_dur: f64) -> Vec<Segment>
             }
         }
         cur.push(w.clone());
-        if ends_sentence(&w.word) {
+        let next_w = words.get(i + 1).map(|nw| nw.word.as_str());
+        if ends_sentence(&w.word, next_w) {
             segs.push(std::mem::take(&mut cur));
         }
     }
@@ -184,7 +244,7 @@ pub fn segment_words_with_diarization(
     let mut cur: Vec<Word> = Vec::new();
     let mut cur_spk = tagged[0].1;
 
-    for (w, spk) in tagged {
+    for (i, (w, spk)) in tagged.iter().enumerate() {
         if let (Some(last), Some(first)) = (cur.last(), cur.first()) {
             let gap = (w.start - last.end).max(0.0);
             let dur = (last.end - first.start).max(0.0);
@@ -195,7 +255,8 @@ pub fn segment_words_with_diarization(
             // 2. Смена спикера: разрешается ТОЛЬКО если есть пауза между словами (gap >= 0.20с) ИЛИ
             //    предыдущее слово завершило фразу/клаузу (.!? или ,;:). Слитная речь (gap < 0.20с)
             //    защищена от разрыва фразы («Shut the fuck up» не делится на «Shut» и «the fuck up»).
-            let is_speaker_change = spk != cur_spk && (gap >= 0.20 || ends_clause(&last.word) || ends_sentence(&last.word));
+            let next_last = Some(w.word.as_str());
+            let is_speaker_change = *spk != cur_spk && (gap >= 0.20 || ends_clause(&last.word) || ends_sentence(&last.word, next_last));
 
             // 3. Жёлтая зона (12–15с): мягкий разрыв по клаузе/VAD/паузе
             let is_soft_split = dur >= SEG_IDEAL_DUR
@@ -206,11 +267,12 @@ pub fn segment_words_with_diarization(
 
             if is_speaker_change || is_long_pause || is_soft_split || is_hard_limit {
                 raw_segs.push(std::mem::take(&mut cur));
-                cur_spk = spk;
+                cur_spk = *spk;
             }
         }
         cur.push(w.clone());
-        if ends_sentence(&w.word) {
+        let next_w = tagged.get(i + 1).map(|t| t.0.word.as_str());
+        if ends_sentence(&w.word, next_w) {
             raw_segs.push(std::mem::take(&mut cur));
         }
     }
@@ -222,10 +284,20 @@ pub fn segment_words_with_diarization(
     raw_segs
         .into_iter()
         .filter(|ws| !ws.is_empty())
-        .map(|ws| {
+        .map(|mut ws| {
             let start = ws.first().unwrap().start;
-            let end = ws.last().unwrap().end;
+            let mut end = ws.last().unwrap().end;
             let spk = diar_index.assign(start, end);
+            if let Some(turn_end) = diar_index.active_turn_end(start, spk) {
+                // Если конец фразы вылез далеко за границу реплики спикера в тишину (>0.25с)
+                if end > turn_end + 0.25 {
+                    end = (turn_end + 0.15).max(start + 0.10);
+                    // Синхронизируем конец последнего слова сегмента
+                    if let Some(last_w) = ws.last_mut() {
+                        last_w.end = last_w.end.min(end);
+                    }
+                }
+            }
             Segment {
                 start,
                 end,
@@ -359,5 +431,44 @@ mod tests {
         let segs = segment_words_with_diarization(&words, &turns, 0.8, 15.0);
         assert_eq!(segs.len(), 1, "Слитная фраза не должна рваться на полуслове");
         assert_eq!(segs[0].text, "Shut the fuck up.");
+    }
+
+    #[test]
+    fn abbreviations_and_initials_do_not_split() {
+        let words = vec![
+            w("Dr.", 0.0, 0.3),
+            w("Watson", 0.35, 0.8),
+            w("bought", 0.85, 1.2),
+            w("3.5", 1.25, 1.6),
+            w("apples.", 1.65, 2.1),
+        ];
+        let segs = segment_words(&words, 0.8, 15.0);
+        assert_eq!(segs.len(), 1, "Титул 'Dr.' и дробь '3.5' не должны дробить предложение: {segs:?}");
+        assert_eq!(segs[0].text, "Dr. Watson bought 3.5 apples.");
+
+        let words_ru = vec![
+            w("Это", 0.0, 0.3),
+            w("т.е.", 0.35, 0.7),
+            w("правда.", 0.75, 1.2),
+        ];
+        let segs_ru = segment_words(&words_ru, 0.8, 15.0);
+        assert_eq!(segs_ru.len(), 1, "Сокращение 'т.е.' не должно дробить: {segs_ru:?}");
+    }
+
+    #[test]
+    fn diarization_clamps_stretched_tail_to_speaker_turn() {
+        // Симулируем баг Parakeet: спикер 0 закончил говорить на 15.3с, но слово "There!" растянуто до 24.9с
+        let words = vec![
+            w("There!", 13.5, 24.9),
+        ];
+        let turns = vec![
+            Turn { start: 13.4, end: 15.3, speaker: 0 },
+            Turn { start: 24.9, end: 27.0, speaker: 1 },
+        ];
+        let segs = segment_words_with_diarization(&words, &turns, 0.8, 15.0);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].text, "There!");
+        assert!(segs[0].end <= 15.5, "Конец реплики должен быть притянут к turn.end (<=15.5с), факт: {}", segs[0].end);
+        assert!(segs[0].words[0].end <= 15.5, "Конец слова также должен быть ограничен, факт: {}", segs[0].words[0].end);
     }
 }

@@ -32,7 +32,7 @@ pub use window::{
 };
 
 use parakeet_rs::sortformer::{DiarizationConfig, Sortformer};
-use parakeet_rs::{ExecutionConfig, ParakeetTDT, TimestampMode, Transcriber};
+use parakeet_rs::{ExecutionConfig, ParakeetTDT, TimedToken, TimestampMode, Transcriber};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -73,8 +73,8 @@ fn exec_config() -> ExecutionConfig {
 }
 
 pub use segment::{
-    segment_words, segment_words_with_diarization, Segment, Word, SEG_IDEAL_DUR, SEG_MAX_DUR,
-    SEG_MAX_GAP,
+    ends_sentence, segment_words, segment_words_with_diarization, Segment, Word, SEG_IDEAL_DUR,
+    SEG_MAX_DUR, SEG_MAX_GAP,
 };
 
 /// Целевая частота parakeet-rs.
@@ -360,20 +360,13 @@ impl Asr {
                     let clip = audio_ref[a..b].to_vec();
                     match model.transcribe_samples(clip, sr_c, 1, Some(TimestampMode::Words)) {
                         Ok(r) => {
-                            let end_abs = |v: f64| v;
-                            let mut ws: Vec<Word> = r
-                                .tokens
-                                .into_iter()
-                                .map(|t| {
-                                    Word::new(
-                                        t.text.trim(),
-                                        end_abs(t.start as f64) + off,
-                                        (t.end as f64).max(t.start as f64) + off,
-                                    )
-                                })
-                                .filter(|w| !w.word.is_empty())
-                                .collect();
-                            ws.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+                            let clip_secs = (b - a) as f64 / sr_c as f64;
+                            let mut ws = words_from_tokens(r.tokens, 0.0, clip_secs);
+                            sanitize_parakeet_words(&mut ws, &audio_ref[a..b], sr_c);
+                            for word in &mut ws {
+                                word.start += off;
+                                word.end += off;
+                            }
                             res.lock().unwrap_or_else(|p| p.into_inner())[i] = Some((w_start, ws));
                         }
                         Err(_) => {
@@ -408,24 +401,10 @@ impl Asr {
         let res = model
             .transcribe_samples(audio.to_vec(), sr, 1, Some(TimestampMode::Words))
             .map_err(|e| AsrError::Parakeet(e.to_string()))?;
-        // parakeet-rs в режиме Words отдаёт .tokens уже как слова (text/start/end в секундах).
-        let audio_end = audio.len() as f64 / sr as f64;
-        Ok(res
-            .tokens
-            .into_iter()
-            .filter_map(|t| {
-                let word = t.text.trim();
-                if word.is_empty() {
-                    return None;
-                }
-                let start = t.start as f64;
-                let mut end = (t.end as f64).max(start);
-                if end <= start {
-                    end = audio_end.max(start);
-                }
-                Some(Word::new(word, start, end))
-            })
-            .collect())
+        let clip_secs = audio.len() as f64 / sr as f64;
+        let mut ws = words_from_tokens(res.tokens, 0.0, clip_secs);
+        sanitize_parakeet_words(&mut ws, audio, sr);
+        Ok(ws)
     }
 
     /// DIARIZE-FIRST: транскрибировать КАЖДУЮ реплику отдельно (один спикер на сегмент). Порт
@@ -462,6 +441,7 @@ impl Asr {
 }
 
 impl AsrEngine for Asr {
+    fn detected_language(&self) -> Option<String> { None }
     fn transcribe(&mut self, wav: &Path, lang: &str) -> Result<Vec<Segment>, AsrError> {
         Asr::transcribe(self, wav, lang)
     }
@@ -472,6 +452,11 @@ impl AsrEngine for Asr {
     fn transcribe_words(&mut self, wav: &Path, _lang: &str) -> Result<Vec<Word>, AsrError> {
         let (audio, sr) = load_wav_16k_mono(wav)?;
         self.transcribe_words_windowed(&audio, sr, None)
+    }
+    fn transcribe_with_diar(&mut self, wav: &Path, turns: &[Turn], _lang: &str) -> Result<Vec<Segment>, AsrError> {
+        let (audio, sr) = load_wav_16k_mono(wav)?;
+        let words = self.transcribe_words_windowed(&audio, sr, None)?;
+        Ok(segment_words_with_diarization(&words, turns, SEG_MAX_GAP, SEG_MAX_DUR))
     }
 }
 
@@ -719,6 +704,225 @@ pub fn postprocess_diar_turns(
     DiarTurns { turns: out, n_speakers: labels.len(), ref_windows: rw }
 }
 
+/// Шаг энкодера Parakeet TDT (8 × 160 семплов / 16000 = 80 мс).
+pub const TDT_FRAME_SECS: f64 = 0.08;
+
+/// Проверить, состоит ли токен целиком из закрывающей пунктуации.
+fn is_closing_punct(s: &str) -> bool {
+    let t = s.trim();
+    !t.is_empty()
+        && t.chars().all(|c| {
+            matches!(
+                c,
+                '.' | ','
+                    | '!'
+                    | '?'
+                    | ';'
+                    | ':'
+                    | '…'
+                    | ')'
+                    | ']'
+                    | '}'
+                    | '"'
+                    | '\''
+                    | '”'
+                    | '’'
+                    | '»'
+                    | '—'
+                    | '-'
+                    | '。'
+                    | '！'
+                    | '？'
+                    | '؟'
+                    | '۔'
+            )
+        })
+}
+
+/// Проверить, состоит ли токен целиком из открывающей пунктуации.
+fn is_opening_punct(s: &str) -> bool {
+    let t = s.trim();
+    !t.is_empty()
+        && t.chars().all(|c| {
+            matches!(c, '(' | '[' | '{' | '«' | '“' | '‘' | '¿' | '¡')
+        })
+}
+
+/// Проверить, является ли токен склеенным продолжением предыдущего слова (цифра после точки, суффикс после апострофа и т.д.).
+fn is_glued_tail(prev: &str, cur: &str) -> bool {
+    if prev.is_empty() || cur.is_empty() {
+        return false;
+    }
+    // Дроби: "3." + "5" -> "3.5"
+    if prev.ends_with('.') && prev.chars().rev().nth(1).map_or(false, |c| c.is_ascii_digit()) && cur.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    // Сокращения через точку: "e." + "g." -> "e.g."
+    if prev.ends_with('.') && (cur.ends_with('.') || cur.chars().all(|c| c.is_alphabetic())) && prev.len() <= 3 && cur.len() <= 3 {
+        return true;
+    }
+    // Апострофы: "don'" + "t" -> "don't"
+    if prev.ends_with('\'') || prev.ends_with('’') {
+        return true;
+    }
+    false
+}
+
+/// Сборка слов из потока сырых токенов Parakeet с защитой от раздувания таймингов (Level 1 & 2).
+///
+/// parakeet-rs выставляет `token[i].end = token[i+1].start`, из-за чего знаки препинания и слова
+/// перед паузами получают колоссальный `end` (вплоть до начала следующей реплики через 10с).
+/// Здесь:
+/// 1. Закрывающие знаки препинания приклеиваются к предыдущему слову БЕЗ раздувания его `end`.
+/// 2. Открывающие знаки накапливаются и прикрепляются к началу следующего слова БЕЗ сдвига его `start`.
+/// 3. Склеенные суффиксы ("3." + "5", "e." + "g.") восстанавливаются в одно слово.
+/// 4. Токены с `end <= start` получают честный шаг энкодера (0.08с), а НЕ `audio_end` всего файла.
+pub fn words_from_tokens(tokens: Vec<TimedToken>, offset: f64, clip_secs: f64) -> Vec<Word> {
+    let mut words: Vec<Word> = Vec::with_capacity(tokens.len());
+    let mut pending_prefix = String::new();
+
+    for t in tokens {
+        let text = t.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+
+        let start = (t.start as f64).clamp(0.0, clip_secs);
+        let mut end = (t.end as f64).max(start);
+        if end <= start {
+            // Исправление бага: вместо audio_end всего файла используем честный шаг TDT-фрейма
+            end = (start + TDT_FRAME_SECS).min(clip_secs).max(start);
+        } else if end > clip_secs {
+            end = clip_secs.max(start);
+        }
+
+        // Если токен — открывающая пунктуация («, (, [), сохраняем как префикс для следующего слова
+        if is_opening_punct(text) {
+            pending_prefix.push_str(text);
+            continue;
+        }
+
+        // Если токен — закрывающая пунктуация (., !, ?, etc.)
+        if is_closing_punct(text) {
+            if let Some(prev) = words.last_mut() {
+                // Прикрепляем пунктуацию к предыдущему слову, НО НЕ расширяем prev.end до раздутого end знака!
+                prev.word.push_str(text);
+                let abs_start = start + offset;
+                if abs_start > prev.end && (abs_start - prev.end) < 0.15 {
+                    prev.end = abs_start;
+                }
+            } else {
+                let w = Word::new(format!("{pending_prefix}{text}"), start + offset, end + offset);
+                pending_prefix.clear();
+                words.push(w);
+            }
+            continue;
+        }
+
+        // Проверяем, является ли токен склеенным суффиксом к предыдущему слову
+        if let Some(prev) = words.last_mut() {
+            if is_glued_tail(&prev.word, text) {
+                prev.word.push_str(text);
+                prev.end = prev.end.max(end + offset);
+                continue;
+            }
+        }
+
+        // Обычное слово
+        let full_word = if pending_prefix.is_empty() {
+            text.to_string()
+        } else {
+            let combined = format!("{pending_prefix}{text}");
+            pending_prefix.clear();
+            combined
+        };
+
+        words.push(Word::new(full_word, start + offset, end + offset));
+    }
+
+    words
+}
+
+/// Санация слов Parakeet по огибающей вокала (Level 3 VAD-Guard).
+///
+/// Модель Parakeet TDT не различает паузы и растягивает конец слова до момента начала следующего слова.
+/// Если длительность слова аномально велика для его длины, мы инспектируем RMS-энергию аудио в интервале
+/// [start, end] и срезаем end в точке реального затухания речи.
+pub fn sanitize_parakeet_words(words: &mut [Word], audio: &[f32], sr: u32) {
+    if words.is_empty() || audio.is_empty() || sr == 0 {
+        return;
+    }
+
+    let total_secs = audio.len() as f64 / sr as f64;
+    let frame_step_secs = 0.02; // 20мс шаг анализа
+    let frame_len = ((frame_step_secs * sr as f64).round() as usize).max(1);
+
+    for i in 0..words.len() {
+        let w_start = words[i].start;
+        let w_end = words[i].end;
+        let dur = w_end - w_start;
+
+        let char_count = words[i].word.chars().filter(|c| c.is_alphanumeric()).count().max(1);
+        let max_plausible = (0.12 * char_count as f64 + 0.45).clamp(0.60, 2.50);
+
+        if dur <= max_plausible {
+            continue;
+        }
+
+        let s_idx = ((w_start * sr as f64).round() as usize).min(audio.len());
+        let e_idx = ((w_end * sr as f64).round() as usize).min(audio.len());
+        if e_idx <= s_idx {
+            continue;
+        }
+
+        let slice = &audio[s_idx..e_idx];
+        let n_frames = slice.len() / frame_len;
+        if n_frames < 3 {
+            continue;
+        }
+
+        let mut energies = Vec::with_capacity(n_frames);
+        for f in 0..n_frames {
+            let a = f * frame_len;
+            let b = (a + frame_len).min(slice.len());
+            let sum_sq: f64 = slice[a..b].iter().map(|&x| (x as f64) * (x as f64)).sum();
+            energies.push((sum_sq / (b - a) as f64).sqrt() as f32);
+        }
+
+        let speech_frames = ((max_plausible / frame_step_secs).round() as usize).min(n_frames).max(1);
+        let peak_speech = energies[0..speech_frames]
+            .iter()
+            .copied()
+            .fold(0.0f32, f32::max);
+
+        if peak_speech < 1e-4 {
+            words[i].end = (w_start + max_plausible).min(total_secs).max(w_start + 0.10);
+            continue;
+        }
+
+        let silence_thresh = (peak_speech * 0.10).max(1e-4);
+        let min_speech_frames = ((0.15 / frame_step_secs).round() as usize).min(n_frames);
+        let hold_frames = 9; // 180мс тишины
+        let mut drop_frame = None;
+
+        for f in min_speech_frames..n_frames {
+            if energies[f] < silence_thresh {
+                let remaining = &energies[f..((f + hold_frames).min(n_frames))];
+                if remaining.iter().all(|&e| e < silence_thresh * 1.5) {
+                    drop_frame = Some(f);
+                    break;
+                }
+            }
+        }
+
+        if let Some(df) = drop_frame {
+            let drop_secs = w_start + (df as f64) * frame_step_secs;
+            let clamped_end = (drop_secs + 0.12).min(w_end).max(w_start + 0.15);
+            words[i].end = clamped_end.min(total_secs);
+        }
+    }
+}
+
 /// Нормализовать слово для сравнения на шве: lowercase + снять КОНЕЧНУЮ пунктуацию (.,!?…;:).
 /// Это чинит баг дедупа: ASR на границе окна отдаёт то же слово с разной пунктуацией ("fox" vs
 /// "fox,") — по сырому lowercased-тексту это «разные» слова, дубль просачивался. Ведущую пунктуацию
@@ -946,5 +1150,72 @@ mod dedup_tests {
         // внутрисловные апострофы/дефисы НЕ трогаем (различают настоящие слова)
         assert_eq!(norm_word("don't"), "don't");
         assert_eq!(norm_word("well-known"), "well-known");
+    }
+
+    fn tok(text: &str, start: f32, end: f32) -> TimedToken {
+        TimedToken {
+            text: text.to_string(),
+            start,
+            end,
+        }
+    }
+
+    #[test]
+    fn punctuation_joins_neighbour_words_without_stretching_end() {
+        let tokens = vec![
+            tok("There", 15.0, 15.2),
+            tok("!", 15.2, 24.8),
+            tok("Next", 24.8, 25.1),
+        ];
+        let words = words_from_tokens(tokens, 0.0, 30.0);
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].word, "There!");
+        assert_eq!(words[0].start, 15.0);
+        assert!(words[0].end <= 15.25, "Конец слова 'There!' не должен раздуваться: {}", words[0].end);
+        assert_eq!(words[1].word, "Next");
+        assert_eq!(words[1].start, 24.8);
+    }
+
+    #[test]
+    fn zero_duration_word_bounded_by_frame_step() {
+        let tokens = vec![
+            tok("hello", 2.0, 2.0),
+        ];
+        let words = words_from_tokens(tokens, 0.0, 60.0);
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].start, 2.0);
+        assert!((words[0].end - (2.0 + TDT_FRAME_SECS)).abs() < 1e-4, "end должен быть 2.08, факт: {}", words[0].end);
+    }
+
+    #[test]
+    fn glued_tail_and_prefixes_handled() {
+        let tokens = vec![
+            tok("«", 1.0, 1.05),
+            tok("hello", 1.05, 1.3),
+            tok("e.", 2.0, 2.2),
+            tok("g.", 2.2, 2.4),
+        ];
+        let words = words_from_tokens(tokens, 0.0, 10.0);
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].word, "«hello");
+        assert_eq!(words[1].word, "e.g.");
+        assert_eq!(words[1].end, 2.4);
+    }
+
+    #[test]
+    fn sanitize_parakeet_words_clamps_flat_silence_tail() {
+        let sr = 16000;
+        let mut audio = vec![0.0f32; sr * 3];
+        for i in 0..(sr * 4 / 10) {
+            audio[i] = (2.0 * std::f32::consts::PI * 440.0 * (i as f32 / sr as f32)).sin() * 0.5;
+        }
+
+        let mut words = vec![
+            w("Hi", 0.0, 2.8),
+        ];
+
+        sanitize_parakeet_words(&mut words, &audio, sr as u32);
+        assert!(words[0].end < 0.8, "Слово 'Hi' должно быть отрезано по концу звучания (<0.8с), факт: {}", words[0].end);
+        assert!(words[0].end >= 0.4, "Слово не должно быть отрезано раньше звучания (>=0.4с), факт: {}", words[0].end);
     }
 }

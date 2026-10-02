@@ -472,21 +472,11 @@ impl WindowPlan {
     }
 }
 
-/// Слить короткие огрызки ОДНОГО спикера в одну фразу (#115). Whisper дробит предложение на «If» +
-/// «they find you.» — каждый огрызок озвучивается отдельно и звучит рвано. Клеим сосед в предыдущий,
-fn ends_sentence_text(text: &str) -> bool {
-    let trimmed = text.trim_end_matches(|c: char| {
-        c.is_whitespace()
-            || c == '"'
-            || c == '\''
-            || c == '»'
-            || c == '”'
-            || c == '’'
-            || c == ')'
-            || c == ']'
-            || c == '}'
-    });
-    trimmed.ends_with(['.', '!', '?', '…', '。', '！', '？', '؟', '۔']) || trimmed.ends_with("...")
+/// Проверить, завершено ли предложение в конце текста с учетом словарей сокращений dub-asr.
+fn ends_sentence_text(text: &str, next_text: Option<&str>) -> bool {
+    let last_word = text.split_whitespace().last().unwrap_or("");
+    let first_next = next_text.and_then(|t| t.split_whitespace().next());
+    dub_asr::ends_sentence(last_word, first_next)
 }
 
 /// Слить короткие огрызки ОДНОГО спикера в одну фразу (#115). Whisper дробит предложение на «If» +
@@ -514,7 +504,7 @@ fn merge_short_turns(segs: &mut Vec<Segment>) {
             let short = (last.end - last.start) < SHORT || (s.end - s.start) < SHORT;
             let dur_ok = (s.end - last.start) <= MAX_DUR;
             let ch_ok = last.src_text.chars().count() + s.src_text.chars().count() < MAX_CH;
-            let last_finished = ends_sentence_text(&last.src_text);
+            let last_finished = ends_sentence_text(&last.src_text, Some(&s.src_text));
             // Если предыдущее предложение уже грамматически завершено точкой, склеиваем лишь при плотном примыкании микро-осколка
             let can_merge = if last_finished {
                 gap > -OVERLAP && gap < 0.12 && ((last.end - last.start) < 0.8 || (s.end - s.start) < 0.8)
