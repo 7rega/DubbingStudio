@@ -6,16 +6,19 @@
 //! метрики глифов (замена PIL) — font. Строки ASS формируются один-в-один с питоном.
 
 mod ass;
-mod burn;
+pub mod burn;
 mod font;
 mod look;
+mod pages;
 mod timing_qc;
 mod types;
+mod word_align;
 
 pub use burn::{burn, burn_frame};
 pub use look::lum;
 pub use look::{DEFAULT_PRESET, DEFAULT_TEMPLATE, FRESH_DEFAULT, FONT_NAME};
-pub use types::{BlurBox, Sub, SubStyle, Title};
+pub use pages::{MAX_EVENT_SECS, MAX_LINE_CHARS, MIN_EVENT_SECS};
+pub use types::{BlurBox, Secondary, Sub, SubStyle, Title};
 
 // Индустриальные правила субтитров (#86) — опциональный timing-QC пасс (RulesProfile/CalcLength/
 // балансный перенос/нормализаторы длительности). Чистые pure-fn, движки не трогают.
@@ -56,6 +59,8 @@ pub struct BuildArgs<'a> {
     pub caption_reveal: Option<&'a str>,
     pub caption_font: Option<&'a str>,
     pub sub_px: Option<i64>,
+    /// Вид второй строки двуязычных субтитров (`Sub::secondary`); None — вторые строки не рисуются.
+    pub secondary: Option<&'a Secondary>,
 }
 
 /// Установить каталог bundled-шрифтов (для измерения + fontsdir libass). Вызывать до build/burn.
@@ -96,11 +101,163 @@ pub fn presets_catalog() -> (serde_json::Map<String, serde_json::Value>, Vec<Str
     (presets, reveals)
 }
 
+/// Субтитр к раскладке: время, экранированный текст основной и второй строки, y строки, услышанные слова.
+struct Vis<'a> {
+    st: f64,
+    en: f64,
+    text: String,
+    y: Option<i64>,
+    words: Option<&'a [(String, f64, f64)]>,
+    secondary: Option<String>,
+}
+
+/// Поле непрозрачной плашки S-стиля вокруг текста (Outline при BorderStyle=3), px.
+const PLATE_PAD: f64 = 11.0;
+
+/// Вторая строка двуязычных субтитров, разрешённая под кадр: кегль, перенос, цвет и прозрачность.
+struct SecondLook {
+    fs: i64,
+    max_chars: usize,
+    below: bool,
+    color: Option<String>,
+    /// Непрозрачность текста (`\alpha`); пусто — как у основной строки.
+    alpha: String,
+    /// Теги текста стилем S2 вне лука: свой цвет и непрозрачность.
+    tags: String,
+}
+
+impl SecondLook {
+    /// `plate_opaque` — S-стиль рисует непрозрачную плашку (BorderStyle=3): её несёт обводка события, и
+    /// непрозрачность второй строки тогда задаётся только заливке текста (`\1a`), плашка остаётся плотной.
+    fn new(s: &Secondary, fs: i64, width: i64, plate_opaque: bool) -> Self {
+        let max_chars = (((width as f64 / (fs as f64 * 0.52)) as i64).max(10) as usize).min(pages::MAX_LINE_CHARS);
+        let alpha_of = |tag: &str| match s.opacity {
+            Some(o) => format!("\\{tag}&H{:02X}&", ((100 - o.clamp(0, 100)) * 255 + 50) / 100),
+            None => String::new(),
+        };
+        let alpha = alpha_of("alpha");
+        let s_alpha = if plate_opaque { alpha_of("1a") } else { alpha.clone() };
+        let tags = match &s.color {
+            Some(c) => format!("\\1c{}{s_alpha}", look::c6(&look::hex_ass(c))),
+            None => s_alpha,
+        };
+        SecondLook { fs, max_chars, below: s.below, color: s.color.clone(), alpha, tags }
+    }
+
+    /// Лук второй строки в луке основной: тот же шрифт, плашка и обводка, текст целиком без пословной
+    /// подсветки, цвет текста — свой, если задан.
+    fn look_of(&self, lk: &look::ResolvedLook) -> look::ResolvedLook {
+        let mut l = lk.clone();
+        l.reveal = "whole".to_string();
+        if let Some(c) = &self.color {
+            l.base = look::c6(&look::hex_ass(c));
+            l.base_lum = look::lum(c);
+        }
+        l
+    }
+}
+
+/// Строки второй строки одного экрана, ужатые под ширину кадра, и их ink-геометрия.
+struct SecondBlock {
+    lines: Vec<String>,
+    fs: i64,
+    iw: f32,
+    tr: f32,
+    br: f32,
+}
+
+impl SecondBlock {
+    fn fit(lines: &[String], fs: i64, font_path: &Path, width: i64) -> Self {
+        let mut fs2 = fs;
+        let (mut iw, mut tr, mut br) = font::text_geom(lines, fs2, font_path);
+        while iw > width as f32 * 0.92 && fs2 > 16 {
+            fs2 = ((fs2 as f32 * 0.94) as i64).max(16);
+            let g = font::text_geom(lines, fs2, font_path);
+            iw = g.0;
+            tr = g.1;
+            br = g.2;
+        }
+        SecondBlock { lines: lines.to_vec(), fs: fs2, iw, tr, br }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit(&self, out: &mut Vec<String>, second: &SecondLook, a: f64, b: f64, cx: i64, cy: i64, subdir_tag: &str) {
+        let fs = if self.fs != second.fs { format!("\\fs{}", self.fs) } else { String::new() };
+        out.push(format!(
+            "Dialogue: 1,{},{},S2,,0,0,0,,{{\\an5\\pos({cx},{cy}){fs}{}}}{subdir_tag}{}",
+            ass::ts(a),
+            ass::ts(b),
+            second.tags,
+            self.lines.join("\\N")
+        ));
+    }
+}
+
+/// Центры основного и второго блока (y и края блоков — относительно их центров): основной на `y`,
+/// второй вплотную под ним (`below`) или над ним через `gap`; пара сдвигается целиком, чтобы не выйти
+/// за 4 % от краёв кадра.
+fn stack(y: f64, prim: (f64, f64), sec: (f64, f64), gap: f64, below: bool, height: f64) -> (f64, f64) {
+    let ys = if below { y + prim.1 + gap - sec.0 } else { y + prim.0 - gap - sec.1 };
+    let top = (y + prim.0).min(ys + sec.0);
+    let bottom = (y + prim.1).max(ys + sec.1);
+    let (lo, hi) = (height * 0.04, height * 0.96);
+    let shift = if bottom > hi {
+        hi - bottom
+    } else if top < lo {
+        lo - top
+    } else {
+        0.0
+    };
+    (y + shift, ys + shift)
+}
+
+/// Крышка цвета плоской сцены под строкой (KP, Layer 0) — порт cover_c-плашки captions.py.
+#[allow(clippy::too_many_arguments)]
+fn scene_plate(a: f64, b: f64, color: &str, width: i64, y: i64, iw: f32, tr: f32, br: f32, fs: i64) -> String {
+    let padx = (fs as f32 * 0.5) as i64;
+    let pady = (fs as f32 * 0.6) as i64;
+    let x0 = ((width / 2) as f32 - iw / 2.0 - padx as f32).max(6.0) as i64;
+    let x1 = ((width / 2) as f32 + iw / 2.0 + padx as f32).min(width as f32 - 6.0) as i64;
+    let y0 = (y as f32 + tr - pady as f32) as i64;
+    let y1 = (y as f32 + br + pady as f32) as i64;
+    let rr = (((y1 - y0) as f64 * 0.14) as i64).max(4);
+    format!(
+        "Dialogue: 0,{},{},KP,,0,0,0,,{{\\an7\\pos(0,0)\\1c{}\\bord0\\shad0\\p1}}{}",
+        ass::ts(a),
+        ass::ts(b),
+        look::c6(&look::hex_ass(color)),
+        ass::round_rect(x0 as f64, y0 as f64, x1 as f64, y1 as f64, rr as f64)
+    )
+}
+
+/// Блюр-подложка ровно по габариту нарисованного текста.
+#[allow(clippy::too_many_arguments)]
+fn text_cover(a: f64, b: f64, width: i64, height: i64, y: i64, iw: f32, tr: f32, br: f32, fs: i64) -> Option<SubCover> {
+    let padx = (fs as f32 * 0.34) as i64;
+    let pady = (fs as f32 * 0.30) as i64;
+    let x0 = (((width / 2) as f32) - iw / 2.0 - padx as f32).max(2.0) as i64;
+    let x1 = (((width / 2) as f32) + iw / 2.0 + padx as f32).min(width as f32 - 2.0) as i64;
+    let y0 = (((y as f32) + tr - pady as f32).max(0.0)) as i64;
+    let y1 = (((y as f32) + br + pady as f32).min(height as f32)) as i64;
+    (x1 > x0 && y1 > y0).then_some(SubCover { x: x0, y: y0, w: x1 - x0, h: y1 - y0, t0: a, t1: b })
+}
+
+/// Подсвечивает ли выбранный лук слова по одному (karaoke/highlight/word/pop). Тогда рендеру нужны
+/// пословные тайминги речи (`Sub::words`); при «whole» строка показывается целиком и они не нужны.
+pub fn word_timed_reveal(
+    caption_style: Option<&str>,
+    plate: Option<&str>,
+    reveal: Option<&str>,
+    font: Option<&str>,
+) -> bool {
+    look::resolve_look(caption_style, plate, reveal, font, None).is_some_and(|l| l.reveal != "whole")
+}
+
 /// Собрать ОДИН ASS с титрами + дублированными субтитрами и записать в out_ass. Порт captions.build.
 /// Возвращает габариты подложек под нашими субтитрами (для блюр-подложки на рендере; пусто, если стиль
 /// сам даёт непрозрачную плашку или сцена плоская с cover-крышкой).
 pub fn build(width: i64, height: i64, out_ass: &Path, mut args: BuildArgs) -> Result<Vec<SubCover>, String> {
-    if args.max_lines <= 0 {
+    if args.max_lines == 0 {
         args.max_lines = 2;
     }
     let mut max_lines = args.max_lines;
@@ -193,8 +350,24 @@ pub fn build(width: i64, height: i64, out_ass: &Path, mut args: BuildArgs) -> Re
     };
     let subdir_tag = if subdir.is_empty() { String::new() } else { format!("{{{subdir}}}") };
 
-    // head (Script Info + V4+ Styles: T/S/KP/KT).
-    let head = build_head(width, height, &s_style, sub_fs, &p);
+    let look_resolved = look::resolve_look(
+        args.caption_style,
+        args.caption_plate,
+        args.caption_reveal,
+        args.caption_font,
+        sub_style.map(|s| s.color.as_str()),
+    );
+
+    // Вторая строка двуязычных субтитров, кегль size_pct % от основного. Стиль S2 — производная основной:
+    // в луке — как KT шрифтом лука (плашку и цвета несут теги события), иначе — S этим кеглем.
+    let sec_fs = args.secondary.map(|s| (sub_fs * s.size_pct.clamp(20, 100) / 100).max(16));
+    let s2_style = sec_fs.map(|fs| match &look_resolved {
+        Some(lk) => kt_style("S2", &lk.font, fs, ((fs as f64 * 0.11).round() as i64).max(2)),
+        None => build_s_style(&fontname, fs, margin_v, sub_style, &p).0.replacen("Style: S,", "Style: S2,", 1),
+    });
+
+    // head (Script Info + V4+ Styles: T/S/[S2]/KP/KT).
+    let head = build_head(width, height, &s_style, s2_style.as_deref(), sub_fs, &p);
     let mut lines: Vec<String> = vec![head];
 
     // 1) титры localized in place.
@@ -211,24 +384,23 @@ pub fn build(width: i64, height: i64, out_ass: &Path, mut args: BuildArgs) -> Re
         (y.max(height as f64 * 0.04))
             .min(height as f64 - block_half - height as f64 * 0.04) as i64
     };
-    let max_chars = ((width as f64 / (sub_fs as f64 * 0.52)) as i64).max(10) as usize;
+    let max_chars = (((width as f64 / (sub_fs as f64 * 0.52)) as i64).max(10) as usize).min(pages::MAX_LINE_CHARS);
 
-    // vis: отсортированные по start, непустой tgt.
-    let mut vis: Vec<(f64, f64, String, Option<i64>)> = args
+    // vis: отсортированные по start, непустой текст основной строки.
+    let mut vis: Vec<Vis> = args
         .subs
         .iter()
-        .map(|s| (s.start, s.end, ass::esc(s.tgt.trim()).trim().to_string(), s.y))
+        .map(|s| Vis {
+            st: s.start,
+            en: s.end,
+            text: ass::esc(s.tgt.trim()).trim().to_string(),
+            y: s.y,
+            words: s.words.as_deref(),
+            secondary: s.secondary.as_deref().map(|t| ass::esc(t.trim()).trim().to_string()).filter(|t| !t.is_empty()),
+        })
         .collect();
-    vis.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    vis.retain(|v| !v.2.is_empty());
-
-    let look_resolved = look::resolve_look(
-        args.caption_style,
-        args.caption_plate,
-        args.caption_reveal,
-        args.caption_font,
-        sub_style.map(|s| s.color.as_str()),
-    );
+    vis.sort_by(|a, b| a.st.partial_cmp(&b.st).unwrap_or(std::cmp::Ordering::Equal));
+    vis.retain(|v| !v.text.is_empty());
 
     // cover_c (captions.py 583-589): невидимая крышка цвета сцены; глушится принудительной плашкой.
     let ss_scene = sub_style.and_then(|s| s.scene_color.clone());
@@ -259,48 +431,79 @@ pub fn build(width: i64, height: i64, out_ass: &Path, mut args: BuildArgs) -> Re
     let needs_cover = !plate_opaque && look_resolved.is_none() && cover_c.is_none();
     let mut covers: Vec<SubCover> = Vec::new();
 
+    let second = match (args.secondary, sec_fs) {
+        (Some(s), Some(fs)) => Some(SecondLook::new(s, fs, width, plate_opaque)),
+        _ => None,
+    };
+    let plate_pad = if plate_opaque { PLATE_PAD } else { 0.0 };
+    let pair_gap = sub_fs as f64 * 0.12;
+
     let n = vis.len();
     for idx in 0..n {
-        let st = vis[idx].0;
-        let mut en = vis[idx].1;
-        let sy = vis[idx].3;
-        let tgt = &vis[idx].2; // ссылка вместо клона всего кортежа (String клонируем лишь когда нужно)
+        let st = vis[idx].st;
+        let mut en = vis[idx].en;
         if idx + 1 < n {
-            en = en.min(vis[idx + 1].0); // не перекрывать следующий
+            en = en.min(vis[idx + 1].st); // не перекрывать следующий
         }
         if en - st < 0.08 {
             continue;
         }
-        let yy: Option<i64> = match (sy, args.sub_y) {
-            (Some(v), _) => Some(clampy(v as f64)),
-            (None, Some(v)) => Some(clampy(v as f64)),
+        let v = &vis[idx];
+        let yy: Option<i64> = match (v.y, args.sub_y) {
+            (Some(y), _) => Some(clampy(y as f64)),
+            (None, Some(y)) => Some(clampy(y as f64)),
             _ => None,
         };
-        let src_txt = if up { tgt.to_uppercase() } else { tgt.clone() };
-        let chunks = font::wrap_chars(&src_txt, max_chars);
-        // groups = chunks по max_lines
-        let mut groups: Vec<Vec<String>> = Vec::new();
-        let ml = max_lines as usize;
-        let mut i = 0;
-        while i < chunks.len() {
-            groups.push(chunks[i..(i + ml).min(chunks.len())].to_vec());
-            i += ml;
-        }
-        if groups.is_empty() {
-            groups.push(vec![tgt.clone()]);
-        }
-        let per = (en - st) / groups.len() as f64;
-        for (gi, g) in groups.iter().enumerate() {
-            let a = st + gi as f64 * per;
-            let b = if gi == groups.len() - 1 {
-                en
-            } else {
-                st + (gi as f64 + 1.0) * per
+        let src_txt = if up { v.text.to_uppercase() } else { v.text.clone() };
+        // Пословные тайминги по услышанным словам: экран сменяется, когда голос доходит до его первого
+        // слова. Без слов — экраны делят экранное время поровну.
+        let timed: Option<Vec<(f64, f64)>> = v.words.map(|heard| {
+            let tokens: Vec<&str> = src_txt.split_whitespace().collect();
+            word_align::align_words(&tokens, heard, st, en)
+        });
+        let screens = pages::plan(&src_txt, max_chars, max_lines as usize, st, en, timed.as_deref());
+        let second_lines: Option<Vec<Vec<String>>> = match (&second, &v.secondary) {
+            (Some(s2), Some(t)) => {
+                let t = if up { t.to_uppercase() } else { t.clone() };
+                Some(pages::share(&src_txt, &screens, &t, s2.max_chars, max_lines as usize))
+            }
+            _ => None,
+        };
+        for (pi, page) in screens.iter().enumerate() {
+            let (a, b) = (page.a, page.b);
+            if b - a < 0.02 {
+                continue;
+            }
+            let g = &page.lines;
+            let sec_lines = match (&second, second_lines.as_ref().map(|s| &s[pi])) {
+                (Some(s2), Some(l2)) if !l2.is_empty() => Some((s2, l2)),
+                _ => None,
             };
             if let Some(lk) = &look_resolved {
-                let cy = yy.unwrap_or((height - margin_v - sub_fs) as i64);
-                ass::emit_styled(&mut lines, lk, a, b, g, width / 2, cy, sub_fs, width, true);
+                let mut cy = yy.unwrap_or(height - margin_v - sub_fs);
+                let mut sec_at = None;
+                if let Some((s2, l2)) = sec_lines {
+                    let lk2 = s2.look_of(lk);
+                    let prim = ass::styled_extent(lk, g, sub_fs, width);
+                    let sec = ass::styled_extent(&lk2, l2, s2.fs, width);
+                    let (p, q) = stack(
+                        cy as f64,
+                        (prim.0 as f64, prim.1 as f64),
+                        (sec.0 as f64, sec.1 as f64),
+                        pair_gap,
+                        s2.below,
+                        height as f64,
+                    );
+                    cy = p.round() as i64;
+                    sec_at = Some((s2, lk2, l2, q.round() as i64));
+                }
+                let page_timed = timed.as_ref().and_then(|t| t.get(page.words.clone()));
+                ass::emit_styled(&mut lines, lk, a, b, g, page_timed, width / 2, cy, sub_fs, width, true);
+                if let Some((s2, lk2, l2, y2)) = sec_at {
+                    ass::emit_styled_line(&mut lines, &lk2, a, b, l2, width / 2, y2, s2.fs, width, true, "S2", &s2.alpha);
+                }
             } else {
+                let sec_page = sec_lines.map(|(s2, l2)| (s2, SecondBlock::fit(l2, s2.fs, &sub_fp, width)));
                 // match-original -> S-style. FIT: ужать шрифт если строка переполняет.
                 let mut fs_g = sub_fs;
                 let (mut iw, mut tr, mut br) = font::text_geom(g, fs_g, &sub_fp);
@@ -311,12 +514,26 @@ pub fn build(width: i64, height: i64, out_ass: &Path, mut args: BuildArgs) -> Re
                     tr = gg.1;
                     br = gg.2;
                 }
+                let mut yp = yy;
+                let mut sec_at: Option<(&SecondLook, SecondBlock, i64)> = None;
+                if let Some((s2, blk)) = sec_page {
+                    let (p, q) = stack(
+                        yy.unwrap_or(height - margin_v - sub_fs) as f64,
+                        (tr as f64 - plate_pad, br as f64 + plate_pad),
+                        (blk.tr as f64 - plate_pad, blk.br as f64 + plate_pad),
+                        pair_gap,
+                        s2.below,
+                        height as f64,
+                    );
+                    yp = Some(p.round() as i64);
+                    sec_at = Some((s2, blk, q.round() as i64));
+                }
                 let ovr = if fs_g != sub_fs {
                     format!("\\fs{fs_g}")
                 } else {
                     String::new()
                 };
-                let ptag = if let Some(y) = yy {
+                let ptag = if let Some(y) = yp {
                     format!("{{\\an5\\pos({},{}){}}}", width / 2, y, ovr)
                 } else if !ovr.is_empty() {
                     format!("{{{ovr}}}")
@@ -324,21 +541,8 @@ pub fn build(width: i64, height: i64, out_ass: &Path, mut args: BuildArgs) -> Re
                     String::new()
                 };
                 let body = g.join("\\N");
-                if let (Some(cc), Some(y)) = (&cover_c, yy) {
-                    let padx = (fs_g as f32 * 0.5) as i64;
-                    let pady = (fs_g as f32 * 0.6) as i64;
-                    let x0 = ((width / 2) as f32 - iw / 2.0 - padx as f32).max(6.0) as i64;
-                    let x1 = ((width / 2) as f32 + iw / 2.0 + padx as f32).min(width as f32 - 6.0) as i64;
-                    let y0 = (y as f32 + tr - pady as f32) as i64;
-                    let y1 = (y as f32 + br + pady as f32) as i64;
-                    let rr = (((y1 - y0) as f64 * 0.14) as i64).max(4);
-                    lines.push(format!(
-                        "Dialogue: 0,{},{},KP,,0,0,0,,{{\\an7\\pos(0,0)\\1c{}\\bord0\\shad0\\p1}}{}",
-                        ass::ts(a),
-                        ass::ts(b),
-                        look::c6(&look::hex_ass(cc)),
-                        ass::round_rect(x0 as f64, y0 as f64, x1 as f64, y1 as f64, rr as f64)
-                    ));
+                if let (Some(cc), Some(y)) = (&cover_c, yp) {
+                    lines.push(scene_plate(a, b, cc, width, y, iw, tr, br, fs_g));
                 }
                 lines.push(format!(
                     "Dialogue: 1,{},{},S,,0,0,0,,{ptag}{subdir_tag}{body}",
@@ -347,16 +551,17 @@ pub fn build(width: i64, height: i64, out_ass: &Path, mut args: BuildArgs) -> Re
                 ));
                 // блюр-подложка РОВНО по габариту нарисованного текста (тот же fs_g/iw/tr/br, что и рендер).
                 if needs_cover {
-                    if let Some(y) = yy {
-                        let padx = (fs_g as f32 * 0.34) as i64;
-                        let pady = (fs_g as f32 * 0.30) as i64;
-                        let x0 = (((width / 2) as f32) - iw / 2.0 - padx as f32).max(2.0) as i64;
-                        let x1 = (((width / 2) as f32) + iw / 2.0 + padx as f32).min(width as f32 - 2.0) as i64;
-                        let y0 = (((y as f32) + tr - pady as f32).max(0.0)) as i64;
-                        let y1 = (((y as f32) + br + pady as f32).min(height as f32)) as i64;
-                        if x1 > x0 && y1 > y0 {
-                            covers.push(SubCover { x: x0, y: y0, w: x1 - x0, h: y1 - y0, t0: a, t1: b });
-                        }
+                    if let Some(y) = yp {
+                        covers.extend(text_cover(a, b, width, height, y, iw, tr, br, fs_g));
+                    }
+                }
+                if let Some((s2, blk, y2)) = sec_at {
+                    if let Some(cc) = &cover_c {
+                        lines.push(scene_plate(a, b, cc, width, y2, blk.iw, blk.tr, blk.br, blk.fs));
+                    }
+                    blk.emit(&mut lines, s2, a, b, width / 2, y2, &subdir_tag);
+                    if needs_cover {
+                        covers.extend(text_cover(a, b, width, height, y2, blk.iw, blk.tr, blk.br, blk.fs));
                     }
                 }
             }
@@ -457,9 +662,13 @@ fn build_s_style(
 }
 
 /// Построить head (Script Info + V4+ Styles) — порт head-строки captions.build.
-fn build_head(width: i64, height: i64, s_style: &str, sub_fs: i64, p: &look::PresetColors) -> String {
+fn build_head(width: i64, height: i64, s_style: &str, s2_style: Option<&str>, sub_fs: i64, p: &look::PresetColors) -> String {
     let t_fs = ((height as f64 / 22.0).round() as i64).max(24);
-    let kt_bord = ((sub_fs as f64 * 0.11).round() as i64).max(2);
+    let s_styles = match s2_style {
+        Some(s2) => format!("{s_style}\n{s2}"),
+        None => s_style.to_string(),
+    };
+    let kt = kt_style("KT", look::FONT_NAME, sub_fs, ((sub_fs as f64 * 0.11).round() as i64).max(2));
     format!(
         "[Script Info]\nScriptType: v4.00+\n\
 PlayResX: {width}\nPlayResY: {height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n\
@@ -468,9 +677,9 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, \
 Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n\
 Style: T,{FN},{t_fs},{prim},&H000000FF,{outl},{back},-1,0,0,0,100,100,0,0,3,12,0,5,40,40,40,1\n\
-{s_style}\n\
+{s_styles}\n\
 Style: KP,{FN},{sub_fs},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1\n\
-Style: KT,{FN},{sub_fs},&H00FFFFFF,&H000000FF,&H00101010,&H64000000,-1,0,0,0,100,100,0,0,1,{kt_bord},2,5,40,40,40,1\n\n\
+{kt}\n\n\
 [Events]\n\
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
         FN = look::FONT_NAME,
@@ -478,6 +687,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
         outl = p.outline_c,
         back = p.back,
     )
+}
+
+/// Стиль текста лука (KT): шрифт, кегль и обводка `bord`; цвета, плашку и позицию задают теги события.
+fn kt_style(name: &str, font: &str, fs: i64, bord: i64) -> String {
+    format!("Style: {name},{font},{fs},&H00FFFFFF,&H000000FF,&H00101010,&H64000000,-1,0,0,0,100,100,0,0,1,{bord},2,5,40,40,40,1")
 }
 
 #[cfg(test)]
@@ -508,7 +722,7 @@ mod tests {
     }
 
     fn subs1() -> Vec<Sub> {
-        vec![Sub { start: 1.0, end: 3.0, tgt: "привет мир".into(), y: Some(600) }]
+        vec![Sub { start: 1.0, end: 3.0, tgt: "привет мир".into(), y: Some(600), words: None, secondary: None }]
     }
 
     // Реальная контрастная полоса (vision.background=hex) -> BorderStyle=3, Outline=11 = НЕПРОЗРАЧНАЯ

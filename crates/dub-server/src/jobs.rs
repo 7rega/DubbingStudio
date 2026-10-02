@@ -32,8 +32,14 @@ pub fn emit_resumed(progress: &ProgressFn, stage: &str, msg: &str) {
 }
 
 struct Job {
+    id: String,
+    kind: String,
+    pid: String,
     tx: broadcast::Sender<Value>, // SSE-события
     status: JobStatus,
+    stage: String,
+    msg: String,
+    pct: Value,
     result: Option<Value>,
     error: Option<String>,
     abandoned: bool,
@@ -83,8 +89,10 @@ impl JobQueue {
                 };
                 let Some(tx) = tx else { continue };
 
-                // Колбэк прогресса: шлём в broadcast (SSE). Ошибку отправки (нет подписчиков) глотаем.
+                // Колбэк прогресса: шлём в broadcast (SSE) и обновляем текущее состояние джобы.
                 let tx_p = tx.clone();
+                let worker_map = worker_inner.clone();
+                let current_id = job_id.clone();
                 let progress: ProgressFn = Arc::new(move |ev: Value| {
                     let mut obj = match ev {
                         Value::Object(m) => m,
@@ -95,6 +103,19 @@ impl JobQueue {
                         }
                     };
                     obj.insert("type".into(), json!("progress"));
+                    if let Ok(mut map) = worker_map.try_lock() {
+                        if let Some(j) = map.get_mut(&current_id) {
+                            if let Some(s) = obj.get("stage").and_then(|v| v.as_str()) {
+                                j.stage = s.to_string();
+                            }
+                            if let Some(m) = obj.get("msg").and_then(|v| v.as_str()) {
+                                j.msg = m.to_string();
+                            }
+                            if let Some(p) = obj.get("pct").cloned() {
+                                j.pct = p;
+                            }
+                        }
+                    }
                     let _ = tx_p.send(Value::Object(obj));
                 });
 
@@ -138,18 +159,29 @@ impl JobQueue {
 
     /// Поставить джобу в очередь; вернуть job_id.
     pub async fn enqueue(&self, fn_: JobFn) -> String {
+        self.enqueue_with_meta("job", "", fn_).await
+    }
+
+    /// Поставить джобу с метаданными (тип операции и id проекта); вернуть job_id.
+    pub async fn enqueue_with_meta(&self, kind: &str, pid: &str, fn_: JobFn) -> String {
         let job_id = new_job_id();
         let (tx, _rx) = broadcast::channel(256);
         let job = Job {
+            id: job_id.clone(),
+            kind: kind.to_string(),
+            pid: pid.to_string(),
             tx,
             status: JobStatus::Queued,
+            stage: String::new(),
+            msg: String::new(),
+            pct: Value::Null,
             result: None,
             error: None,
             abandoned: false,
             result_sender: None,
         };
         self.inner.lock().await.insert(job_id.clone(), job);
-        let _ = self.submit_tx.send((job_id.clone(), fn_)).await;
+        let _ = self.submit_tx.send((job_id.clone(), crate::mcp::carry_job(fn_))).await;
         job_id
     }
 
@@ -162,16 +194,101 @@ impl JobQueue {
         let (tx, _rx) = broadcast::channel(256);
         let (res_tx, res_rx) = oneshot::channel();
         let job = Job {
+            id: job_id.clone(),
+            kind: "job".to_string(),
+            pid: String::new(),
             tx,
             status: JobStatus::Queued,
+            stage: String::new(),
+            msg: String::new(),
+            pct: Value::Null,
             result: None,
             error: None,
             abandoned: false,
             result_sender: Some(res_tx),
         };
         self.inner.lock().await.insert(job_id.clone(), job);
-        let _ = self.submit_tx.send((job_id.clone(), fn_)).await;
+        let _ = self.submit_tx.send((job_id.clone(), crate::mcp::carry_job(fn_))).await;
         (job_id, res_rx)
+    }
+
+    /// Список всех известных джобов (фильтр по pid опционален).
+    pub async fn list(&self, pid: Option<&str>) -> Vec<Value> {
+        let map = self.inner.lock().await;
+        let mut list: Vec<Value> = Vec::new();
+        for job in map.values() {
+            if let Some(p) = pid {
+                if !p.is_empty() && job.pid != p {
+                    continue;
+                }
+            }
+            let status = match job.status {
+                JobStatus::Queued => "queued",
+                JobStatus::Running => "running",
+                JobStatus::Done => "done",
+                JobStatus::Error => "error",
+            };
+            let status_str = if job.abandoned { "cancelled" } else { status };
+            let mut row = json!({
+                "id": job.id,
+                "job_id": job.id,
+                "kind": job.kind,
+                "pid": job.pid,
+                "status": status_str,
+                "stage": job.stage,
+                "msg": job.msg,
+                "pct": job.pct,
+            });
+            if let Some(ref res) = job.result {
+                row["result"] = res.clone();
+            }
+            if let Some(ref err) = job.error {
+                row["error"] = Value::String(err.clone());
+            }
+            list.push(row);
+        }
+        list
+    }
+
+    /// Снимок конкретного джоба по id.
+    pub async fn get(&self, job_id: &str) -> Option<Value> {
+        let map = self.inner.lock().await;
+        let job = map.get(job_id)?;
+        let status = match job.status {
+            JobStatus::Queued => "queued",
+            JobStatus::Running => "running",
+            JobStatus::Done => "done",
+            JobStatus::Error => "error",
+        };
+        let status_str = if job.abandoned { "cancelled" } else { status };
+        let mut row = json!({
+            "id": job.id,
+            "job_id": job.id,
+            "kind": job.kind,
+            "pid": job.pid,
+            "status": status_str,
+            "stage": job.stage,
+            "msg": job.msg,
+            "pct": job.pct,
+        });
+        if let Some(ref res) = job.result {
+            row["result"] = res.clone();
+        }
+        if let Some(ref err) = job.error {
+            row["error"] = Value::String(err.clone());
+        }
+        Some(row)
+    }
+
+    /// Отменить выполнение задачи.
+    pub async fn cancel(&self, job_id: &str) -> bool {
+        let mut map = self.inner.lock().await;
+        if let Some(job) = map.get_mut(job_id) {
+            job.abandoned = true;
+            true
+        } else {
+            false
+        }
     }
 
     /// Подписаться на SSE-события джобы. Возвращает (receiver, terminal-снапшот если уже завершена).

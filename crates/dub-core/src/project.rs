@@ -221,6 +221,8 @@ pub struct Subs {
     /// на картинке — независимая галочка (композируемость режимов: дубляж без сабов, перевод без дубляжа).
     #[serde(default = "default_true")]
     pub burn: bool,
+    #[serde(default)]
+    pub bilingual: Bilingual,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -234,8 +236,64 @@ impl Default for Subs {
         Subs {
             mode: default_none(),
             burn: true,
+            bilingual: Bilingual::default(),
             extra: Extra::new(),
         }
+    }
+}
+
+/// Порядок строк двуязычного субтитра: перевод сверху, оригинал под ним.
+pub const ORDER_TRANSLATION_TOP: &str = "translation_top";
+/// Порядок строк двуязычного субтитра: оригинал сверху, перевод под ним.
+pub const ORDER_ORIGINAL_TOP: &str = "original_top";
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Bilingual {
+    /// translation_top | original_top.
+    #[serde(default = "default_order")]
+    pub order: String,
+    /// Вторая строка (оригинал).
+    #[serde(default)]
+    pub secondary: SecondaryStyle,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+fn default_order() -> String {
+    ORDER_TRANSLATION_TOP.to_string()
+}
+
+impl Default for Bilingual {
+    fn default() -> Self {
+        Bilingual { order: default_order(), secondary: SecondaryStyle::default(), extra: Extra::new() }
+    }
+}
+
+pub const SECONDARY_SIZE_PCT: i64 = 70;
+
+fn default_secondary_size() -> i64 {
+    SECONDARY_SIZE_PCT
+}
+
+/// Вид второй строки двуязычного субтитра. Поле None — как у основной строки.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SecondaryStyle {
+    /// Кегль в процентах основной строки.
+    #[serde(default = "default_secondary_size")]
+    pub size_pct: i64,
+    /// Цвет текста #RRGGBB.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Непрозрачность, 0..=100.
+    #[serde(default)]
+    pub opacity: Option<i64>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+impl Default for SecondaryStyle {
+    fn default() -> Self {
+        SecondaryStyle { size_pct: SECONDARY_SIZE_PCT, color: None, opacity: None, extra: Extra::new() }
     }
 }
 

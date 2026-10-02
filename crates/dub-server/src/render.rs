@@ -3462,43 +3462,49 @@ pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total:
         .iter()
         .filter_map(|o| o.text.as_deref().map(|t| (o.seg_id.as_str(), t)))
         .collect();
+    let is_dub = proj.mode == "dub" || proj.mode == "voiceover";
     // Режим «без субтитров» (subs.mode=none) -> НЕ рисуем строки субтитров вообще. Титры/локализация
     // экранного текста живут отдельно (proj.captions.titles) и не затрагиваются. Раньше build_ass
     // рендерил сегменты безусловно -> в режиме «без субтитров» они всё равно прожигались (баг-репорт).
     let subs: Vec<Sub> = if proj.subs.mode == "none" {
         Vec::new()
-    } else { proj
-        .segments
-        .iter()
-        .filter(|s| {   // hidden -> нет субтитра; keep_original -> играет оригинал, субтитра нет (порт write_artifacts)
-            !s.extra.get("hidden").and_then(|v| v.as_bool()).unwrap_or(false)
-                && !s.extra.get("keep_original").and_then(|v| v.as_bool()).unwrap_or(false)
-        })
-        .map(|s| {
-            let tgt = match overrides.get(s.id.as_str()) {
-                Some(t) => strip_higgs_tags(t),
-                None => {
-                    let t = strip_higgs_tags(&s.tgt_text);
-                    if !t.is_empty() {
-                        t
-                    } else {
-                        strip_higgs_tags(&s.src_text)
+    } else {
+        proj.segments
+            .iter()
+            .filter(|s| {   // hidden -> нет субтитра; keep_original -> играет оригинал, субтитра нет (порт write_artifacts)
+                !s.extra.get("hidden").and_then(|v| v.as_bool()).unwrap_or(false)
+                    && !s.extra.get("keep_original").and_then(|v| v.as_bool()).unwrap_or(false)
+            })
+            .map(|s| {
+                let tgt = match overrides.get(s.id.as_str()) {
+                    Some(t) => strip_higgs_tags(t),
+                    None => {
+                        let t = strip_higgs_tags(&s.tgt_text);
+                        if !t.is_empty() {
+                            t
+                        } else {
+                            strip_higgs_tags(&s.src_text)
+                        }
                     }
+                };
+                (s, tgt)
+            })
+            .map(|(s, tgt)| (s, crate::subs_text::lines(&proj.subs.mode, is_dub, s, &tgt)))
+            .filter(|(_, l)| !l.primary.is_empty())
+            .map(|(s, l)| {
+                let end = if s.end > 0.0 { s.end } else { total };
+                Sub {
+                    start: s.start,
+                    end,
+                    tgt: l.primary,
+                    y: Some(seg_y(s.start, end)),
+                    words: None,
+                    secondary: l.secondary,
                 }
-            };
-            (s, tgt)
-        })
-        .filter(|(_, tgt)| !tgt.trim().is_empty())
-        .map(|(s, tgt)| {
-            let end = if s.end > 0.0 { s.end } else { total };
-            Sub {
-                start: s.start,
-                end,
-                tgt,
-                y: Some(seg_y(s.start, end)),
-            }
-        })
-        .collect() };
+            })
+            .collect()
+    };
+    let secondary = (proj.subs.mode == "bilingual").then(|| secondary_look(&proj.subs.bilingual));
 
     let preset = proj.captions.preset.name.clone();
     let caption_style = preset.as_deref().filter(|n| *n != "match");
@@ -3518,8 +3524,18 @@ pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total:
             .raw_plan
             .get("sub_px")
             .and_then(|v| v.as_i64()),
+        secondary: secondary.as_ref(),
     };
     dub_captions::build(vw, vh, out_ass, args)
+}
+
+fn secondary_look(b: &dub_core::Bilingual) -> dub_captions::Secondary {
+    dub_captions::Secondary {
+        below: b.order != dub_core::ORDER_ORIGINAL_TOP,
+        size_pct: b.secondary.size_pct,
+        color: b.secondary.color.clone(),
+        opacity: b.secondary.opacity,
+    }
 }
 
 /// Blur-боксы из Project (project.captions.blur_boxes, hidden исключаются). Порт caption_plan blur_boxes.

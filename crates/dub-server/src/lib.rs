@@ -25,6 +25,12 @@ mod frame;
 mod hw;
 mod presets;
 mod jobs;
+pub(crate) mod guard;
+pub mod mcp;
+#[cfg(test)]
+pub(crate) mod tempfile;
+pub(crate) mod project_files;
+pub mod subs_text;
 mod media;
 mod models;
 mod ocr;
@@ -409,20 +415,16 @@ pub(crate) fn save_project_unlocked(dir: &Path, proj: &Project) -> Result<(), St
     let json = proj
         .to_json_pretty()
         .map_err(|e| format!("сериализация project.json: {e}"))?;
-    let tmp = dir.join("project.json.tmp");
-    std::fs::write(&tmp, json.as_bytes()).map_err(|e| format!("запись tmp: {e}"))?;
-    std::fs::rename(&tmp, dir.join("project.json")).map_err(|e| format!("rename: {e}"))?;
-    Ok(())
+    mcp::save_with_revision(dir, || {
+        let tmp = dir.join("project.json.tmp");
+        std::fs::write(&tmp, json.as_bytes()).map_err(|e| format!("запись tmp: {e}"))?;
+        std::fs::rename(&tmp, dir.join("project.json")).map_err(|e| format!("rename: {e}"))?;
+        Ok(())
+    })
 }
 
 pub fn build_router(state: AppState) -> Router {
-    use tower_http::cors::{Any, CorsLayer};
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
-    Router::new()
+    let app = Router::new()
         .route("/engine/capabilities", get(capabilities))
         .route("/engine/opts", axum::routing::patch(endpoints::set_opts))
         .route("/engine/select", post(endpoints::select_model))
@@ -488,6 +490,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/projects/{pid}/reveal", post(reveal_file))
         .route("/projects/{pid}/save-text", post(save_text))
         .route("/projects/{pid}/save-output", post(save_output))
+        .route("/projects/{pid}/files", get(project_files::files))
+        .route("/projects/{pid}/export-text", post(project_files::export_text))
         .route("/projects/{pid}/dub-audio", post(dub_audio_project))
         .route("/projects/{pid}/synth-segments", post(synth_segments_project))
         .route("/projects/{pid}/mix-audio", post(mix_audio_project))
@@ -498,15 +502,29 @@ pub fn build_router(state: AppState) -> Router {
         .route("/projects/{pid}/audio-dub-clean", get(audio_dub_clean))
         .route("/projects/{pid}/audio-vocals", get(audio_vocals))
         .route("/projects/{pid}/audio-bgm", get(audio_bgm))
+        .route("/projects/from-path", post(create_project_from_path))
+        .route("/jobs", get(list_jobs))
+        .route("/jobs/{job_id}", get(get_job))
+        .route("/jobs/{job_id}/cancel", post(cancel_job))
         .route("/jobs/{job_id}/events", get(job_events))
         .route("/window/title", post(set_window_title))
+        // Автор запроса (окно, агент, API), ревизия проекта в ответе и оповещение окон о переменах.
+        .layer(axum::middleware::from_fn(mcp::track))
         // SPA fallback — монтируется последним, чтобы не затенять API.
         .fallback(spa_fallback)
         // Видео-аплоад — большие тела. axum по дефолту режет на 2МБ (multipart ломается на
         // реальном ролике). Питон (Starlette) лимита не ставит -> снимаем и мы.
         .layer(axum::extract::DefaultBodyLimit::disable())
-        .layer(cors)
-        .with_state(state)
+        .with_state(state);
+
+    mcp::install(app.clone());
+    app.route("/mcp", post(mcp::handle))
+        .route("/mcp/status", get(mcp::status))
+        .route("/mcp/window", get(mcp::window_events))
+        .route("/mcp/window/result", post(mcp::window_result).layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024)))
+        .route("/mcp/window/focus", post(mcp::window_focus))
+        .layer(guard::cors())
+        .layer(axum::middleware::from_fn(guard::origin_guard))
 }
 
 // ─── /engine/capabilities ───────────────────────────────────────────────────
@@ -592,7 +610,7 @@ async fn setup_download(State(st): State<AppState>, Json(body): Json<Value>) -> 
         let cb = |ev: Value| progress(ev);
         setup::download_components(&root, &ids, &cancel, &cb)
     });
-    let job_id = st.jobs.enqueue(job).await;
+    let job_id = st.jobs.enqueue_with_meta("download", "", job).await;
     Json(json!({ "job_id": job_id })).into_response()
 }
 
@@ -1415,7 +1433,7 @@ async fn voices_download_pack(State(st): State<AppState>) -> Response {
         let cb = |ev: Value| progress(ev);
         record::download_pack(&dir, &cb)
     });
-    let job_id = st.jobs.enqueue(job).await;
+    let job_id = st.jobs.enqueue_with_meta("voices_pack", "", job).await;
     Json(json!({ "job_id": job_id })).into_response()
 }
 
@@ -1841,7 +1859,7 @@ async fn analyze_project(
         save_project_atomic(&dir_for_save, &proj)?;
         Ok(json!({ "project_id": pid_for_result, "output": dir_for_save.join("project.json").to_string_lossy() }))
     });
-    let job_id = st.jobs.enqueue(job).await;
+    let job_id = st.jobs.enqueue_with_meta("analyze", &pid, job).await;
     Json(json!({ "job_id": job_id })).into_response()
 }
 
@@ -1985,7 +2003,7 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
         bake_render_result(regen.then_some(&proj), &proj_path, &dir_for_job, false);
         Ok(json!({ "output": out_for_result.to_string_lossy() }))
     });
-    let job_id = st.jobs.enqueue(job).await;
+    let job_id = st.jobs.enqueue_with_meta("render", &pid, job).await;
     Json(json!({ "job_id": job_id })).into_response()
 }
 
@@ -2166,7 +2184,7 @@ async fn export_lang(
         render::run(&p, &paths, true, &cb)?;
         Ok(json!({ "output": out_res.to_string_lossy(), "project_id": new_pid_res }))
     });
-    let job_id = st.jobs.enqueue(job).await;
+    let job_id = st.jobs.enqueue_with_meta("export_lang", &new_pid, job).await;
     Json(json!({ "job_id": job_id, "project_id": new_pid })).into_response()
 }
 
@@ -2274,7 +2292,7 @@ async fn retranslate_project(
         save_project_unlocked(&dir_for_job, &p)?;
         Ok(json!({ "project_id": pid_res, "ok": true, "before":before, "project":p }))
     });
-    let job_id = st.jobs.enqueue(job).await;
+    let job_id = st.jobs.enqueue_with_meta("retranslate", &pid, job).await;
     Json(json!({ "job_id": job_id, "project_id": pid })).into_response()
 }
 
@@ -2400,7 +2418,7 @@ async fn synth_segments_project(State(st): State<AppState>, AxPath(pid): AxPath<
         }
         Ok(json!({ "mode": "synth", "audio": out.to_string_lossy() }))
     });
-    let job_id = st.jobs.enqueue(job).await;
+    let job_id = st.jobs.enqueue_with_meta("dub_audio", &pid, job).await;
     Json(json!({ "job_id": job_id })).into_response()
 }
 
@@ -2451,7 +2469,7 @@ async fn segment_audio(
 
 /// Найти готовый выходной файл проекта: output.mp4 (обычный/mp4-мультитрек) -> output.mkv (mkv-мультитрек,
 /// #113) -> output.wav (аудио-режим). Единый порядок фолбэков для раздачи/сохранения/открытия/превью.
-fn find_output(dir: &std::path::Path) -> std::path::PathBuf {
+pub(crate) fn find_output(dir: &std::path::Path) -> std::path::PathBuf {
     for name in ["output.mp4", "output.mkv", "output.wav"] {
         let p = dir.join(name);
         if p.is_file() {
@@ -2463,7 +2481,7 @@ fn find_output(dir: &std::path::Path) -> std::path::PathBuf {
 
 /// Выход ДЛЯ СОХРАНЕНИЯ юзеру: mkv приоритетнее mp4 (юзер выбрал mkv ради мультитрека; mp4 — лишь
 /// playable-компаньон для встроенного плеера, #116). Порядок mkv->mp4->wav.
-fn find_output_save(dir: &std::path::Path) -> std::path::PathBuf {
+pub(crate) fn find_output_save(dir: &std::path::Path) -> std::path::PathBuf {
     for name in ["output.mkv", "output.mp4", "output.wav"] {
         let p = dir.join(name);
         if p.is_file() {
@@ -2974,6 +2992,117 @@ fn sse_stream(
 
 fn sse_event(ev: &Value) -> Result<Event, Infallible> {
     Ok(Event::default().data(serde_json::to_string(ev).unwrap_or_default()))
+}
+
+// ─── GET /jobs ; GET /jobs/{id} ; POST /jobs/{id}/cancel ─────────────────────
+
+async fn list_jobs(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    let pid = q.get("pid").map(|s| s.as_str());
+    let jobs = st.jobs.list(pid).await;
+    Json(json!({ "jobs": jobs }))
+}
+
+async fn get_job(
+    State(st): State<AppState>,
+    AxPath(job_id): AxPath<String>,
+) -> Response {
+    match st.jobs.get(&job_id).await {
+        Some(job) => Json(job).into_response(),
+        None => (StatusCode::NOT_FOUND, "job not found").into_response(),
+    }
+}
+
+async fn cancel_job(
+    State(st): State<AppState>,
+    AxPath(job_id): AxPath<String>,
+) -> Response {
+    if st.jobs.cancel(&job_id).await {
+        Json(json!({ "ok": true })).into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "job not found").into_response()
+    }
+}
+
+// ─── POST /projects/from-path ───────────────────────────────────────────────
+
+async fn create_project_from_path(
+    State(st): State<AppState>,
+    Json(body): Json<Value>,
+) -> Response {
+    let path_str = match body.get("path").and_then(|v| v.as_str()) {
+        Some(s) if !s.trim().is_empty() => s.trim(),
+        _ => return (StatusCode::BAD_REQUEST, "'path' required").into_response(),
+    };
+    let src_path = PathBuf::from(path_str);
+    if !src_path.is_file() {
+        return (StatusCode::BAD_REQUEST, format!("{} is not a file on this computer", src_path.display())).into_response();
+    }
+
+    let key = body.get("key").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let pid = if !key.is_empty() {
+        let hash = blake3::hash(format!("{path_str}:{key}").as_bytes()).to_hex().to_string();
+        hash[..12].to_string()
+    } else {
+        let mut id = uuid::Uuid::new_v4().simple().to_string();
+        id.truncate(12);
+        id
+    };
+
+    let d = st.workspace.join(&pid);
+    let proj_json = d.join("project.json");
+    if proj_json.is_file() {
+        return Json(json!({ "project_id": pid })).into_response();
+    }
+
+    if let Err(e) = tokio::fs::create_dir_all(&d).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    let fname = src_path.file_name().and_then(|s| s.to_str()).unwrap_or("video.mp4");
+    let _ = tokio::fs::write(d.join("source.txt"), src_path.to_string_lossy().as_bytes()).await;
+    let _ = tokio::fs::write(d.join("name.txt"), fname.as_bytes()).await;
+    if !key.is_empty() {
+        let _ = tokio::fs::write(d.join("key.txt"), key.as_bytes()).await;
+    }
+
+    let meta = match media::probe(&src_path) {
+        Ok(m) => dub_core::Meta {
+            video: src_path.to_string_lossy().to_string(),
+            duration: m.duration,
+            width: m.width,
+            height: m.height,
+            fps: m.fps,
+            src_codec: m.src_codec,
+            extra: serde_json::Map::new(),
+        },
+        Err(_) => dub_core::Meta {
+            video: src_path.to_string_lossy().to_string(),
+            duration: 0.0,
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            src_codec: String::new(),
+            extra: serde_json::Map::new(),
+        },
+    };
+
+    let initial_proj = dub_core::Project {
+        meta,
+        mode: "nodub".to_string(),
+        tgt_lang: "ru".to_string(),
+        segments: Vec::new(),
+        audio: dub_core::Audio::default(),
+        subs: dub_core::Subs::default(),
+        captions: dub_core::Captions::default(),
+        render: dub_core::Render::default(),
+        ..Default::default()
+    };
+    let _ = save_project_atomic(&d, &initial_proj);
+
+    Json(json!({ "project_id": pid })).into_response()
 }
 
 // ─── SPA fallback ───────────────────────────────────────────────────────────

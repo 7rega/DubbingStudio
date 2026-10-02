@@ -46,8 +46,11 @@ fn resolve_repo_root() -> PathBuf {
     exe_dir
 }
 
-/// Занять свободный TCP-порт на 127.0.0.1 (ядро выдаёт порт 0 -> читаем реальный, отпускаем).
+/// Занять свободный TCP-порт на 127.0.0.1 (пробуем 8765, при занятости — динамический).
 fn pick_free_port() -> std::io::Result<u16> {
+    if let Ok(listener) = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8765)) {
+        return Ok(listener.local_addr()?.port());
+    }
     let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))?;
     Ok(listener.local_addr()?.port())
 }
@@ -208,6 +211,11 @@ pub fn run() {
 
     let repo_root = resolve_repo_root();
     let port = pick_free_port().unwrap_or(8765);
+    let _ = std::fs::create_dir_all(repo_root.join("workspace"));
+    let _ = std::fs::write(repo_root.join("workspace").join(".port"), port.to_string());
+    if let Ok(temp) = std::env::var("TEMP") {
+        let _ = std::fs::write(std::path::Path::new(&temp).join("dubstudio.port"), port.to_string());
+    }
     setup_server_env(&repo_root);
 
     // axum-бэкенд поднимается В ЭТОМ ЖЕ процессе на фоновом потоке — ОДИН exe, без dub-server.exe-сайдкара.

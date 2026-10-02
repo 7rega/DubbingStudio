@@ -420,7 +420,7 @@ pub async fn remix_project(
         crate::save_project_unlocked(&dir_for_job, &p)?;
         serde_json::to_value(&p).map_err(|e| e.to_string())
     });
-    let job_id = st.jobs.enqueue(job).await;
+    let job_id = st.jobs.enqueue_with_meta("remix", &pid, job).await;
     Json(json!({ "job_id": job_id })).into_response()
 }
 

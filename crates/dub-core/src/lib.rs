@@ -2,11 +2,12 @@
 
 mod opts;
 mod project;
+pub mod atomic;
 
 pub use opts::EngineOpts;
 pub use project::{
-    Audio, Brand, BlurBox, CaptionOverride, Captions, Meta, Preset, Project, Render, Segment,
-    SubStyle, Subs, Title, Voice,
+    Audio, Bilingual, Brand, BlurBox, CaptionOverride, Captions, Meta, Preset, Project, Render,
+    SecondaryStyle, Segment, SubStyle, Subs, Title, Voice, ORDER_ORIGINAL_TOP, ORDER_TRANSLATION_TOP,
 };
 
 #[cfg(test)]

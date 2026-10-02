@@ -1,9 +1,10 @@
 import { create } from "zustand";
-import type { Project, ProjectSummary } from "./lib/api";
+import { api, type Project, type ProjectSummary } from "./lib/api";
+import { setBridgeEnabled } from "./lib/mcpBridge";
 
 type Stage = "boot" | "setup" | "empty" | "analyzing" | "editor" | "batch" | "multilang";
 export type ExportItem = { id: string; name: string; status: "rendering" | "done" | "error"; msg: string; url?: string; pid?: string };
-export type Activity = { t: number; text: string; kind: "work" | "done" | "error" };   // строка лога «что делает приложение»
+export type Activity = { t: number; text: string; kind: "work" | "done" | "error" | "agent" };   // строка лога «что делает приложение»
 
 type State = {
   stage: Stage;
@@ -29,6 +30,8 @@ type State = {
   setVisionOn: (b: boolean) => void;
   autoCastOn: boolean;               // глобальная доступность автоподбора голосов (Auto-Cast); синхронизируется между Settings, DropZone и Editor
   setAutoCastOn: (b: boolean) => void;
+  mcpEnabled: boolean;               // статус MCP-сервера для ИИ-агента (Вкл / Выкл)
+  setMcpEnabled: (b: boolean) => void;
   recent: ProjectSummary[];
   setRecent: (recent: ProjectSummary[] | ((prev: ProjectSummary[]) => ProjectSummary[])) => void;
   activeName: string | null;         // исходное имя видеофайла открытого проекта для отображения в шапке/заголовке
@@ -42,6 +45,7 @@ type State = {
   addExport: (e: ExportItem) => void;
   updateExport: (id: string, patch: Partial<ExportItem>) => void;
   pushHistory: (p: Project) => void; // snapshot the project BEFORE a mutation (for undo)
+  resetHistory: () => void;
   undo: () => Project | null;        // returns the project to restore (PUT it) or null
   redo: () => Project | null;
   bump: () => void;                  // invalidate the rendered preview frame -> <img> refetches
@@ -90,8 +94,30 @@ export const useStore = create<State>((set, get) => ({
     }
     set({ autoCastOn });
   },
+  mcpEnabled: typeof window !== "undefined" ? localStorage.getItem("dub-mcp-enabled") !== "0" : true,
+  setMcpEnabled: (mcpEnabled) => {
+    if (typeof window !== "undefined") {
+      try { localStorage.setItem("dub-mcp-enabled", mcpEnabled ? "1" : "0"); } catch {}
+    }
+    set({ mcpEnabled });
+    setBridgeEnabled(mcpEnabled);
+    const s = get();
+    const curPid = s.pid || s.recent[0]?.pid;
+    if (curPid) {
+      api.saveText(curPid, ".mcp_disabled", mcpEnabled ? "0" : "1", undefined, false, "..").catch(() => {});
+      if (s.pid) {
+        api.saveText(s.pid, ".mcp_disabled", mcpEnabled ? "0" : "1", undefined, false).catch(() => {});
+      }
+    }
+  },
   setStage: (stage) => set({ stage }),
-  setPid: (pid) => set({ pid }),
+  setPid: (pid) => {
+    set({ pid });
+    if (pid && !get().mcpEnabled) {
+      api.saveText(pid, ".mcp_disabled", "1", undefined, false).catch(() => {});
+      api.saveText(pid, ".mcp_disabled", "1", undefined, false, "..").catch(() => {});
+    }
+  },
   setProject: (project) => set({ project }),
   setProgress: (stage, msg, pct = null) => set((s) => {   // keep the last message on a stage-only tick; pct only during a download
     const progress = {
@@ -118,6 +144,7 @@ export const useStore = create<State>((set, get) => ({
     if (head && JSON.stringify(head) === JSON.stringify(p)) return {};
     return { past: [...s.past, p].slice(-25), future: [] };
   }),
+  resetHistory: () => set({ past: [], future: [] }),
   undo: () => {
     const s = get(); if (!s.past.length || !s.project) return null;
     const prev = s.past[s.past.length - 1];

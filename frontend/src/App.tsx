@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones, Bot } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
@@ -10,6 +10,9 @@ import { useStore } from "./store";
 import PreviewCanvas from "./components/PreviewCanvas";
 import { playSfx, sfxEnabled, setSfxEnabled } from "./lib/sfx";
 import ResourceMonitor from "./components/ResourceMonitor";
+import { AgentPanel } from "./components/AgentPanel";
+import BridgeHost from "./components/BridgeHost";
+import { PROJECT_CHANGED, type ChangeNotice } from "./lib/mcpBridge";
 import { HiggsContextMenu, type HiggsContextMenuState, stripHiggsTags } from "./components/HiggsTagMenu";
 import { useVideoLifecycle, type SeekRequest } from "./hooks/useVideoLifecycle";
 import { decimatePeaks, clampTime, computeFallbackPeaks } from "./lib/timelineUtils";
@@ -809,9 +812,9 @@ function PresetsSection({ onApplied }: { onApplied?: () => void }) {
   );
 }
 
-function SettingsModal({ onClose, initialTab = "models" }: { onClose: () => void; initialTab?: "models" | "components" }) {
+function SettingsModal({ onClose, initialTab = "models" }: { onClose: () => void; initialTab?: "models" | "components" | "mcp" }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<"models" | "components">(initialTab);
+  const [tab, setTab] = useState<"models" | "components" | "mcp">(initialTab);
   const [sfx, setSfx] = useState(sfxEnabled());
   // Пер-стадийный бенчмарк (bench.json + ⏱ в журнале) — ВЫКЛ по умолчанию, состояние на бэке (active.json).
   const [bench, setBench] = useState(false);
@@ -867,6 +870,16 @@ function SettingsModal({ onClose, initialTab = "models" }: { onClose: () => void
                 }`}
               >
                 {t("settings.componentsTab")}
+              </button>
+              <button
+                onClick={() => setTab("mcp")}
+                className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                  tab === "mcp"
+                    ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm"
+                    : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                }`}
+              >
+                {t("settings.mcpTab", "MCP / Агенты")}
               </button>
             </div>
           </div>
@@ -1043,6 +1056,9 @@ function SettingsModal({ onClose, initialTab = "models" }: { onClose: () => void
           </div>
           <div className={tab === "components" ? "block space-y-1" : "hidden"}>
             <FirstRun embedded onClose={onClose} />
+          </div>
+          <div className={tab === "mcp" ? "block space-y-3" : "hidden"}>
+            <AgentPanel />
           </div>
         </div>
       </div>
@@ -1228,12 +1244,21 @@ function StatusBar() {
 function TopBar() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"models" | "components">("models");
+  const [settingsTab, setSettingsTab] = useState<"models" | "components" | "mcp">("models");
+  const mcpEnabled = useStore((s) => s.mcpEnabled);
+  const setMcpEnabled = useStore((s) => s.setMcpEnabled);
+
   useEffect(() => {
-    const open = () => { setSettingsTab("components"); setSettings(true); };
-    window.addEventListener("dub-open-components", open);
-    return () => window.removeEventListener("dub-open-components", open);
+    const openComp = () => { setSettingsTab("components"); setSettings(true); };
+    const openMcp = () => { setSettingsTab("mcp"); setSettings(true); };
+    window.addEventListener("dub-open-components", openComp);
+    window.addEventListener("dub-open-mcp", openMcp);
+    return () => {
+      window.removeEventListener("dub-open-components", openComp);
+      window.removeEventListener("dub-open-mcp", openMcp);
+    };
   }, []);
+
   const [help, setHelp] = useState(false);
   const setStage = useStore((s) => s.setStage);
   const setPid = useStore((s) => s.setPid);
@@ -1293,6 +1318,37 @@ function TopBar() {
           className="inline-flex flex-col items-center justify-center px-3 py-1 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors shadow-sm">
           <span className="text-[12px] font-bold flex items-center gap-1"><Plus size={13} /> {t("nav.new")}</span>
           <span className="text-[9px] text-[var(--color-muted)] font-normal leading-none mt-0.5">ручная настройка</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setMcpEnabled(!mcpEnabled)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setSettingsTab("mcp");
+            setSettings(true);
+          }}
+          title={
+            mcpEnabled
+              ? "ЛКМ: Выключить MCP | ПКМ: Настройки агента (Сейчас: Включен)"
+              : "ЛКМ: Включить MCP | ПКМ: Настройки агента (Сейчас: Выключен)"
+          }
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors select-none shadow-sm ${
+            !mcpEnabled
+              ? "bg-red-500/10 border-red-500/35 text-red-400 hover:bg-red-500/20"
+              : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
+          }`}
+        >
+          {!mcpEnabled ? (
+            <div className="relative inline-flex items-center justify-center">
+              <Bot size={15} />
+              <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <span className="w-[18px] h-[2px] bg-red-400 rotate-45 rounded-full shadow-[0_0_2px_rgba(0,0,0,0.8)]" />
+              </span>
+            </div>
+          ) : (
+            <Bot size={15} />
+          )}
+          <span className={`text-[11px] ${!mcpEnabled ? "line-through decoration-red-400/80" : ""}`}>MCP</span>
         </button>
         <button onClick={() => setHelp(true)} title={t("help.title")}
           className="p-1.5 rounded-md text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><HelpCircle size={18} /></button>
@@ -10658,8 +10714,33 @@ export default function App() {
     if (pid) { api.getProject(pid).then((p) => { setPid(pid); setProject(p); setStage("editor"); }).catch(() => setStage("empty")); return; }
     setStage("empty");
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reactive auto-sync: update project in editor whenever an event arrives from MCP/agent
+  useEffect(() => {
+    let alive = true;
+    const onProjectChanged = async (e: Event) => {
+      const notice = (e as CustomEvent<ChangeNotice>).detail;
+      const curPid = useStore.getState().pid;
+      if (!curPid || (notice.pid && notice.pid !== curPid)) return;
+      try {
+        const updated = await api.getProject(curPid);
+        if (alive) {
+          useStore.getState().setProject(updated);
+        }
+      } catch {
+        // ignore offline / transient errors
+      }
+    };
+    window.addEventListener(PROJECT_CHANGED, onProjectChanged);
+    return () => {
+      alive = false;
+      window.removeEventListener(PROJECT_CHANGED, onProjectChanged);
+    };
+  }, []);
+
   return (
     <div className="h-full flex flex-col">
+      <BridgeHost />
       <TopBar />
       {stage === "boot" && <div className="flex-1 grid place-items-center"><Loader2 size={22} className="animate-spin text-[var(--color-muted)]" /></div>}
       {(stage === "empty" || stage === "setup") && <DropZone />}

@@ -12,14 +12,30 @@ const FFMPEG: &str = "ffmpeg.exe";
 #[cfg(not(windows))]
 const FFMPEG: &str = "ffmpeg";
 
-fn cmd_silent<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
-    let mut cmd = Command::new(program);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    cmd
+/// Ключ передачи filtergraph ФАЙЛОМ. ffmpeg 8.0 УДАЛИЛ `-filter_complex_script` (был deprecated с 7.0):
+/// на свежих сборках burn падал с «Unrecognized option 'filter_complex_script'» — issue #1. Универсальная
+/// замена `-/filter_complex` (общий префикс `/` = «значение опции лежит в файле») есть с 7.0, поэтому:
+/// major >= 7 -> новый ключ, старее -> прежний. Версию спрашиваем у самого ffmpeg ОДИН раз за процесс.
+pub fn filter_script_flag() -> &'static str {
+    static FLAG: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    FLAG.get_or_init(|| {
+        let major = Command::new(FFMPEG)
+            .arg("-version")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .and_then(|s| {
+                // "ffmpeg version 7.1-essentials_build-..." / "ffmpeg version n8.0" / "... version 2026-07-21-git-..."
+                let v = s.split("version").nth(1)?.trim_start().trim_start_matches('n');
+                v.split(['.', '-', ' ']).next()?.parse::<u32>().ok()
+            });
+        // Неизвестная версия (git-сборки с датой вместо номера) -> новый ключ: он и есть актуальный,
+        // а старый в свежих сборках уже удалён.
+        match major {
+            Some(m) if m < 7 => "-filter_complex_script",
+            _ => "-/filter_complex",
+        }
+    })
 }
 
 /// Последние ~1000 символов stderr ffmpeg (в исходном порядке) — для лаконичных сообщений об ошибке.
@@ -200,9 +216,14 @@ pub fn burn(
 
     let vargs: Vec<String> = if !blur_boxes.is_empty() && blur {
         let graph = blur_graph(&ass_f, blur_boxes, w, h, blur_sigma, &[], "0:v");
+        // Граф — В ФАЙЛ (-filter_complex_script): блюр-подложка на каждый субтитр даёт сотни цепочек
+        // (репро: 342 бокса = 37КБ аргументов), а CreateProcess ограничен 32767 символами —
+        // spawn падал с ENAMETOOLONG, и burn умирал мгновенно.
+        let graph_file = out.with_extension("filter");
+        std::fs::write(&graph_file, &graph).map_err(|e| format!("filter-скрипт: {e}"))?;
         vec![
-            "-filter_complex".into(),
-            graph,
+            filter_script_flag().into(),
+            graph_file.to_string_lossy().into_owned(),
             "-map".into(),
             "[outv]".into(),
         ]
@@ -210,27 +231,17 @@ pub fn burn(
         vec!["-vf".into(), ass_f.clone()]
     };
 
+    let enc = if gpu_encode { nv } else { sw };
     // Таймаут пропорционален длительности: фикс-30мин зарезал бы легитимный burn многочасового
-    // фильма (NVENC ~5-10x риалтайма, software медленнее). 4x длительность + 10 мин запас, минимум 30 мин.
+    // фильма (NVENC ~5-10x риалтайма, softwarе медленнее). 4x длительность + 10 мин запас, минимум 30 мин.
     let dur_secs = probe_duration_secs(video).unwrap_or(0.0);
     let timeout = BURN_TIMEOUT_SECS.max((dur_secs * 4.0) as u64 + 600);
-
-    if gpu_encode {
-        match run_ffmpeg(video, &vargs, &nv, out, gpu_decode, timeout) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                eprintln!("[burn] NVENC аппаратный энкодер вернул ошибку ({e}) -> автоматический откат на процессорный libx264...");
-                run_ffmpeg(video, &vargs, &sw, out, false, timeout)
-            }
-        }
-    } else {
-        run_ffmpeg(video, &vargs, &sw, out, false, timeout)
-    }
+    run_ffmpeg(video, &vargs, &enc, out, gpu_decode, timeout)
 }
 
 /// Длительность видео в секундах через ffprobe (для пропорционального таймаута burn). Ошибка -> None.
 fn probe_duration_secs(video: &Path) -> Option<f64> {
-    let out = cmd_silent(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" })
+    let out = Command::new(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" })
         .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
         .arg(video)
         .output()
@@ -246,7 +257,7 @@ fn run_ffmpeg(
     gpu_decode: bool,
     timeout_secs: u64,
 ) -> Result<(), String> {
-    let mut cmd = cmd_silent(FFMPEG);
+    let mut cmd = Command::new(FFMPEG);
     cmd.arg("-y");
     if gpu_decode {
         cmd.args(["-hwaccel", "cuda"]);
@@ -377,9 +388,12 @@ pub fn burn_frame(
         // lead: select[,scale] -> [sel]; base label = sel.
         let lead = vec![format!("[0:v]{pre}[sel]")];
         let graph = blur_graph(&ass_f, boxes, w, h, blur_sigma, &lead, "sel");
+        // Граф в файл — тот же 32767-символьный лимит CreateProcess, что и у полного burn.
+        let graph_file = out_png.with_extension("filter");
+        std::fs::write(&graph_file, &graph).map_err(|e| format!("filter-скрипт: {e}"))?;
         vec![
-            "-filter_complex".into(),
-            graph,
+            filter_script_flag().into(),
+            graph_file.to_string_lossy().into_owned(),
             "-map".into(),
             "[outv]".into(),
         ]
@@ -387,7 +401,7 @@ pub fn burn_frame(
         vec!["-vf".into(), format!("{pre},{ass_f}")]
     };
 
-    let mut cmd = cmd_silent(FFMPEG);
+    let mut cmd = Command::new(FFMPEG);
     cmd.arg("-y")
         .arg("-ss")
         .arg(format!("{:.3}", (t - 1.0).max(0.0)))
@@ -408,4 +422,34 @@ pub fn burn_frame(
         return Err(format!("ffmpeg preview frame failed:\n{tail}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod filter_flag_tests {
+    use super::*;
+
+    /// Гард issue #1: ключ filtergraph-файла должен приниматься УСТАНОВЛЕННЫМ ffmpeg (на 8.x старый
+    /// `-filter_complex_script` удалён). Нет ffmpeg в PATH -> тест пропускается.
+    #[test]
+    fn filter_script_flag_accepted_by_local_ffmpeg() {
+        let flag = filter_script_flag();
+        assert!(flag == "-/filter_complex" || flag == "-filter_complex_script", "{flag}");
+        let dir = std::env::temp_dir().join("dubcap_flag_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let script = dir.join("g.txt");
+        if std::fs::write(&script, "color=c=red:s=32x32:d=0.1[outv]").is_err() {
+            return;
+        }
+        let out = dir.join("o.png");
+        let res = Command::new(FFMPEG)
+            .args(["-y", "-hide_banner", "-loglevel", "error"])
+            .arg(flag)
+            .arg(&script)
+            .args(["-map", "[outv]", "-frames:v", "1"])
+            .arg(&out)
+            .output();
+        let Ok(o) = res else { return }; // нет ffmpeg — пропускаем
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!err.contains("Unrecognized option"), "ffmpeg не принял {flag}: {err}");
+    }
 }

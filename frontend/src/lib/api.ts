@@ -1,7 +1,33 @@
-// Dub Studio API client — talks to the single-worker FastAPI backend over the dub-engine.
-// dev: Vite (5173) -> backend (8765). portable build: FastAPI serves the SPA itself, so calls are
-// same-origin ("") and follow whatever 127.0.0.1:<port> the launcher picked. VITE_API overrides both.
-const BASE = (import.meta.env.VITE_API as string | undefined) ?? (import.meta.env.DEV ? "http://127.0.0.1:8765" : "");
+// Dub Studio API client — talks to the single-worker backend.
+// dev: Vite (5173) -> backend (8765). portable build: serves the SPA itself. VITE_API overrides both.
+export const BASE = (import.meta.env.VITE_API as string | undefined) ?? (import.meta.env.DEV ? "http://127.0.0.1:8765" : "");
+
+/** This window's mark: the studio tells the changes the window made itself apart from an agent's or another window's. */
+export const WINDOW_ID = crypto.randomUUID();
+
+// Ревизия копии проекта в окне: её называет заголовок ответов, которые и есть проект (GET, PATCH, PUT).
+const revisions = new Map<string, number>();
+const REV_HEADER = "x-project-rev";
+const PROJECT_ROUTE = /^\/projects\/([A-Za-z0-9]+)(\/|$)/;
+
+/** The revision the window's copy of a project is at, as far as it knows. */
+export function projectRev(pid: string): number | undefined {
+  return revisions.get(pid);
+}
+
+function fetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("x-dub-window", WINDOW_ID);
+  const path = new URL(input, typeof window !== "undefined" ? window.location.href : "http://127.0.0.1:8765").pathname;
+  const pid = PROJECT_ROUTE.exec(path)?.[1];
+  const known = pid === undefined ? undefined : revisions.get(pid);
+  if (pid !== undefined && known !== undefined && init.method === "PUT" && path === `/projects/${pid}` && !headers.has(REV_HEADER)) headers.set(REV_HEADER, String(known));
+  return globalThis.fetch(input, { ...init, headers }).then((r) => {
+    const rev = r.headers.get(REV_HEADER);
+    if (pid !== undefined && r.ok && rev !== null) revisions.set(pid, Number(rev));
+    return r;
+  });
+}
 
 export type SubStyle = {
   color: string; outline: string; italic: boolean; bold: boolean; uppercase: boolean;
@@ -9,6 +35,18 @@ export type SubStyle = {
   n_lines?: number | null; align: string; size_px?: number | null; outline_w?: number | null; shadow_dir?: number | null;
   plate?: boolean; plate_color?: string | null;
 };
+export type Bilingual = {
+  order: "translation_top" | "original_top";
+  secondary: { size_pct: number; color: string | null; opacity: number | null };
+};
+export type TakesSummary = { count: number; active: number | null; pinned: number | null };
+export type TakeSource = "synth" | "multitake" | "qc" | "shorten";
+export type Take = {
+  n: number; text: string; text_matches: boolean; dur: number; qc: number | null; source: TakeSource;
+  voice: string; reference: string; params: string; created: number; file: string;
+};
+export type Takes = { id: string; active: number | null; pinned: number | null; takes: Take[] };
+
 export type Segment = {
   id: string; start: number; end: number; speaker?: string | null;
   src_text: string; tgt_text: string; voice?: string | null; dirty: boolean; hidden?: boolean; keep_original?: boolean;
@@ -18,9 +56,11 @@ export type Segment = {
   temp?: number;
   words?: { word: string; start: number; end: number; score?: number }[];
   translation_pending?: boolean;
+  takes?: TakesSummary | null;
   extra?: Record<string, unknown>;
 };
 export type BlurBox = { x: number; y: number; w: number; h: number; t0: number; t1: number; hidden?: boolean; fill?: string | null };
+export type JobKind = string;
 export type Title = {
   text: string; tgt: string; bbox?: number[] | null; color?: string | null; bg?: string | null;
   font?: string | null; italic: boolean; align: string; start: number; end: number;
@@ -36,7 +76,7 @@ export type Project = {
     higgs_temp?: number | null; higgs_seed?: number | null;
   };
   segments: Segment[];
-  subs: { mode: string; burn?: boolean };
+  subs: { mode: string; burn?: boolean; bilingual?: Bilingual | null };
   captions: {
     sub_style?: SubStyle | null; sub_y?: number | null; overrides: unknown[];
     titles: Title[]; brands: unknown[]; blur_boxes: BlurBox[]; preset: Record<string, unknown>;
@@ -111,6 +151,8 @@ function _chain<T>(run: () => Promise<T>): Promise<T> {
   _patchChain = _patchChain.then(run, run);
   return _patchChain as Promise<T>;
 }
+
+export const editsSettled = (): Promise<void> => _patchChain.then(() => undefined, () => undefined);
 
 // Общие обёртки: GET/POST c JSON-телом -> j<T>. Убирают повтор fetch+headers+JSON.stringify.
 const getJson = <T>(path: string): Promise<T> => fetch(`${BASE}${path}`).then(j<T>);
@@ -211,6 +253,8 @@ export const api = {
   synthSegments: (pid: string) => fetch(`${BASE}/projects/${pid}/synth-segments`, { method: "POST" }).then(j<{ job_id: string }>), // быстрый синтез только изменённых фраз (< 1 сек)
   mixAudio: (pid: string) => fetch(`${BASE}/projects/${pid}/mix-audio`, { method: "POST" }).then(j<{ job_id: string }>), // явное сведение мастер-трека дубляжа
   segmentAudioUrl: (pid: string, segId: string, rev = 0) => `${BASE}/projects/${pid}/segments/${encodeURIComponent(segId)}/audio?rev=${rev}`, // изолированный WAV фразы
+  takes: (pid: string, id: string) => getJson<Takes>(`/projects/${pid}/segments/${encodeURIComponent(id)}/takes`),
+  takeAudioUrl: (pid: string, id: string, n: number) => `${BASE}/projects/${pid}/segments/${encodeURIComponent(id)}/takes/${n}/audio`,
   remix: (pid: string, instruction: string) =>
     fetch(`${BASE}/projects/${pid}/remix?instruction=${encodeURIComponent(instruction)}`, { method: "POST" }).then(j<{ job_id: string }>),
   previewUrl: (pid: string, t: number, rev = 0, lowres = false) => `${BASE}/projects/${pid}/preview?t=${t}&rev=${rev}${lowres ? "&lr=1" : ""}`,   // lr=1 при плее -> низкое разрешение на больших видео (быстрее)
@@ -245,4 +289,16 @@ export const api = {
       // EventSource fires onerror on transient drops too (it auto-reconnects) — only give up once truly CLOSED
       es.onerror = () => { if (es.readyState === EventSource.CLOSED) reject(new Error("SSE connection lost")); };
     }),
+  mcpStatus: () => getJson<McpStatus>("/mcp/status"),
+  mcpUrl: () => `${BASE || (typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:8765")}/mcp`,
+};
+
+export type McpStatus = {
+  agent_connected: boolean;
+  agent_last_call: string | null;
+  agent_seconds_ago: number | null;
+  agent_calls: number;
+  window_open?: boolean;
+  enabled?: boolean;
+  server_name?: string;
 };

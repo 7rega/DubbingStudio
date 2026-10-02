@@ -23,6 +23,7 @@ pub async fn handle(
     }
     let expected=match fingerprint(&snapshot){Ok(f)=>f,Err(e)=>return (StatusCode::INTERNAL_SERVER_ERROR,e).into_response()};
     let models=st.models_root.clone();
+    let pid_for_result = pid.clone();
     let job:crate::jobs::JobFn=Box::new(move |progress| {
         let mut result=snapshot.clone();
         let cb=|v|progress(v);
@@ -33,9 +34,9 @@ pub async fn handle(
             return Err("ALIGN_PROJECT_CHANGED: Проект изменён во время выравнивания. Повторите запуск.".into());
         }
         crate::save_project_unlocked(&dir,&result)?;
-        Ok(json!({"project_id":pid,"summary":summary,"before":snapshot,"project":result}))
+        Ok(json!({"project_id":pid_for_result,"summary":summary,"before":snapshot,"project":result}))
     });
-    Json(json!({"job_id":st.jobs.enqueue(job).await})).into_response()
+    Json(json!({"job_id":st.jobs.enqueue_with_meta("align", &pid, job).await})).into_response()
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

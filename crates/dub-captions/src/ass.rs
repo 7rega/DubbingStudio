@@ -116,6 +116,18 @@ pub fn word_spans(screen: &[String], a: f64, b: f64) -> Vec<(usize, String, f64,
     out
 }
 
+/// [(line_idx, word, ws, we)] по готовым временам слов экрана (word_align). Число времён не совпало со
+/// словами экрана — это ошибка сборки вызывающего, поэтому паника с причиной, а не тихая раскладка.
+fn timed_spans(screen: &[String], timed: &[(f64, f64)]) -> Vec<(usize, String, f64, f64)> {
+    let words: Vec<(usize, String)> = screen
+        .iter()
+        .enumerate()
+        .flat_map(|(li, ln)| ln.split_whitespace().map(move |w| (li, w.to_string())))
+        .collect();
+    assert_eq!(words.len(), timed.len(), "тайминги слов не совпали со словами экрана: {screen:?}");
+    words.into_iter().zip(timed).map(|((li, w), &(ws, we))| (li, w, ws, we)).collect()
+}
+
 /// Layer-0 плашка(и) на стиле KP — порт _plate_events. Непрозрачны, чтобы блюр оригинала не просвечивал.
 pub fn plate_events(
     plate: &str,
@@ -181,10 +193,32 @@ pub fn esc(s: &str) -> String {
     s.replace('{', "(").replace('}', ")")
 }
 
-/// Один субтитр-экран в разрешённом луке (плашка Layer 0 + текст Layer 1) — порт _emit_styled.
+/// Кегль экрана в луке и его ink-геометрия (ширина, верх и низ относительно центра строки) — как его
+/// нарисует emit_styled: размер нормализуется по шрифту и ужимается, если строка шире кадра.
+fn styled_geom(look: &ResolvedLook, screen: &[String], fs: i64, width: i64) -> (i64, f32, f32, f32) {
+    let fp = font_path_for(&look.font);
+    let mut fs_font = ((fs as f32 * look::font_scale(&look.font)) as i64).max(24);
+    let (mut ink_w, mut top_rel, mut bot_rel) = font::text_geom(screen, fs_font, &fp);
+    if ink_w > width as f32 * 0.90 {
+        fs_font = ((fs_font as f32 * width as f32 * 0.90 / ink_w) as i64).max(20);
+        let g = font::text_geom(screen, fs_font, &fp);
+        ink_w = g.0;
+        top_rel = g.1;
+        bot_rel = g.2;
+    }
+    (fs_font, ink_w, top_rel, bot_rel)
+}
+
+/// Верхний и нижний край экрана в луке вместе с плашкой, относительно центра строки.
+pub fn styled_extent(look: &ResolvedLook, screen: &[String], fs: i64, width: i64) -> (f32, f32) {
+    let (fs_font, _, top_rel, bot_rel) = styled_geom(look, screen, fs, width);
+    let pady = (fs_font as f32 * 0.30) as i64 as f32;
+    (top_rel - pady, bot_rel + pady)
+}
+
+/// Плашка лука под экраном (KP, Layer 0) и ведущие теги его текста: позиция, шрифт, кегль, обводка.
 #[allow(clippy::too_many_arguments)]
-pub fn emit_styled(
-    out: &mut Vec<String>,
+fn styled_frame(
     look: &ResolvedLook,
     a: f64,
     b: f64,
@@ -194,20 +228,9 @@ pub fn emit_styled(
     fs: i64,
     width: i64,
     bold: bool,
-) {
-    let (reveal0, plate, fontname) = (&look.reveal, &look.plate, &look.font);
-    let (base6, accent6, plate6) = (&look.base, &look.accent6, &look.plate6);
-    let fp = font_path_for(fontname);
-    // Нормализуем визуальный размер по шрифту, потом ужимаем если переполняет ширину кадра.
-    let mut fs_font = ((fs as f32 * look::font_scale(fontname)) as i64).max(24);
-    let (mut ink_w, mut top_rel, mut bot_rel) = font::text_geom(screen, fs_font, &fp);
-    if ink_w > width as f32 * 0.90 {
-        fs_font = ((fs_font as f32 * width as f32 * 0.90 / ink_w) as i64).max(20);
-        let g = font::text_geom(screen, fs_font, &fp);
-        ink_w = g.0;
-        top_rel = g.1;
-        bot_rel = g.2;
-    }
+) -> (Vec<String>, String) {
+    let (plate, fontname) = (&look.plate, &look.font);
+    let (fs_font, ink_w, top_rel, bot_rel) = styled_geom(look, screen, fs, width);
     let padx = (fs_font as f32 * 0.55) as i64;
     let pady = (fs_font as f32 * 0.30) as i64;
     let x0 = (cx - (ink_w as i64) / 2 - padx).max(6);
@@ -224,9 +247,65 @@ pub fn emit_styled(
         let shad = ((fs_font as f32 * 0.06) as i64).max(2);
         lead.push_str(&format!("\\bord{bord}\\shad{shad}\\4c&H000000&"));
     }
-    out.extend(plate_events(plate, x0 as f64, y0 as f64, x1 as f64, y1 as f64, plate6, accent6, a, b));
+    let plates = plate_events(plate, x0 as f64, y0 as f64, x1 as f64, y1 as f64, &look.plate6, &look.accent6, a, b);
+    (plates, lead)
+}
 
-    let spans = word_spans(screen, a, b);
+/// Экран в луке целиком, без пословной подсветки, стилем `style` — вторая строка двуязычных субтитров:
+/// своя плашка, шрифт и обводка лука, цвет текста `look.base`, `extra` — теги после цвета.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_styled_line(
+    out: &mut Vec<String>,
+    look: &ResolvedLook,
+    a: f64,
+    b: f64,
+    screen: &[String],
+    cx: i64,
+    cy: i64,
+    fs: i64,
+    width: i64,
+    bold: bool,
+    style: &str,
+    extra: &str,
+) {
+    let (plates, lead) = styled_frame(look, a, b, screen, cx, cy, fs, width, bold);
+    out.extend(plates);
+    out.push(format!(
+        "Dialogue: 1,{},{},{style},,0,0,0,,{{{lead}\\1c{}{extra}}}{}",
+        ts(a),
+        ts(b),
+        look.base,
+        screen.join("\\N")
+    ));
+}
+
+/// Один субтитр-экран в разрешённом луке (плашка Layer 0 + текст Layer 1) — порт _emit_styled.
+/// `timed` — (начало, конец) каждого слова экрана по реальной речи (word_align); None — по длине слов.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_styled(
+    out: &mut Vec<String>,
+    look: &ResolvedLook,
+    a: f64,
+    b: f64,
+    screen: &[String],
+    timed: Option<&[(f64, f64)]>,
+    cx: i64,
+    cy: i64,
+    fs: i64,
+    width: i64,
+    bold: bool,
+) {
+    let (base6, accent6) = (&look.base, &look.accent6);
+    let (plates, lead) = styled_frame(look, a, b, screen, cx, cy, fs, width, bold);
+    out.extend(plates);
+    let reveal0 = &look.reveal;
+
+    let spans = match timed {
+        Some(t) => timed_spans(screen, t),
+        None => word_spans(screen, a, b),
+    };
+    // Пауза от появления экрана до первого слова (у равномерной раскладки её нет).
+    let lead_in = spans.first().map(|s| (s.2 - a).max(0.0)).unwrap_or(0.0);
     let mut reveal = reveal0.clone();
     if reveal != "whole" && spans.is_empty() {
         reveal = "whole".to_string();
@@ -241,6 +320,10 @@ pub fn emit_styled(
     match reveal.as_str() {
         "karaoke" => {
             let mut parts = String::new();
+            let pre = (lead_in * 100.0).round() as i64;
+            if pre > 0 {
+                parts.push_str(&format!("{{\\k{pre}}}"));
+            }
             let mut cur = 0usize;
             for (li, w, ws, we) in &spans {
                 nl(&mut parts, *li, &mut cur);
@@ -254,6 +337,14 @@ pub fn emit_styled(
             ));
         }
         "highlight" => {
+            if lead_in > 0.005 {
+                out.push(format!(
+                    "Dialogue: 1,{},{},KT,,0,0,0,,{{{lead}\\1c{base6}}}{}",
+                    ts(a),
+                    ts(spans[0].2),
+                    screen.join("\\N")
+                ));
+            }
             for (k, (_, _, ws, we)) in spans.iter().enumerate() {
                 let mut parts = String::new();
                 let mut cur = 0usize;

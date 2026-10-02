@@ -31,8 +31,8 @@ fn main() {
     }
     set_fonts_dir(&fonts);
     let subs = vec![
-        Sub { start: 0.0, end: 2.0, tgt: "Hello world".into(), y: Some((h as f64 * 0.82) as i64) },
-        Sub { start: 2.0, end: 4.0, tgt: "This is a dubbed subtitle line".into(), y: Some((h as f64 * 0.82) as i64) },
+        Sub { start: 0.0, end: 2.0, tgt: "Hello world".into(), y: Some((h as f64 * 0.82) as i64), words: None, secondary: None },
+        Sub { start: 2.0, end: 4.0, tgt: "This is a dubbed subtitle line".into(), y: Some((h as f64 * 0.82) as i64), words: None, secondary: None },
     ];
     let style = SubStyle { color: "#FFFFFF".into(), background: Some("none".into()), bold: true, ..Default::default() };
     let out = std::env::temp_dir().join("dub_captions_example.ass");

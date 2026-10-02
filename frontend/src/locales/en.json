@@ -433,6 +433,7 @@
     "tts": "Voice synthesis",
     "modelsTab": "Models",
     "componentsTab": "Components",
+    "mcpTab": "MCP / Agents",
     "engineTab": "Engine",
     "redownload": "Re-download",
     "roleTts": "Voice · TTS",

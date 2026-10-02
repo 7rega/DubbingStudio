@@ -15,6 +15,9 @@ use crate::media;
 
 pub use cache::StageCache;
 
+#[allow(dead_code)]
+pub(crate) const STAGE_FILES: [&str; 5] = ["diar.json", "transcript.json", "translated.json", "ocr.json", "casting.json"];
+
 /// Content-addressable per-stage кэш стадий analyze (#80 «чекпоинты»).
 ///
 /// Файл `workspace/<pid>/cache.json` хранит по стадии: `param_hash = blake3(явные параметры стадии)`

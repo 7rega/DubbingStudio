@@ -932,6 +932,7 @@ dependencies = [
  "async-stream",
  "audiocpp",
  "axum",
+ "base64 0.22.1",
  "blake3",
  "cpal",
  "dub-asr",
