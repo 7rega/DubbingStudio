@@ -1170,10 +1170,10 @@ mod dedup_tests {
         let words = words_from_tokens(tokens, 0.0, 30.0);
         assert_eq!(words.len(), 2);
         assert_eq!(words[0].word, "There!");
-        assert_eq!(words[0].start, 15.0);
+        assert!((words[0].start - 15.0).abs() < 1e-4);
         assert!(words[0].end <= 15.25, "Конец слова 'There!' не должен раздуваться: {}", words[0].end);
         assert_eq!(words[1].word, "Next");
-        assert_eq!(words[1].start, 24.8);
+        assert!((words[1].start - 24.8).abs() < 1e-4, "start должен быть 24.8, факт: {}", words[1].start);
     }
 
     #[test]
@@ -1183,7 +1183,7 @@ mod dedup_tests {
         ];
         let words = words_from_tokens(tokens, 0.0, 60.0);
         assert_eq!(words.len(), 1);
-        assert_eq!(words[0].start, 2.0);
+        assert!((words[0].start - 2.0).abs() < 1e-4);
         assert!((words[0].end - (2.0 + TDT_FRAME_SECS)).abs() < 1e-4, "end должен быть 2.08, факт: {}", words[0].end);
     }
 
@@ -1199,7 +1199,7 @@ mod dedup_tests {
         assert_eq!(words.len(), 2);
         assert_eq!(words[0].word, "«hello");
         assert_eq!(words[1].word, "e.g.");
-        assert_eq!(words[1].end, 2.4);
+        assert!((words[1].end - 2.4).abs() < 1e-4, "end должен быть 2.4, факт: {}", words[1].end);
     }
 
     #[test]
