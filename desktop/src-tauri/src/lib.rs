@@ -68,18 +68,17 @@ fn wait_until_ready(port: u16, timeout: Duration) -> bool {
     false
 }
 
-/// Прописать ORT_DYLIB_PATH (onnxruntime 1.24) в окружение ПРОЦЕССА до старта сервера (dub-asr трогает ort
+/// Прописать ORT_DYLIB_PATH (onnxruntime 1.28) в окружение ПРОЦЕССА до старта сервера (dub-asr трогает ort
 /// лениво; PATH под движок/инструменты добавит augment_path_for_tools внутри serve_blocking).
 fn setup_server_env(repo_root: &PathBuf) {
     if std::env::var_os("ORT_DYLIB_PATH").is_none() {
         let rt = repo_root.join("models").join("runtime");
         for cand in [
             // GPU-сборка (cuda13) приоритетнее — суперсет CPU+CUDA; переключение backend без рестарта.
-            rt.join("onnxruntime-win-x64-gpu-1.24.2").join("lib").join("onnxruntime.dll"),
-            rt.join("onnxruntime-win-x64-gpu_cuda13-1.24.2").join("lib").join("onnxruntime.dll"),
-            rt.join("onnxruntime-win-x64-1.24.2").join("lib").join("onnxruntime.dll"),
+            rt.join("onnxruntime-win-x64-gpu_cuda13-1.28.2").join("lib").join("onnxruntime.dll"),
+            rt.join("onnxruntime-win-x64-gpu-1.28.2").join("lib").join("onnxruntime.dll"),
+            rt.join("onnxruntime-win-x64-1.28.2").join("lib").join("onnxruntime.dll"),
             app_root_dir().join("onnxruntime.dll"),
-            rt.join("onnxruntime-1.24.dll"),
             rt.join("onnxruntime.dll"),
         ] {
             if cand.is_file() {

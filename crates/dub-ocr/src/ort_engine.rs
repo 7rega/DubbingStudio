@@ -1,6 +1,6 @@
-//! ONNX-движки PP-OCR через ort (load-dynamic, ta же 1.24.2, что dub-asr). Det (DBNet) + Rec (CRNN).
+//! ONNX-движки PP-OCR через ort (load-dynamic, ta же 1.28.2, что dub-asr). Det (DBNet) + Rec (CRNN).
 //! ensure_ort_dylib() — копия паттерна dub-asr: без явного ORT_DYLIB_PATH ort цепляет чужую
-//! system32\onnxruntime.dll (1.17) -> ДЕДЛОК при создании сессии. Выставляем на встроенную 1.24.2.
+//! system32\onnxruntime.dll (1.17) -> ДЕДЛОК при создании сессии. Выставляем на встроенную 1.28.2.
 
 use ndarray::Array4;
 use ort::session::Session;
@@ -8,7 +8,7 @@ use ort::value::TensorRef;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 
-/// Гарантировать правильную onnxruntime.dll (1.24.2). Порт dub_asr::ensure_ort_dylib (тот же поиск).
+/// Гарантировать правильную onnxruntime.dll (1.28.2). Порт dub_asr::ensure_ort_dylib (тот же поиск).
 pub fn ensure_ort_dylib() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -42,10 +42,21 @@ pub fn ensure_ort_dylib() {
             roots.push(cwd.join("models"));
         }
         for r in &roots {
-            cands.push(r.join("runtime").join("onnxruntime-1.24.dll"));
             cands.push(
                 r.join("runtime")
-                    .join("onnxruntime-win-x64-1.24.2")
+                    .join("onnxruntime-win-x64-gpu_cuda13-1.28.2")
+                    .join("lib")
+                    .join("onnxruntime.dll"),
+            );
+            cands.push(
+                r.join("runtime")
+                    .join("onnxruntime-win-x64-gpu-1.28.2")
+                    .join("lib")
+                    .join("onnxruntime.dll"),
+            );
+            cands.push(
+                r.join("runtime")
+                    .join("onnxruntime-win-x64-1.28.2")
                     .join("lib")
                     .join("onnxruntime.dll"),
             );

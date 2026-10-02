@@ -51,6 +51,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "voxcpm2-bf16" => vec![("tts_engine", "voxcpm2".into()), ("tts", "bf16".into())],
         "parakeet" => vec![("asr_engine", "parakeet".into()), ("asr", "int8".into())],
         "parakeet-fp32" => vec![("asr_engine", "parakeet".into()), ("asr", "fp32".into())],
+        "parakeet-ultra" => vec![("asr_engine", "parakeet".into()), ("asr", "ultra".into())],
         "whisper-tiny" => vec![("asr_engine", "whisper".into()), ("whisper_model", "tiny".into())],
         "whisper-base" => vec![("asr_engine", "whisper".into()), ("whisper_model", "base".into())],
         "whisper-small" => vec![("asr_engine", "whisper".into()), ("whisper_model", "small".into())],
@@ -663,20 +664,24 @@ pub fn resolve_sep(mroot: &Path, sel: &Value) -> PathBuf {
     f("Q8_0")
 }
 
-/// Parakeet ASR: каталоги tdt (int8) / tdt-fp32. from_pretrained сам различает имена файлов внутри.
+/// Parakeet ASR: каталоги tdt (int8) / tdt-fp32 / tdt-ultra. from_pretrained сам различает имена файлов внутри.
 /// Env DUB_STUDIO_TDT имеет приоритет.
 pub fn resolve_asr(mroot: &Path, sel: &Value) -> PathBuf {
     if let Ok(env) = std::env::var("DUB_STUDIO_TDT") {
         return PathBuf::from(env);
     }
+    let ultra = mroot.join("tdt-ultra");
     let fp32 = mroot.join("tdt-fp32");
     let int8 = mroot.join("tdt");
+    let ultra_ok = ultra.join("encoder-model.onnx").is_file();
     let fp32_ok = fp32.join("encoder-model.onnx").is_file();
     let int8_ok = int8.join("encoder-model.int8.onnx").is_file();
     match pick(sel, "asr") {
+        Some("ultra") if ultra_ok => ultra,
         Some("fp32") if fp32_ok => fp32,
         Some("int8") if int8_ok => int8,
         _ if int8_ok => int8,
+        _ if ultra_ok => ultra,
         _ if fp32_ok => fp32,
         _ => int8,
     }

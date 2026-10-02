@@ -64,7 +64,7 @@ function LanguageSwitcher() {
 const VARIANT_SLOT: Record<string, [string, string]> = {
   higgs: ["tts", "q8_0"], "higgs-q6_k": ["tts", "q6_k"], "higgs-q4_k_m": ["tts", "q4_k_m"],
   voxcpm2: ["tts", "q8_0"], "voxcpm2-bf16": ["tts", "bf16"],
-  parakeet: ["asr", "int8"], "parakeet-fp32": ["asr", "fp32"],
+  parakeet: ["asr", "int8"], "parakeet-fp32": ["asr", "fp32"], "parakeet-ultra": ["asr", "ultra"],
   gemma: ["mt", "q4_0"], "gemma-q5_0": ["mt", "q5_0"], "gemma-q6_k": ["mt", "q6_k"], "gemma-q8_0": ["mt", "q8_0"],
   roformer: ["sep", "Q8_0"], "roformer-q5": ["sep", "Q5_0"], "roformer-q4": ["sep", "Q4_0"],
   "whisper-tiny": ["whisper_model", "tiny"], "whisper-base": ["whisper_model", "base"],
@@ -195,14 +195,18 @@ function ModelsSection() {
     const pick = picks[ids[0]] ?? activeVariantId(ids, sel) ?? installed?.id ?? variants[0]?.id ?? "";
     const c = get(pick);
     if (!c) return null;
-    const quant = (v: SetupComponent) => (v.name.match(/\b(q\d[\w]*|int8|fp32|bf16|f16|large-v3-turbo|large-v3|tiny|base|small|medium)\b/i)?.[1] ?? v.name);
+    const quant = (v: SetupComponent) => {
+      if (v.id === "parakeet-ultra") return "ultra (fp32)";
+      return (v.name.match(/\b(q\d[\w]*|int8|fp32|bf16|f16|large-v3-turbo|large-v3|tiny|base|small|medium)\b/i)?.[1] ?? v.name);
+    };
     const active = prog?.id === c.id;
+    const title = c.id === "parakeet-ultra" ? "Parakeet Ultra 0.6B" : base;
     return (
       <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
         <div className="flex items-center gap-2.5">
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${variants.some((v) => v.installed) ? "bg-[var(--color-accent)]" : "bg-[var(--color-muted)]"}`} />
           <div className="min-w-0 flex-1">
-            <div className="text-[12px] font-medium truncate">{base}</div>
+            <div className="text-[12px] font-medium truncate">{title}</div>
             <div className="mono text-[10px] text-[var(--color-muted)] truncate">{c.vram ? `${fmtBytes(c.vram)} VRAM · ` : ""}{fmtBytes(c.size)} {t("settings.disk")}{c.installed ? "" : ` · ${t("settings.notInstalled")}`}</div>
           </div>
           <select value={pick} onChange={(e) => {
@@ -407,7 +411,7 @@ function ModelsSection() {
             <div className="text-[11px] text-[var(--color-muted)]">Транскрипция через облако — тяжёлые локальные ASR-модели качать не нужно.</div>
           </div>
         ) : asrEngine === "parakeet" ? (
-          <VariantPicker base="Parakeet-TDT 0.6B v3" ids={["parakeet", "parakeet-fp32"]} />
+          <VariantPicker base="Parakeet-TDT 0.6B v3" ids={["parakeet", "parakeet-fp32", "parakeet-ultra"]} />
         ) : (
           <>
             <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
@@ -9595,7 +9599,7 @@ function fmtBytes(n: number) {
 const QUANT_GROUP: Record<string, string> = {
   higgs: "higgs", "higgs-bf16": "higgs", "higgs-q6_k": "higgs", "higgs-q4_k_m": "higgs",
   gemma: "gemma", "gemma-q5_0": "gemma", "gemma-q6_k": "gemma", "gemma-q8_0": "gemma",
-  parakeet: "parakeet", "parakeet-fp32": "parakeet",
+  parakeet: "parakeet", "parakeet-fp32": "parakeet", "parakeet-ultra": "parakeet",
   roformer: "roformer", "roformer-q5": "roformer", "roformer-q4": "roformer",
   "whisper-engine": "whisper_engine", "whisper-xxl": "whisper_engine",
   "nemotron-bf16": "nemotron", "nemotron-q8_0": "nemotron",
@@ -10701,7 +10705,7 @@ export default function App() {
     if (sel.auto_cast_on !== undefined) {
       useStore.getState().setAutoCastOn(sel.auto_cast_on !== "0");
     }
-    const asrLabel = sel.asr_engine === "whisper" ? `whisper ${sel.whisper_model || "auto"}` : c.asr_model;
+    const asrLabel = sel.asr_engine === "whisper" ? `whisper ${sel.whisper_model || "auto"}` : (sel.asr === "ultra" ? "Parakeet Ultra" : c.asr_model);
     const parts = [c.device, `ASR ${asrLabel}`];
     if (c.models?.llm) parts.push(`MT+vision ${base(c.models.llm)}`);
     if (c.models?.tts) parts.push(`TTS ${c.models.tts}${c.tts_quant ? ` ${c.tts_quant}` : ""}`);

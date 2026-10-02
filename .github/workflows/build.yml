@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия релиза (например, v5.0.0)'
+        required: false
+        default: 'v5.0.0'
 
 jobs:
   build-windows:
@@ -108,14 +113,17 @@ jobs:
           New-Item -ItemType Directory -Force "$portableDir/frontend"
           Copy-Item -Path "frontend/dist" -Destination "$portableDir/frontend/dist" -Recurse -Force
 
-          # 4. Архивируем в ZIP-архив
-          $zipName = "DubStudio-Portable-${{ github.ref_name }}-Windows.zip"
+          # 4. Определяем версию релиза и архивируем в ZIP-архив
+          $ver = "${{ github.event.inputs.version }}"
+          if (-not $ver) { $ver = "${{ github.ref_name }}" }
+          if ($ver -eq "main" -or $ver -eq "Dev") { $ver = "v5.0.0" }
+          $zipName = "DubStudio-Portable-$ver-Windows.zip"
           Compress-Archive -Path "$portableDir" -DestinationPath "$zipName" -Force
 
           # 5. Пробуем создать релиз (игнорируя ошибку, если он уже создан)
-          gh release create ${{ github.ref_name }} --title "Dub Studio ${{ github.ref_name }}" --draft --repo ${{ github.repository }} 2>$null
+          gh release create $ver --title "Dub Studio $ver" --draft --repo ${{ github.repository }} 2>$null
           
           # Загружаем ZIP-архив портативной версии в релиз
-          gh release upload ${{ github.ref_name }} "$zipName" --clobber --repo ${{ github.repository }}
+          gh release upload $ver "$zipName" --clobber --repo ${{ github.repository }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

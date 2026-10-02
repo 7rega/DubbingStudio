@@ -12,7 +12,7 @@
 //! Higgs voiceclean.rs):
 //!   • модели — прямые файлы HF (higgs-q8_0/*, gemma-4 + mmproj, parakeet-tdt int8, sortformer, roformer
 //!     voc_fv6-Q8_0);
-//!   • сайдкары/движки — zip-релизы GitHub (BSRoformer.cpp, llama.cpp win-cuda-13.3, onnxruntime 1.24.2,
+//!   • сайдкары/движки — zip-релизы GitHub (BSRoformer.cpp, llama.cpp win-cuda-13.4, onnxruntime 1.28.2,
 //!     ffmpeg BtbN) + audiocpp_engine.dll (HF);
 //!   • CUDA-runtime — PyPI-wheel'ы NVIDIA (cudart 13.3.29 / cublas 13.6.0.2), распаковка *.dll плоско;
 //!   • VC++ runtime + OCR-модели — БАНДЛ (кладутся в релиз рядом с exe, как VC++ в Higgs); не качаются,
@@ -53,7 +53,7 @@ pub enum Extract {
     /// zip: отобрать конкретные файлы по имени листа (ffmpeg.exe/ffprobe.exe) и положить плоско в каталог.
     ZipPick,
     /// zip: распаковать ВЕСЬ архив с сохранением поддерева в каталог. Для onnxruntime — чтобы получить
-    /// `onnxruntime-win-x64-1.24.2/lib/onnxruntime.dll` ровно там, где его ищет dub-asr::ensure_ort_dylib.
+    /// `onnxruntime-win-x64-1.28.2/lib/onnxruntime.dll` ровно там, где его ищет dub-asr::ensure_ort_dylib.
     ZipTree,
     /// wheel (zip): достать все *.dll плоско в каталог, затем удалить архив (CUDA runtime).
     WheelDlls,
@@ -139,18 +139,18 @@ const GH_BSROFORMER_ENGINE: &str =
 // но полная функция. Статический exe 671КБ; MSVC-рантайм уже вшит компонентом vcruntime.
 const GH_BSROFORMER_ENGINE_CPU: &str =
     "https://github.com/chenmozhijin/BSRoformer.cpp/releases/download/v0.1.0/BSRoformer-windows-x64-msvc.zip";
-// GitHub: llama.cpp win-cuda-13.3 (ggml-org/llama.cpp; пин на стабильный билд + cudart-компаньон).
-const GH_LLAMA_BUILD: &str = "b9966";
+// GitHub: llama.cpp win-cuda-13.4 (ggml-org/llama.cpp; пин на стабильный билд + cudart-компаньон).
+const GH_LLAMA_BUILD: &str = "b11146";
 const GH_LLAMA: &str =
-    "https://github.com/ggml-org/llama.cpp/releases/download/b9966/llama-b9966-bin-win-cuda-13.3-x64.zip";
-// GitHub: onnxruntime 1.24.2 win-x64 (microsoft/onnxruntime) — строго 1.24.2 (rc.12 ABI; иначе дедлок).
+    "https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-win-cuda-13.4-x64.zip";
+// GitHub: onnxruntime 1.28.2 win-x64 (microsoft/onnxruntime).
 const GH_ORT: &str =
-    "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-win-x64-1.24.2.zip";
-// GitHub: onnxruntime 1.24.2 GPU-сборка под CUDA 13 (gpu_cuda13) — CUDA-EP для Parakeet/Sortformer на
+    "https://github.com/microsoft/onnxruntime/releases/download/v1.28.2/onnxruntime-win-x64-1.28.2.zip";
+// GitHub: onnxruntime 1.28.2 GPU-сборка под CUDA 13 (gpu_cuda13) — CUDA-EP для Parakeet/Sortformer на
 // GPU. Вариант cuda13 переиспользует наши _13-DLL (cudart/cublas), нужен только cuDNN 9 (WHEEL_CUDNN).
 // Содержит onnxruntime.dll(GPU) + onnxruntime_providers_cuda.dll + onnxruntime_providers_shared.dll.
 const GH_ORT_GPU: &str =
-    "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-win-x64-gpu_cuda13-1.24.2.zip";
+    "https://github.com/microsoft/onnxruntime/releases/download/v1.28.2/onnxruntime-win-x64-gpu_cuda13-1.28.2.zip";
 // GitHub: ffmpeg static win64 GPL (BtbN/FFmpeg-Builds) — тот же источник, что install.bat.
 const GH_FFMPEG: &str =
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
@@ -284,16 +284,16 @@ pub fn manifest() -> Vec<Component> {
             purpose: "Нативный C++ движок озвучки нового поколения (audio.cpp CUDA 13.3)",
             requirement: Requirement::Optional,
             delivery: Delivery::Download,
-            size: 847_647_333,
+            size: 848_271_790,
             files: &[
                 FileSpec {
-                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.8.2/audio-v0.8.2-bin-windows-x64-cuda13.3.zip",
+                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.0/audio-v0.9.0-bin-windows-x64-cuda13.3.zip",
                     dest_rel: "tools/audiocpp/_bin.zip",
-                    size: 272_189_879,
+                    size: 272_814_336,
                     extract: Extract::ZipTree,
                 },
                 FileSpec {
-                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.8.2/audio-v0.8.2-cudart-windows-x64-cuda13.3.zip",
+                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.0/audio-v0.9.0-cudart-windows-x64-cuda13.3.zip",
                     dest_rel: "tools/audiocpp/_cudart.zip",
                     size: 575_457_454,
                     extract: Extract::ZipTree,
@@ -463,6 +463,27 @@ pub fn manifest() -> Vec<Component> {
                 FileSpec { url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/config.json", dest_rel: "models/tdt-fp32/config.json", size: 0, extract: Extract::None },
             ],
             markers: &[Marker { rel: "models/tdt-fp32/encoder-model.onnx", expect: 41_770_866 }, Marker { rel: "models/tdt-fp32/encoder-model.onnx.data", expect: 2_435_420_160 }, Marker { rel: "models/tdt-fp32/vocab.txt", expect: 93_939 }],
+            external_url: None,
+        },
+        Component {
+            id: "parakeet-ultra",
+            name: "Parakeet-TDT Ultra (fp32)",
+            purpose: "Распознавание речи (ASR) — дообученная модель Parakeet Ultra",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: 2_595_892_056,
+            files: &[
+                FileSpec { url: "https://huggingface.co/altunenes/parakeet-rs/resolve/main/parakeet-ultra/encoder-model.onnx", dest_rel: "models/tdt-ultra/encoder-model.onnx", size: 87_857_063, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/altunenes/parakeet-rs/resolve/main/parakeet-ultra/encoder-model.onnx.data", dest_rel: "models/tdt-ultra/encoder-model.onnx.data", size: 2_435_420_160, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/altunenes/parakeet-rs/resolve/main/parakeet-ultra/decoder_joint-model.onnx", dest_rel: "models/tdt-ultra/decoder_joint-model.onnx", size: 72_520_894, extract: Extract::None },
+                FileSpec { url: "https://huggingface.co/altunenes/parakeet-rs/resolve/main/parakeet-ultra/vocab.txt", dest_rel: "models/tdt-ultra/vocab.txt", size: 93_939, extract: Extract::None },
+            ],
+            markers: &[
+                Marker { rel: "models/tdt-ultra/encoder-model.onnx", expect: 87_857_063 },
+                Marker { rel: "models/tdt-ultra/encoder-model.onnx.data", expect: 2_435_420_160 },
+                Marker { rel: "models/tdt-ultra/decoder_joint-model.onnx", expect: 72_520_894 },
+                Marker { rel: "models/tdt-ultra/vocab.txt", expect: 93_939 },
+            ],
             external_url: None,
         },
         // ── АЛЬТЕРНАТИВНЫЙ ASR-ДВИЖОК: Whisper (Purfview standalone faster-whisper) ──────────
@@ -775,12 +796,12 @@ pub fn manifest() -> Vec<Component> {
         },
         Component {
             id: "llama",
-            name: "llama.cpp сервер (CUDA 13.3)",
+            name: "llama.cpp сервер (CUDA 13.4)",
             purpose: "Сайдкар-сервер для Gemma (перевод/vision)",
             requirement: Requirement::Required,
             delivery: Delivery::Download,
             // Размер сжатого zip (для прогресса закачки); распакованный footprint ~683 МБ.
-            size: 162_331_298,
+            size: 149_758_833,
             files: &[
                 FileSpec { url: GH_LLAMA, dest_rel: "tools/llama/_llama.zip", size: 0, extract: Extract::ZipFlat },
             ],
@@ -789,29 +810,29 @@ pub fn manifest() -> Vec<Component> {
         },
         Component {
             id: "onnxruntime",
-            name: "ONNX Runtime 1.24.2",
-            purpose: "Рантайм ASR/OCR/диаризации (строго 1.24.2)",
+            name: "ONNX Runtime 1.28.2",
+            purpose: "Рантайм ASR/OCR/диаризации",
             requirement: Requirement::Required,
             delivery: Delivery::Download,
-            size: 74_075_355,
+            size: 78_620_837,
             files: &[
-                FileSpec { url: GH_ORT, dest_rel: "models/runtime/_ort.zip", size: 74_075_355, extract: Extract::ZipTree },
+                FileSpec { url: GH_ORT, dest_rel: "models/runtime/_ort.zip", size: 78_620_837, extract: Extract::ZipTree },
             ],
             // dub-asr::ensure_ort_dylib ищет ровно этот путь под models/runtime.
-            markers: &[Marker { rel: "models/runtime/onnxruntime-win-x64-1.24.2/lib/onnxruntime.dll", expect: 0 }],
+            markers: &[Marker { rel: "models/runtime/onnxruntime-win-x64-1.28.2/lib/onnxruntime.dll", expect: 0 }],
             external_url: None,
         },
         Component {
             id: "onnxruntime-gpu",
-            name: "ONNX Runtime 1.24.2 GPU (CUDA)",
+            name: "ONNX Runtime 1.28.2 GPU (CUDA)",
             purpose: "CUDA-провайдер для диаризации/Parakeet на GPU (режим local_backend=gpu)",
             requirement: Requirement::Recommended,
             delivery: Delivery::Download,
-            size: 288_348_147,
+            size: 365_562_963,
             files: &[
-                FileSpec { url: GH_ORT_GPU, dest_rel: "models/runtime/_ort_gpu.zip", size: 288_348_147, extract: Extract::ZipTree },
+                FileSpec { url: GH_ORT_GPU, dest_rel: "models/runtime/_ort_gpu.zip", size: 365_562_963, extract: Extract::ZipTree },
             ],
-            markers: &[Marker { rel: "models/runtime/onnxruntime-win-x64-gpu-1.24.2/lib/onnxruntime.dll", expect: 0 }],
+            markers: &[Marker { rel: "models/runtime/onnxruntime-win-x64-gpu_cuda13-1.28.2/lib/onnxruntime.dll", expect: 0 }],
             external_url: None,
         },
         Component {
@@ -948,6 +969,7 @@ fn vram_estimate(id: &str) -> u64 {
         "gemma-q8_0" => gb(14.0),
         "parakeet" => gb(1.1),
         "parakeet-fp32" => gb(2.7),
+        "parakeet-ultra" => gb(2.7),
         "sortformer" => gb(0.6),
         "nemotron-bf16" => gb(0.2),
         "nemotron-q8_0" => gb(0.15),
@@ -1845,7 +1867,7 @@ fn extract_zip_flat(zip_path: &Path, dir: &Path) -> Result<(), String> {
 }
 
 /// zip: отобрать нужные файлы (onnxruntime.dll, ffmpeg.exe/ffprobe.exe) и положить плоско в dir.
-/// onnxruntime-win-x64-1.24.2/lib/onnxruntime.dll -> dir/onnxruntime.dll ; ffmpeg .../bin/*.exe -> dir/*.exe.
+/// onnxruntime-win-x64-1.28.2/lib/onnxruntime.dll -> dir/onnxruntime.dll ; ffmpeg .../bin/*.exe -> dir/*.exe.
 fn extract_zip_pick(zip_path: &Path, dir: &Path) -> Result<(), String> {
     let file = std::fs::File::open(zip_path).map_err(|e| format!("открыть {}: {e}", zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("не zip: {e}"))?;

@@ -80,13 +80,13 @@ pub use segment::{
 /// Целевая частота parakeet-rs.
 pub const TARGET_SR: u32 = 16_000;
 
-/// Гарантировать, что ort (load-dynamic) грузит ПРАВИЛЬНУЮ onnxruntime.dll (1.24.2, под которую собран
+/// Гарантировать, что ort (load-dynamic) грузит ПРАВИЛЬНУЮ onnxruntime.dll (1.28.2, под которую собран
 /// ort rc.12). Без явного ORT_DYLIB_PATH ort ищет DLL по системному PATH и цепляет
 /// C:\Windows\System32\onnxruntime.dll (1.17, поставляется с Windows) — рассинхрон OrtApi даёт ДЕДЛОК
 /// при создании сессии (процесс висит с 0% CPU, ни модель, ни диск не грузятся). Поэтому если
-/// ORT_DYLIB_PATH не задан пользователем, выставляем его на встроенную 1.24.2-DLL до первого касания ort.
+/// ORT_DYLIB_PATH не задан пользователем, выставляем его на встроенную 1.28.2-DLL до первого касания ort.
 ///
-/// Поиск (первый существующий): env DUB_ASR_ORT_DYLIB -> <models_root>/runtime/onnxruntime-win-x64-1.24.2/
+/// Поиск (первый существующий): env DUB_ASR_ORT_DYLIB -> <models_root>/runtime/onnxruntime-win-x64-1.28.2/
 /// lib/onnxruntime.dll -> та же DLL рядом с бинарём (портативная раскладка). models_root: env
 /// DUBENGINE_MODELS_ROOT, иначе <exe_dir>/models или <exe_dir>/../../models (dev-раскладка target/…).
 fn ensure_ort_dylib() {
@@ -127,11 +127,11 @@ fn ensure_ort_dylib() {
             // GPU-сборка (cuda13) ПРИОРИТЕТНЕЕ: она суперсет — умеет и CPU-провайдер, и CUDA-EP. Если
             // скачана, грузим её, чтобы переключение backend gpu<->cpu работало БЕЗ рестарта (dll
             // фиксируется в процессе при первом касании ort; выбор провайдера — уже в exec_config).
-            // GPU-сборка распаковывается в папку onnxruntime-win-x64-gpu-1.24.2 (БЕЗ _cuda13, хотя zip
-            // называется gpu_cuda13); держим оба варианта имени на случай иной раскладки.
-            cands.push(r.join("runtime").join("onnxruntime-win-x64-gpu-1.24.2").join("lib").join("onnxruntime.dll"));
-            cands.push(r.join("runtime").join("onnxruntime-win-x64-gpu_cuda13-1.24.2").join("lib").join("onnxruntime.dll"));
-            cands.push(r.join("runtime").join("onnxruntime-win-x64-1.24.2").join("lib").join("onnxruntime.dll"));
+            // GPU-сборка распаковывается в папку onnxruntime-win-x64-gpu_cuda13-1.28.2 (или onnxruntime-win-x64-gpu-1.28.2);
+            // держим оба варианта имени на случай иной раскладки.
+            cands.push(r.join("runtime").join("onnxruntime-win-x64-gpu_cuda13-1.28.2").join("lib").join("onnxruntime.dll"));
+            cands.push(r.join("runtime").join("onnxruntime-win-x64-gpu-1.28.2").join("lib").join("onnxruntime.dll"));
+            cands.push(r.join("runtime").join("onnxruntime-win-x64-1.28.2").join("lib").join("onnxruntime.dll"));
         }
         for c in cands {
             if c.is_file() {
