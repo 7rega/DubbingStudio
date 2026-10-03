@@ -2,12 +2,12 @@
 //! крейта dub-translate (Gemma через сайдкар llama-server). Заполняет tgt_text сегментов, titles/brands/
 //! sub_style/sub_y и raw_ctx в Project. Все решения (do_translate / same_lang / rewrite) — как в питоне.
 //!
-//! Fail-safe: любой сбой (нет llama-бинаря / нет весов / упал сервер) логируется в SSE и оставляет tgt
-//! пустым — перевод не блокирует транскрипт-стадию analyze (её результат уже валиден).
+//! Перевод нужен, но не выполнен (нет llama-бинаря / нет весов / упал сервер / большая часть строк осталась
+//! на исходном языке) — стадия возвращает Err с причиной, и analyze падает с ней.
 
-use dub_core::{Brand, Project, SubStyle};
+use dub_core::{Brand, GlossaryEntry, Project, SubStyle};
 use dub_llm::ChatClient;
-use dub_translate::{classify_content_type, ctx_run, CtxConfig, Seg};
+use dub_translate::{classify_content_type, ctx_run, looks_untranslated, CtxConfig, FlatOpts, Seg};
 use serde_json::Value;
 
 use crate::analyze::{AnalyzeArgs, AnalyzePaths, Progress};
@@ -20,25 +20,28 @@ fn emit(progress: &Progress, stage: &str, msg: &str) {
 fn copy_src_to_tgt(proj: &mut Project) {
     for s in &mut proj.segments {
         s.tgt_text = s.src_text.clone();
-        s.extra.remove("translation_pending");
     }
 }
 
-/// Нужно ли переводить: dub/voiceover-режим ИЛИ subs=translate (как do_translate в pipeline).
-fn wants_translate(proj: &Project) -> bool {
-    proj.mode == "dub" || proj.mode == "voiceover" || proj.subs.mode == "translate"
+/// Нужно ли переводить: dub/voiceover-режим ИЛИ субтитры с переводом (translate, bilingual) — как
+/// do_translate в pipeline.
+pub(crate) fn wants_translate(proj: &Project) -> bool {
+    proj.mode == "dub" || proj.mode == "voiceover" || matches!(proj.subs.mode.as_str(), "translate" | "bilingual")
 }
 
 /// Автономная классификация типа контента (real/anime) для кастинга. Нужна, когда translate-стадия
 /// пропущена ранним return (same-lang / transcribe / нет LLM), а content_type="auto": иначе casting
-/// молча берёт "real"-детектор для анимации. Поднимает Gemma+mmproj ТОЛЬКО ради классификации и гасит.
-/// None -> классифицировать не удалось (нет бинаря/весов/сервер не встал) -> вызывающий оставит дефолт.
+/// молча берёт "real"-детектор для анимации. Открывает vision-провайдер (своя Gemma+mmproj, локальный
+/// сервер или OpenRouter) ТОЛЬКО ради классификации и закрывает.
+/// None -> классифицировать не удалось (причина в прогрессе) -> вызывающий оставит дефолт.
 pub fn classify_content_type_standalone(
     paths: &AnalyzePaths,
     total: f64,
     progress: &Progress,
 ) -> Option<String> {
-    let prov = crate::llm_provider::open(
+    // Без vision-модели классификация невозможна: слать кадры в text-only модель = молча "real"
+    // с ложным «0 голосов». Нет vision -> None, вызывающий честно оставит дефолт.
+    let provider = match crate::llm_provider::open(
         &crate::llm_provider::LlmOpen {
             llama_bin: &paths.llama_bin,
             mt_model: &paths.mt_model,
@@ -46,15 +49,25 @@ pub fn classify_content_type_standalone(
             models_root: &paths.models_root,
         },
         crate::llm_provider::LlmMode::Vision,
-    ).ok()?;
-    let client = prov.client();
+    ) {
+        Ok(provider) => provider,
+        Err(e) => {
+            emit(progress, "vision", &format!("тип контента не определён: vision недоступен ({e})"));
+            return None;
+        }
+    };
     let tmp = paths.work_dir.join("ctype_frame.png");
-    let ct = classify_content_type(client, &paths.input, &tmp, total, |m| emit(progress, "vision", m));
+    let ct = classify_content_type(provider.client(), &paths.input, &tmp, total, |m| emit(progress, "vision", m));
     let _ = std::fs::remove_file(&tmp);
     Some(ct)
 }
 
+/// Доля непустых строк без перевода, начиная с которой перевод считается проваленным: озвучить ролик
+/// на исходном языке под видом дубляжа хуже, чем остановиться с причиной.
+const UNTRANSLATED_FAIL_SHARE: f64 = 0.5;
+
 /// Прогнать стадию. proj уже собран транскрипт-стадией (segments + mode/tgt_lang). vh/total — из probe.
+/// Err — перевод нужен (дубляж, закадр, перевод субтитров, ремикс), но не выполнен.
 pub fn stage(
     args: &AnalyzeArgs,
     paths: &AnalyzePaths,
@@ -63,16 +76,16 @@ pub fn stage(
     vh: i64,
     total: f64,
     progress: &Progress,
-) {
+) -> Result<(), String> {
     // Нет сегментов -> нечего переводить (auto-nodub / музыка). Как ранний return в питоне.
     if proj.segments.is_empty() {
-        return;
+        return Ok(());
     }
     // Импортированы субтитры УЖЕ на языке перевода: tgt заполнен из cues (analyze import-ветка),
     // MT и vision-раскладка не нужны — Даб Студио только озвучивает готовый текст.
     if args.import_translated {
         emit(progress, "translate", "субтитры уже на языке перевода -> без MT (только озвучка)");
-        return;
+        return Ok(());
     }
     let rewrite = if args.rewrite.is_empty() { None } else { Some(args.rewrite.as_str()) };
     let do_translate = wants_translate(proj) || rewrite.is_some();
@@ -80,7 +93,7 @@ pub fn stage(
         // transcribe-режим: tgt = исходный текст, БЕЗ MT (parity с pipeline «transcribe» веткой).
         copy_src_to_tgt(proj);
         emit(progress, "translate", "transcribe: tgt=исходный текст, без перевода");
-        return;
+        return Ok(());
     }
 
     // src == tgt -> оставить исходник, ноль MT (same_lang в питоне). src берём из query (auto -> не знаем
@@ -92,61 +105,41 @@ pub fn stage(
     if same_lang && rewrite.is_none() {
         copy_src_to_tgt(proj);
         emit(progress, "translate", "same-lang -> без MT (tgt=исходник)");
-        return;
+        return Ok(());
     }
 
-    // LLM-провайдер: облако OpenRouter (если включено в настройках + есть ключ) ИЛИ локальный llama-server
-    // (Gemma+mmproj). Vision-режим: облаку — multimodal-модель, локали — mmproj. Fast Text: без mmproj.
-    let llm_mode = if args.vision {
-        crate::llm_provider::LlmMode::Vision
-    } else {
-        crate::llm_provider::LlmMode::Text
-    };
-    let prov = match crate::llm_provider::open(
-        &crate::llm_provider::LlmOpen {
-            llama_bin: &paths.llama_bin,
-            mt_model: &paths.mt_model,
-            mmproj: &paths.mmproj,
-            models_root: &paths.models_root,
-        },
-        llm_mode,
-    ) {
-        Ok(p) => {
-            emit(progress, "translate", if p.is_remote() {
-                if args.vision {
-                    "перевод/vision через облако (OpenRouter)"
-                } else {
-                    "перевод через облако (OpenRouter Fast Text)"
-                }
-            } else {
-                if args.vision {
-                    "поднимаю llama-server (Gemma + mmproj)"
-                } else {
-                    "поднимаю llama-server (Gemma Fast Text)"
-                }
-            });
-            p
+    // Провайдеры перевода и vision выбираются независимо (своя Gemma / локальный сервер / OpenRouter): облачный
+    // перевод не требует локальных весов. Перевод недоступен — Err с причиной; недоступный vision перевод
+    // не останавливает.
+    let pair = match crate::llm_provider::open_pair(&crate::llm_provider::LlmOpen {
+        llama_bin: &paths.llama_bin,
+        mt_model: &paths.mt_model,
+        mmproj: &paths.mmproj,
+        models_root: &paths.models_root,
+    }) {
+        Ok(pair) => {
+            emit(progress, "translate", &pair.describe());
+            pair
         }
-        Err(e) => {
-            emit(progress, "translate", &format!("LLM недоступен: {e}; перевод пропущен"));
-            return;
-        }
+        Err(e) => return Err(format!("перевод не выполнен: LLM недоступен: {e}")),
     };
-    let client = prov.client();
+    let client = pair.text();
 
     // Авто-детект типа контента для кастинга (#115): юзер выбрал «Авто» + кастинг включён -> классифицируем
-    // live-action vs анимация Gemma-vision (сервер уже поднят). Только при включённом vision и наличии mmproj
-    // (иначе vision нет -> casting-стадия сделает автономный детект/дефолт). Результат в проект; casting-стадия прочитает.
-    if args.vision && args.casting && args.content_type == "auto" && paths.mmproj.is_file() {
+    // live-action vs анимация vision-моделью (уже открыта). Нет vision -> casting-стадия сделает автономный
+    // детект/дефолт. Результат в проект; casting-стадия прочитает.
+    if let (true, Some(vision)) = (args.casting && args.content_type == "auto", pair.vision()) {
         let tmp = paths.work_dir.join("ctype_frame.png");
-        let ct = classify_content_type(&client, &paths.input, &tmp, total, |m| {
+        let ct = classify_content_type(vision, &paths.input, &tmp, total, |m| {
             emit(progress, "vision", m);
         });
         let _ = std::fs::remove_file(&tmp);
         proj.audio.content_type = ct;
     }
 
-    // Seg-вью для dub-translate (text/speaker). speaker -> i64 (питон speaker=0 по умолчанию).
+    // Seg-вью для dub-translate (text/speaker). speaker -> i64 (питон speaker=0 по умолчанию). Темп речи
+    // языка для бюджета длины перевода.
+    let cps = dub_core::fit::table_cps(&proj.tgt_lang);
     let mut segs: Vec<Seg> = proj
         .segments
         .iter()
@@ -155,14 +148,15 @@ pub fn stage(
             let mut seg = Seg::new(s.src_text.clone(), spk);
             seg.start = s.start;
             seg.end = s.end;
+            seg.cps = Some(cps);
             seg
         })
         .collect();
 
     // VISION-layout нужен только когда его выход (sub_style/titles/brands) реально попадёт на экран:
-    // vision включён, вжигание включено И субтитры не «none». Иначе (например «Дубляж без субтитров»
-    // или Fast Text Mode) это 10-20 vision-вызовов Gemma впустую — на длинном видео минуты (баг-репорт юзера).
-    let want_layout = args.vision && proj.subs.burn && proj.subs.mode != "none";
+    // вжигание включено И субтитры не «none». Иначе (например «Дубляж без субтитров») это 10-20
+    // vision-вызовов Gemma впустую — на длинном видео минуты (баг-репорт юзера).
+    let want_layout = proj.subs.burn && proj.subs.mode != "none";
     let cfg = CtxConfig {
         input: paths.input.clone(),
         work_dir: paths.work_dir.clone(),
@@ -171,63 +165,83 @@ pub fn stage(
         vh: vh as f64,
         total,
         want_layout,
-        want_vision: args.vision,
         // Стиль перевода (#112): из проекта. Тем же путём, что rewrite попадает в ctx_run.
         style: proj.audio.translate_style.clone(),
+        glossary: proj.glossary.clone(),
     };
 
-    emit(progress, "vision", if args.vision {
-        "ctx-проход: vision layout/scene + перевод транскрипта"
-    } else {
-        "ctx-проход: быстрый перевод транскрипта (Fast Text Mode)"
-    });
-    let res = ctx_run(&client, &cfg, &mut segs, rewrite, |m| {
+    emit(progress, "vision", "ctx-проход: vision layout/scene + перевод транскрипта");
+    let contract = dub_translate::Contract::for_client(client);
+    let res = ctx_run(client, pair.vision(), &cfg, &contract, &mut segs, rewrite, |m| {
         emit(progress, "vision", m);
     });
 
     // Сервер больше не нужен -> глушим (освобождаем VRAM, как del llm в питоне перед TTS/берном).
     // ГЕЙТ ПОКРЫТИЯ ПЕРЕВОДА (валидация В пайплайне): сегменты, оставшиеся английскими/непереведёнными
     // (tgt≈src ИЛИ латиница при нелатинском tgt), доперевести точечно flat_run — пока LLM ещё жив.
+    let glossary = dub_core::glossary::for_translation(&proj.glossary, &proj.tgt_lang);
     if res.is_ok() {
-        ensure_translation_coverage(client, &mut segs, &args.src_lang, &proj.tgt_lang, progress);
+        ensure_translation_coverage(client, &contract, &mut segs, &args.src_lang, &proj.tgt_lang, &glossary, progress);
     }
-    drop(prov); // глушим локальный llama-server (освобождаем VRAM перед TTS/берном); облако — no-op
+    drop(pair); // глушим свою Gemma (освобождаем VRAM перед TTS/берном); удалённые провайдеры — no-op
 
     let extra = match res {
         Ok(r) => r.extra,
-        Err(e) => {
-            emit(progress, "translate", &format!("ctx-перевод не удался: {e}; tgt оставлен пустым"));
-            return;
-        }
+        Err(e) => return Err(format!("перевод не выполнен: {e}")),
     };
 
     // Перенести tgt в сегменты Project. segs строился 1:1 из proj.segments и дальше не используется —
     // переносим строки перемещением (zip по равной длине, без клонов).
     for (s, sg) in proj.segments.iter_mut().zip(segs) {
         s.tgt_text = sg.tgt;
-        if !s.tgt_text.trim().is_empty() { s.extra.remove("translation_pending"); }
     }
 
     // Замапить extra -> типизированные поля Project + сохранить сырой ctx (byte-identical passthrough,
     // как raw_ctx = ce_d в from_artifacts).
     apply_extra(proj, &extra);
 
-    let actual_translated = proj
-        .segments
+    let spoken: Vec<&dub_core::Segment> =
+        proj.segments.iter().filter(|s| !s.src_text.trim().is_empty()).collect();
+    let untranslated = spoken
         .iter()
-        .filter(|s| !s.tgt_text.is_empty() && !looks_untranslated(&s.src_text, &s.tgt_text, &proj.tgt_lang))
+        .filter(|s| looks_untranslated(&s.src_text, &s.tgt_text, &proj.tgt_lang, &glossary))
         .count();
-    if actual_translated == 0 && !proj.segments.is_empty() {
-        emit(progress, "translate", "⚠ Перевод не выполнен: модель вернула ошибку или исчерпан лимит запросов (текст оставлен исходным)");
-    } else if actual_translated < proj.segments.len() {
-        emit(progress, "translate", &format!(
-            "перевод частично готов: {}/{} строк переведено, тайтлов={}",
-            actual_translated, proj.segments.len(), proj.captions.titles.len()));
-    } else {
-        emit(progress, "translate", &format!(
-            "перевод готов: {}/{} строк, тайтлов={}",
-            actual_translated, proj.segments.len(), proj.captions.titles.len()));
+    if rewrite.is_none() && !spoken.is_empty() {
+        let share = untranslated as f64 / spoken.len() as f64;
+        if share >= UNTRANSLATED_FAIL_SHARE {
+            let hint = if src.is_empty() || src_lc == "auto" {
+                "; если речь в ролике уже на языке перевода, укажите язык оригинала — тогда перевод не нужен"
+            } else {
+                ""
+            };
+            return Err(format!(
+                "перевод не выполнен: {untranslated} из {} строк остались на исходном языке{hint} (подробности — в журнале и logs/llama-server.log)",
+                spoken.len()
+            ));
+        }
     }
+    emit(progress, "translate", &format!(
+        "перевод готов: {}/{} строк, тайтлов={}",
+        spoken.len() - untranslated, spoken.len(), proj.captions.titles.len()));
+    Ok(())
+}
+
+/// Строка журнала джобы о строках, оставшихся на исходном языке после перевода; None — переведены все.
+/// `pairs` — (что переводилось, что получилось).
+#[allow(dead_code)]
+pub(crate) fn untranslated_note<'a>(
+    pairs: impl Iterator<Item = (&'a str, &'a str)>,
+    tgt_lang: &str,
+    glossary: &[GlossaryEntry],
+) -> Option<String> {
+    let (mut total, mut left) = (0usize, 0usize);
+    for (src, tgt) in pairs.filter(|(src, _)| !src.trim().is_empty()) {
+        total += 1;
+        if looks_untranslated(src, tgt, tgt_lang, glossary) {
+            left += 1;
+        }
+    }
+    (left > 0).then(|| format!("{left} из {total} строк остались на исходном языке (подробности — в logs/llama-server.log)"))
 }
 
 /// extra (ctx_extra.json) -> типизированные captions.sub_style/sub_y/titles/brands + raw_ctx.
@@ -265,54 +279,21 @@ fn apply_extra(proj: &mut Project, extra: &Value) {
 }
 
 
-/// Целевой язык пишется НЕлатиницей (кириллица/CJK/RTL/индийские/…)? — для детекции «английский пролез».
-fn tgt_expects_non_latin(lang: &str) -> bool {
-    let l = lang.split(['-', '_']).next().unwrap_or(lang).to_ascii_lowercase();
-    matches!(
-        l.as_str(),
-        "ru" | "uk" | "be" | "bg" | "sr" | "mk" | "kk" | "ky" | "tg" | "mn" | "ab" | "os"
-            | "zh" | "ja" | "ko"
-            | "ar" | "fa" | "ur" | "he" | "ps" | "sd"
-            | "el" | "hy" | "ka" | "hi" | "bn" | "pa" | "gu" | "ta" | "te" | "kn" | "ml"
-            | "th" | "lo" | "km" | "my" | "si" | "am"
-    )
-}
-
-/// Сегмент выглядит НЕ переведённым: пусто, равен исходнику, ИЛИ tgt преимущественно латиница при
-/// нелатинском целевом языке (английский «пролез сквозь» перевод).
-fn looks_untranslated(src: &str, tgt: &str, tgt_lang: &str) -> bool {
-    let t = tgt.trim();
-    if t.is_empty() {
-        return true;
-    }
-    if t.eq_ignore_ascii_case(src.trim()) {
-        return true;
-    }
-    if tgt_expects_non_latin(tgt_lang) {
-        let letters = t.chars().filter(|c| c.is_alphabetic()).count();
-        if letters > 0 {
-            let latin = t.chars().filter(|c| c.is_ascii_alphabetic()).count();
-            if (latin as f64) / (letters as f64) > 0.5 {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 /// Гейт покрытия перевода: доперевести сегменты, оставшиеся непереведёнными (english leak), точечным
 /// flat_run по их исходным текстам. До 2 проходов; меняем только реально улучшившиеся tgt; логируем остаток.
 fn ensure_translation_coverage(
     client: &ChatClient,
+    contract: &dub_translate::Contract,
     segs: &mut [Seg],
     src: &str,
     tgt_lang: &str,
+    glossary: &[GlossaryEntry],
     progress: &Progress,
 ) {
     let bad: Vec<usize> = segs
         .iter()
         .enumerate()
-        .filter(|(_, s)| !s.text.trim().is_empty() && looks_untranslated(&s.text, &s.tgt, tgt_lang))
+        .filter(|(_, s)| !s.text.trim().is_empty() && looks_untranslated(&s.text, &s.tgt, tgt_lang, glossary))
         .map(|(i, _)| i)
         .collect();
     if bad.is_empty() {
@@ -326,20 +307,23 @@ fn ensure_translation_coverage(
                 let mut g = Seg::new(segs[i].text.clone(), segs[i].speaker);
                 g.start = segs[i].start;
                 g.end = segs[i].end;
+                g.cps = segs[i].cps;
                 g
             })
             .collect();
-        if dub_translate::flat_run(client, &mut sub, src, tgt_lang, true, "").is_err() {
+        let opts = FlatOpts { src, tgt: tgt_lang, spoken: true, style: "", glossary, contract };
+        if let Err(e) = dub_translate::flat_run_with(client, &mut sub, &opts, &mut |m: &str| emit(progress, "translate", m)) {
+            emit(progress, "translate", &format!("покрытие перевода: доперевод не удался ({e})"));
             break;
         }
         for (k, &i) in bad.iter().enumerate() {
-            if !looks_untranslated(&segs[i].text, &sub[k].tgt, tgt_lang) {
+            if !looks_untranslated(&segs[i].text, &sub[k].tgt, tgt_lang, glossary) {
                 segs[i].tgt = std::mem::take(&mut sub[k].tgt);
             }
         }
         let still = bad
             .iter()
-            .filter(|&&i| looks_untranslated(&segs[i].text, &segs[i].tgt, tgt_lang))
+            .filter(|&&i| looks_untranslated(&segs[i].text, &segs[i].tgt, tgt_lang, glossary))
             .count();
         emit(progress, "translate", &format!("покрытие перевода: осталось {still} без перевода"));
         if still == 0 {

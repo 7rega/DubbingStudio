@@ -1011,7 +1011,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
         }
     }
     bench.stage("translate");
-    crate::translate::stage(args, paths, &mut proj, &asr_wav, meta.height, meta.duration, progress);
+    let _ = crate::translate::stage(args, paths, &mut proj, &asr_wav, meta.height, meta.duration, progress);
     let translate_key = cache::hash_stage(&[
         TRANSLATE_VER,
         &transcript_fp,

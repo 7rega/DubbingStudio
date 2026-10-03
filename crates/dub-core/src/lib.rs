@@ -1,13 +1,18 @@
 //! dub-core — типы Project (serde) и EngineOpts, зеркало Pydantic-контракта dub-engine.
 
-mod opts;
-mod project;
 pub mod atomic;
+pub mod fit;
+pub mod glossary;
+mod opts;
+pub mod proc;
+mod project;
 
+pub use glossary::{GlossaryEntry, GlossarySource};
 pub use opts::EngineOpts;
 pub use project::{
     Audio, Bilingual, Brand, BlurBox, CaptionOverride, Captions, Meta, Preset, Project, Render,
     SecondaryStyle, Segment, SubStyle, Subs, Title, Voice, ORDER_ORIGINAL_TOP, ORDER_TRANSLATION_TOP,
+    SECONDARY_SIZE_PCT,
 };
 
 #[cfg(test)]

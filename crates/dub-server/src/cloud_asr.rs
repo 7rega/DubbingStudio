@@ -1,47 +1,33 @@
-//! Облачная транскрипция (ASR) через сайдкар openrouter-helper (op `stt`, verbose_json с сегментами).
-//! Возвращает сегменты (start, end, text) — analyze раздаёт их по спикерам через диаризацию, как локальный
-//! Parakeet/Whisper. Тяжёлые локальные ASR-модели тогда не нужны (облачный пресет для слабых ПК).
+//! Облачная транскрипция (ASR) через OpenRouter (`/audio/transcriptions`, verbose_json с сегментами) напрямую
+//! из Rust. Возвращает сегменты (start, end, text) — analyze раздаёт их по спикерам через диаризацию, как
+//! локальный Parakeet/Whisper. Тяжёлые локальные ASR-модели тогда не нужны (облачный пресет для слабых ПК).
 
 use std::path::Path;
 
+use dub_llm::openrouter::OpenRouter;
+
 /// Транскрибировать wav выбранной STT-моделью OpenRouter -> сегменты (start, end, text). Нет ключа/модели ->
-/// Err. `src_lang` — ISO-639-1 ("ru"/"en"/…) или "auto"/"" (авто-детект). Провайдер без сегментов (не
+/// Err. `src_lang` — ISO-639-1 ("ru"/"en"/…) или "auto"/"" (авто-детект). Модель без сегментов (не
 /// verbose_json) -> один сегмент на весь текст.
 pub fn transcribe(models_root: &Path, wav: &Path, src_lang: &str) -> Result<Vec<(f64, f64, String)>, String> {
-    let key = crate::models::openrouter_key(models_root).ok_or("облачный ASR включён, но ключ OpenRouter не задан")?;
+    let key = crate::models::openrouter_key().ok_or("облачный ASR включён, но ключ OpenRouter не задан")?;
     let model = crate::models::openrouter_model(models_root, "asr");
     if model.is_empty() {
         return Err("STT-модель OpenRouter не выбрана в настройках".into());
     }
-    let repo = crate::openrouter_cli::repo_from_models(models_root);
-    let lang = src_lang.trim();
-    let mut payload = serde_json::json!({ "model": model, "audio": wav.to_string_lossy() });
-    if !lang.is_empty() && !lang.eq_ignore_ascii_case("auto") {
-        payload["language"] = serde_json::Value::String(lang.to_string());
-    }
-    let v = crate::openrouter_cli::run_json(&repo, &key, "stt", &payload)?;
+    let audio = std::fs::read(wav).map_err(|e| format!("облачный ASR: {}: {e}", wav.display()))?;
+    let client = OpenRouter::new(Some(key)).map_err(|e| format!("облачный ASR: {e:#}"))?;
+    let transcript = client
+        .transcribe(&model, &audio, "wav", src_lang)
+        .map_err(|e| format!("облачный ASR: {e:#}"))?;
 
-    let mut out = Vec::new();
-    if let Some(arr) = v.get("segments").and_then(|s| s.as_array()) {
-        for s in arr {
-            let st = s.get("start").and_then(|x| x.as_f64());
-            let en = s.get("end").and_then(|x| x.as_f64());
-            let tx = s.get("text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-            if let (Some(st), Some(en)) = (st, en) {
-                if !tx.is_empty() {
-                    out.push((st, en, tx));
-                }
-            }
-        }
+    let out: Vec<(f64, f64, String)> = transcript.segments.into_iter().map(|s| (s.start, s.end, s.text)).collect();
+    if !out.is_empty() {
+        return Ok(out);
     }
-    if out.is_empty() {
-        // Не verbose / без сегментов -> один сегмент на весь текст (лучше, чем ничего).
-        let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-        if text.is_empty() {
-            return Err("облачный STT вернул пустой транскрипт".into());
-        }
-        let dur = v.get("duration").and_then(|x| x.as_f64()).unwrap_or(0.0);
-        out.push((0.0, dur.max(0.1), text));
+    // Не verbose / без сегментов -> один сегмент на весь текст (лучше, чем ничего).
+    if transcript.text.is_empty() {
+        return Err("облачный STT вернул пустой транскрипт".into());
     }
-    Ok(out)
+    Ok(vec![(0.0, transcript.duration.unwrap_or(0.0).max(0.1), transcript.text)])
 }

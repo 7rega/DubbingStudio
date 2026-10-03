@@ -90,11 +90,37 @@ export type ProjectSummary = {
   audio_only: boolean; mtime: number; done: boolean;
 };
 export type ModelStack = { asr: string; llm: string; vision: string; tts: string };
+// Выбор active.json: строковые слоты + флаги секретов. Ключ OpenRouter и пароль прокси сервер не отдаёт.
+export type Selection = { [slot: string]: string | boolean | undefined; or_key_set?: boolean; proxy_password_set?: boolean };
+// Строковый слот выбора (флаги и отсутствующие слоты -> undefined).
+export const slot = (sel: Selection | undefined, key: string): string | undefined => {
+  const v = sel?.[key];
+  return typeof v === "string" ? v : undefined;
+};
+export type OpenRouterSettings = { configured: boolean; source: "environment" | "local_store" | null; environment_variable: string };
+// Прокси: режим (как в Windows / свой / без прокси), тип и адрес со схемой, флаг пароля и problem —
+// почему сохранённый свой прокси не работает.
+export type ProxyMode = "system" | "custom" | "off";
+export type ProxyKind = "http" | "https" | "socks5" | "socks4";
+export type ProxySettings = { mode: ProxyMode; kind: ProxyKind; on: boolean; url: string; password_set: boolean; problem: string | null };
+export type ProxyProbe = { ok: boolean; hf?: boolean; openrouter?: boolean; hf_error?: string | null; openrouter_error?: string | null; error?: string };
+// Из каталога OpenRouter: цены — строки USD за штуку (токен), как отдаёт OpenRouter.
+export type OrPricing = { prompt?: string; completion?: string; image?: string; audio?: string; request?: string };
+export type OrModel = { id: string; name: string; context_length?: number | null; pricing?: OrPricing | null; input_modalities?: string[]; voices?: string[] };
+export type OrModelKind = "llm" | "vision" | "tts" | "asr";
+export type OrCatalog = { refreshed_at: number; total: number; counts: Record<OrModelKind, number> };
+// Провайдер перевода/vision: своя Gemma, локальный OpenAI-совместимый сервер или OpenRouter. Сервер отдаёт
+// общий провайдер в llm_provider/vision_provider, но если не выбран — берём флаг or_*_on.
+export type LlmProviderKind = "local" | "server" | "openrouter";
+export const llmProviderOf = (sel: Selection | undefined, stage: "llm" | "vision"): LlmProviderKind => {
+  const v = slot(sel, stage === "llm" ? "llm_provider" : "vision_provider");
+  return v === "server" || v === "openrouter" ? v : "local";
+};
 export type Capabilities = {
   device: string; tts_quant: string; asr_model: string; ffmpeg: boolean;
   languages: string[]; voice_modes: string[]; models?: ModelStack;
   // Выбор ASR-движка (active.json): движок parakeet|whisper + модель/квант Whisper.
-  selection?: Record<string, string>;
+  selection?: Selection;
   asr_engines?: string[]; whisper_models?: string[]; whisper_computes?: string[];
   alignment?: { languages: string[]; ready: boolean; component: string };
   // Видимые лимиты RAM (настройки): prefill-батч Gemma + длина реф-клипа клона + лимит токенов TTS + бэкенд Higgs.
@@ -161,6 +187,33 @@ const getJson = <T>(path: string): Promise<T> => fetch(`${BASE}${path}`).then(j<
 const postJson = <T>(path: string, body: unknown): Promise<T> =>
   fetch(`${BASE}${path}`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body) }).then(j<T>);
 
+// Ошибка ручки с кодом ({error, detail}): текст для окна выбирается по коду через t().
+export class ApiError extends Error {
+  code: string;
+  detail: string;
+  args: Record<string, unknown>;
+  constructor(code: string, detail: string, args: Record<string, unknown> = {}) {
+    super(detail ? `${code}: ${detail}` : code);
+    this.code = code;
+    this.detail = detail;
+    this.args = args;
+  }
+}
+async function coded<T>(r: Response): Promise<T> {
+  if (r.ok) return r.json() as Promise<T>;
+  const text = await r.text();
+  let body: { error?: unknown; detail?: unknown; args?: unknown } | null;
+  try { body = JSON.parse(text) as { error?: unknown; detail?: unknown; args?: unknown }; } catch { body = null; }
+  if (body && typeof body.error === "string") {
+    const args = body.args && typeof body.args === "object" && !Array.isArray(body.args) ? (body.args as Record<string, unknown>) : {};
+    throw new ApiError(body.error, typeof body.detail === "string" ? body.detail : "", args);
+  }
+  throw new ApiError(`http_${r.status}`, text);
+}
+const sendCoded = <T>(method: "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<T> =>
+  fetch(`${BASE}${path}`, body === undefined ? { method } : { method, headers: JSON_HEADERS, body: JSON.stringify(body) }).then(coded<T>);
+const getCoded = <T>(path: string): Promise<T> => fetch(`${BASE}${path}`).then(coded<T>);
+
 export const api = {
   capabilities: () => getJson<Capabilities>("/engine/capabilities"),
   setupStatus: () => getJson<SetupStatus>("/setup/status"),
@@ -175,14 +228,30 @@ export const api = {
   // Сделать вариант модели (квант) активным: id компонента настроек -> пишет models/active.json на бэке.
   selectModel: (id: string) => postJson<Record<string, string>>("/engine/select", { id }),
   // Прямая установка слота выбора (движок/модель/квант ASR) без скачивания: {key,value} -> active.json.
-  setSelection: (key: string, value: string) => postJson<Record<string, string>>("/engine/select", { key, value }),
+  setSelection: (key: string, value: string) => postJson<Selection>("/engine/select", { key, value }),
   // Облачные модели (OpenRouter): проверка ключа + фильтрованный каталог по модальности (llm/vision/tts).
   openrouterVerify: (key: string) => postJson<{ ok: boolean; data?: { label?: string; limit?: number; usage?: number }; error?: unknown }>("/engine/openrouter/verify", { key }),
-  openrouterModels: (kind: "llm" | "vision" | "tts" | "asr") => getJson<{ models: { id: string; name: string; context?: number }[] }>(`/engine/openrouter/models?kind=${kind}`),
+  // Ключ OpenRouter: сервер отдаёт только <ключ задан> и источник; PUT сначала проверяет ключ в OpenRouter.
+  openrouterSettings: () => getJson<OpenRouterSettings>("/engine/openrouter/settings"),
+  saveOpenrouterKey: (apiKey: string) => sendCoded<OpenRouterSettings>("PUT", "/engine/openrouter/settings", { api_key: apiKey }),
+  deleteOpenrouterKey: () => sendCoded<OpenRouterSettings>("DELETE", "/engine/openrouter/settings"),
+  // Прокси: адрес без пароля + флаги. password: не задан — оставить сохранённый, null — удалить, строка — новый.
+  proxySettings: () => getJson<ProxySettings>("/engine/proxy/settings"),
+  saveProxy: (form: { mode?: ProxyMode; kind?: ProxyKind; url?: string; password?: string | null }) => sendCoded<ProxySettings>("PUT", "/engine/proxy/settings", form),
+  // Каталог OpenRouter (кеш на сервере, не на клиенте): по стадиям, сводка, форс-обновление.
+  openrouterModels: (kind: OrModelKind) => getJson<{ models: OrModel[]; refreshed_at: number }>(`/engine/openrouter/models?kind=${kind}`),
+  openrouterCatalog: () => getJson<OrCatalog>("/engine/openrouter/catalog"),
+  refreshOpenrouterCatalog: () => postJson<OrCatalog>("/engine/openrouter/catalog/refresh", {}),
+  // Внешний OpenAI-совместимый сервер: модели по HTTP (через бэк студии) и ключ (только <ключ задан>).
+  // Ключ привязан к URL, на который сохранён: при другом адресе сервер студии его не отправит.
+  serverModels: (url: string) => getCoded<{ models: string[] }>(`/engine/server/models?url=${encodeURIComponent(url)}`),
+  serverKey: (url: string) => getJson<{ configured: boolean }>(`/engine/server/key?url=${encodeURIComponent(url)}`),
+  saveServerKey: (apiKey: string, url: string) => sendCoded<{ configured: boolean }>("PUT", "/engine/server/key", { api_key: apiKey, url }),
+  deleteServerKey: (url: string) => sendCoded<{ configured: boolean }>("DELETE", `/engine/server/key?url=${encodeURIComponent(url)}`),
   // Голоса TTS-модели с полом/возрастом/русским (встроенный справочник) — для дропдауна + автокастинга.
   openrouterVoices: (model: string) => getJson<{ voices: { name: string; gender: string; age: string; ru: boolean }[]; supportsRussian: boolean | null }>(`/engine/openrouter/voices?model=${encodeURIComponent(model)}`),
-  // Прокси: проверить связность до HF (закачка моделей) и OpenRouter через указанный URL. Пусто -> прямой доступ.
-  proxyTest: (url: string) => postJson<{ ok: boolean; hf?: boolean; openrouter?: boolean; hf_error?: string | null; openrouter_error?: string | null; error?: string }>("/engine/proxy/test", { url }),
+  // Прокси: проверить связность до HF (закачка моделей) и OpenRouter при таком режиме/адресе — до сохранения.
+  proxyTest: (form: { mode: ProxyMode; kind: ProxyKind; url: string; password?: string }) => postJson<ProxyProbe>("/engine/proxy/test", form),
   // Пресеты железа: список + детект GPU/VRAM + рекомендация; применение пишет кванты/облако в active.json.
   hwPresets: () => getJson<{ presets: { id: string; title: string; subtitle: string }[]; hardware: { gpuName: string; totalVramGb: number; totalRamGb: number; hasGpu: boolean; recommended: string; reason: string } }>("/engine/presets"),
   applyPreset: (id: string) => postJson<{ ok: boolean; id: string; applied: { key: string; value: string }[] }>("/engine/preset", { id }),

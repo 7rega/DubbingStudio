@@ -24,8 +24,7 @@ mod atomic;
 mod window;
 
 pub use window::{window_events, window_focus, window_result};
-#[allow(unused_imports)]
-pub(crate) use window::{carry, carry_job, save_with_revision, tell_windows, track, REV_HEADER};
+pub(crate) use window::{carry_job, save_with_revision, track, REV_HEADER};
 
 /// The studio's API router, set once the service has built it.
 static API: OnceLock<Router> = OnceLock::new();
@@ -1502,7 +1501,18 @@ mod tests {
         ("GET", "/engine/openrouter/models", "studio internal: OpenRouter model query for web frontend UI"),
         ("GET", "/engine/openrouter/voices", "studio internal: OpenRouter voices query for web frontend UI"),
         ("POST", "/engine/openrouter/verify", "studio internal: OpenRouter verification for web frontend UI"),
-        ("POST", "/engine/proxy/test", "studio internal: proxy test for web frontend UI"),
+                ("POST", "/engine/proxy/test", "studio internal: proxy test for web frontend UI"),
+        ("GET", "/engine/openrouter/catalog", "studio internal: OpenRouter model catalog for web frontend UI"),
+        ("POST", "/engine/openrouter/catalog/refresh", "studio internal: OpenRouter catalog refresh for web frontend UI"),
+        ("GET", "/engine/openrouter/settings", "studio internal: OpenRouter settings for web frontend UI"),
+        ("PUT", "/engine/openrouter/settings", "studio internal: OpenRouter settings update for web frontend UI"),
+        ("DELETE", "/engine/openrouter/settings", "studio internal: OpenRouter settings delete for web frontend UI"),
+        ("GET", "/engine/proxy/settings", "studio internal: proxy settings for web frontend UI"),
+        ("PUT", "/engine/proxy/settings", "studio internal: proxy settings update for web frontend UI"),
+        ("GET", "/engine/server/models", "studio internal: local OpenAI-compatible server models query for web frontend UI"),
+        ("GET", "/engine/server/key", "studio internal: local server key query for web frontend UI"),
+        ("PUT", "/engine/server/key", "studio internal: local server key update for web frontend UI"),
+        ("DELETE", "/engine/server/key", "studio internal: local server key delete for web frontend UI"),
         ("GET", "/engine/presets", "studio internal: subtitle presets list for web frontend UI"),
         ("POST", "/engine/preset", "studio internal: subtitle preset selection for web frontend UI"),
         ("POST", "/setup/download", "studio internal: component downloader for web frontend UI"),

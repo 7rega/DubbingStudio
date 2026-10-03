@@ -591,6 +591,15 @@ pub struct Project {
     /// ОДНОГО кадра не сканируется, ноль оверхеда (как detect_text/OCR). Аддитивно, не нарушает extra=allow.
     #[serde(default)]
     pub casting_enabled: bool,
+    /// Глоссарий проекта: термины для перевода, распознавания и озвучки (см. glossary.rs).
+    #[serde(default)]
+    pub glossary: Vec<crate::GlossaryEntry>,
+    /// Отпечаток глоссария, с которым сделан текущий перевод: не совпал с нынешним — перевод устарел.
+    #[serde(default)]
+    pub glossary_fp: String,
+    /// Профиль сериала из библиотеки кастингов, применённый при анализе (casting_ref); пусто — нет.
+    #[serde(default)]
+    pub casting_ref: String,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -617,6 +626,9 @@ impl Default for Project {
             raw_ctx: Map::new(),
             stage_ckpts: Map::new(),
             casting_enabled: false,
+            glossary: Vec::new(),
+            glossary_fp: String::new(),
+            casting_ref: String::new(),
             extra: Extra::new(),
         }
     }

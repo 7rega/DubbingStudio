@@ -4,14 +4,22 @@
 //! layout/scene + audio-контекст + перевод всего транскрипта с контекстом). Промпты и параметры сэмплинга
 //! перенесены ДОСЛОВНО — они выверены на тест-сете продукта. Дефолт-модель Gemma-4 12B QAT + mmproj.
 
+mod batch;
+mod contract;
 mod ctx;
+mod extract;
+mod gloss;
 mod seg;
+mod text_fix;
 mod translate;
 mod vision;
 
+pub use contract::{looks_untranslated, tgt_expects_non_latin, Contract};
 pub use ctx::{run as ctx_run, CtxConfig, CtxResult};
+pub use extract::extract_glossary;
 pub use seg::Seg;
-pub use translate::{rewrite as flat_rewrite, run as flat_run};
+pub use text_fix::{cyrillic_homoglyphs, fix_translation};
+pub use translate::{rewrite as flat_rewrite, run as flat_run, run_with as flat_run_with, FlatOpts};
 pub use vision::{analyze_layout, classify_content_type, is_counter, scene_context, Layout, FONTS};
 
 use thiserror::Error;
@@ -50,6 +58,9 @@ pub enum TranslateError {
     Frame(String),
     #[error("audio ctx: {0}")]
     Audio(String),
-    #[error("MT returned empty for all {0} segments")]
-    Empty(usize),
+    /// Ни одна строка не переведена; второе поле — причина последнего отказа.
+    #[error("MT returned empty for all {0} segments: {1}")]
+    Empty(usize, String),
+    #[error("ответ модели: {0}")]
+    Contract(String),
 }

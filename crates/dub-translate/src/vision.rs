@@ -68,13 +68,7 @@ fn vis_json(s: &str) -> Value {
 /// _frame_b64 — square-pad кадр (SigLIP резайзит всё в 896x896; квадрат сохраняет геометрию букв) и base64.
 fn frame_b64(video: &Path, t: f64, tmp: &Path) -> Result<String, TranslateError> {
     let _ = std::fs::remove_file(tmp); // сбросить прошлый кадр, чтобы не прочитать несвежий при сбое
-    let mut cmd = Command::new(FFMPEG);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
-    }
-    let out = cmd
+    let out = Command::new(FFMPEG)
         .args(["-y", "-ss"])
         .arg(format!("{t:.1}"))
         .arg("-i")
@@ -430,11 +424,11 @@ If there are no subtitle words at all, return {{}}."
 
     let mut out = Layout::default();
     if !subs_y.is_empty() {
-        subs_y.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)); // subs_y дальше не нужен — сортируем на месте
+        subs_y.sort_by(|a, b| a.partial_cmp(b).unwrap()); // subs_y дальше не нужен — сортируем на месте
         out.sub_y = Some(subs_y[subs_y.len() / 2] as i64);
     }
     if !colors.is_empty() || !fonts.is_empty() {
-        let bg = if bgs.is_empty() { "none".to_string() } else { most_common(&bgs).unwrap_or_default() };
+        let bg = if bgs.is_empty() { "none".to_string() } else { most_common(&bgs).unwrap() };
         let solid = bg != "none";
         let font = if !cond.is_empty() && cond.iter().filter(|&&b| b).count() > cond.len() / 2 {
             Some("Oswald".to_string())
@@ -446,21 +440,21 @@ If there are no subtitle words at all, return {{}}."
         let size_frac = if szs.is_empty() {
             Value::Null
         } else {
-            szs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)); // szs дальше не нужен
+            szs.sort_by(|a, b| a.partial_cmp(b).unwrap()); // szs дальше не нужен
             serde_json::json!(szs[szs.len() / 2])
         };
         out.sub_style = Some(serde_json::json!({
-            "color": if colors.is_empty() { "#FFFFFF".to_string() } else { most_common(&colors).unwrap_or_default() },
+            "color": if colors.is_empty() { "#FFFFFF".to_string() } else { most_common(&colors).unwrap() },
             "background": bg,
             "solid": solid,
-            "outline": if outs.is_empty() { "none".to_string() } else { most_common(&outs).unwrap_or_default() },
-            "align": if aligns_sub.is_empty() { "center".to_string() } else { most_common(&aligns_sub).unwrap_or_default() },
+            "outline": if outs.is_empty() { "none".to_string() } else { most_common(&outs).unwrap() },
+            "align": if aligns_sub.is_empty() { "center".to_string() } else { most_common(&aligns_sub).unwrap() },
             "bold": if bolds.is_empty() { true } else { bolds.iter().filter(|&&b| b).count() as f64 >= bolds.len() as f64 / 2.0 },
             "italic": if itals.is_empty() { false } else { itals.iter().filter(|&&b| b).count() as f64 > itals.len() as f64 / 2.0 },
             "size_frac": size_frac,
-            "scene_color": if scenecols.is_empty() { Value::Null } else { serde_json::json!(most_common(&scenecols).unwrap_or_default()) },
+            "scene_color": if scenecols.is_empty() { Value::Null } else { serde_json::json!(most_common(&scenecols).unwrap()) },
             "scene_flat": if flats.is_empty() { false } else { flats.iter().filter(|&&b| b).count() as f64 > flats.len() as f64 / 2.0 },
-            "n_lines": if nlines.is_empty() { Value::Null } else { serde_json::json!(most_common(&nlines).unwrap_or_default()) },
+            "n_lines": if nlines.is_empty() { Value::Null } else { serde_json::json!(most_common(&nlines).unwrap()) },
             "uppercase": if ups.is_empty() { false } else { ups.iter().filter(|&&b| b).count() as f64 > ups.len() as f64 / 2.0 },
             "font": match font { Some(f) => serde_json::json!(f), None => Value::Null },
         }));
