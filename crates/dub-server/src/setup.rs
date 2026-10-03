@@ -1703,18 +1703,45 @@ fn write_at(f: &File, buf: &[u8], off: u64) -> std::io::Result<usize> {
     f.write_at(buf, off)
 }
 
-/// Построить ureq-агента для закачки: включён прокси в active.json -> ВСЕ GET идут через него; иначе дефолтный
-/// агент (Config::default сам подхватит HTTP(S)_PROXY из env, если он задан на старте). Некорректный URL прокси
-/// -> лог + дефолт: закачка по прямому пути честно упадёт на заблокированном соединении, а не молча пойдёт мимо
-/// прокси. Один агент на весь job (общий пул соединений) -> клонируется в воркеры (Agent = cheap Clone).
-fn dl_agent(repo_root: &Path) -> ureq::Agent {
-    if let Some(url) = crate::models::proxy_url(&repo_root.join("models")) {
-        match ureq::Proxy::new(&url) {
-            Ok(proxy) => return ureq::Agent::config_builder().proxy(Some(proxy)).build().into(),
-            Err(e) => tracing::warn!("некорректный URL прокси ({e}) — закачка без прокси; проверьте настройки"),
+/// Построить ureq-агента для закачки. Прокси из dub_llm::net — маршрут для Hugging Face.
+fn dl_agent(_repo_root: &Path) -> ureq::Agent {
+    let mut cfg = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(60)));
+    if let Some(url) = dub_llm::net::proxy_url_for("https://huggingface.co/") {
+        match dl_proxy(&url) {
+            Ok(proxy) => cfg = cfg.proxy(Some(proxy)),
+            Err(e) => tracing::warn!("{e} — закачка без прокси"),
         }
     }
-    ureq::Agent::new_with_defaults()
+    cfg.build().into()
+}
+
+fn dl_proxy(url: &reqwest::Url) -> Result<ureq::Proxy, String> {
+    use ureq::ProxyProtocol;
+    let shown = dub_llm::net::masked(url.as_str());
+    let protocol = match url.scheme() {
+        "http" => ProxyProtocol::Http,
+        "https" => ProxyProtocol::Https,
+        "socks4" => ProxyProtocol::Socks4,
+        "socks4a" => ProxyProtocol::Socks4A,
+        "socks5" => ProxyProtocol::Socks5,
+        "socks5h" => ProxyProtocol::Socks5h,
+        other => return Err(format!("прокси {shown}: схема {other} закачке не подходит")),
+    };
+    let host = url.host_str().filter(|host| !host.is_empty()).ok_or_else(|| format!("прокси {shown}: нет хоста"))?;
+    let port = url.port_or_known_default().ok_or_else(|| format!("прокси {shown}: нет порта"))?;
+    let user = dub_llm::net::decode_userinfo(url.username());
+    let password = url.password().map(dub_llm::net::decode_userinfo);
+    let mut builder = ureq::Proxy::builder(protocol).host(host).port(port);
+    if !user.is_empty() || password.is_some() {
+        builder = builder.username(&user);
+    }
+    if let Some(password) = &password {
+        builder = builder.password(password);
+    }
+    builder.build().map_err(|e| format!("прокси {shown}: {e}"))
 }
 
 /// Размер файла + поддержка byte-range: 1-байтовый ranged-пробник. HF CDN (в т.ч. Xet-CAS) отдаёт 206 +

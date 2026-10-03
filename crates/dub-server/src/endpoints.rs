@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::{jobs, save_project_atomic, AppState};
+use crate::{jobs, AppState};
 
 // ─── GET /fonts ─────────────────────────────────────────────────────────────
 pub async fn fonts() -> Json<Value> {
@@ -27,90 +27,179 @@ pub async fn presets() -> Json<Value> {
 }
 
 // ─── GET /engine/openrouter/models?kind=llm|vision|tts|asr ──────────────────
-// Динамический каталог OpenRouter через сайдкар (Go SDK, операция models с фильтром модальности):
-// llm = output text; vision = input image; tts = output speech; asr = output transcription.
+// Модели каталога OpenRouter, подходящие стадии (llm = текст -> текст; vision = картинка -> текст;
+// tts = синтез речи; asr = транскрипция): id, имя, цены (строки USD за токен, как у OpenRouter), контекст,
+// голоса. Каталог — из кэша (память -> диск -> сеть), ключ не нужен.
 pub async fn openrouter_models(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
-    let kind = q.get("kind").cloned().unwrap_or_else(|| "llm".to_string());
-    let Some(key) = crate::models::openrouter_key(&st.models_root) else {
-        return (StatusCode::BAD_REQUEST, "ключ OpenRouter не задан").into_response();
+    let kind = q.get("kind").map(String::as_str).unwrap_or("llm");
+    let Some(capability) = dub_llm::openrouter::Capability::parse(kind) else {
+        return (StatusCode::BAD_REQUEST, format!("unknown model kind: {kind:?}")).into_response();
     };
-    let repo = st.repo_root.clone();
-    let payload = match kind.as_str() {
-        "vision" => json!({ "input_modalities": "image" }),
-        "tts" => json!({ "output_modalities": "speech" }),
-        "asr" => json!({ "output_modalities": "transcription" }),
-        _ => json!({ "output_modalities": "text" }),
-    };
-    let res = tokio::task::spawn_blocking(move || {
-        crate::openrouter_cli::run_json(&repo, &key, "models", &payload)
-    })
-    .await
-    .unwrap_or_else(|e| Err(e.to_string()));
-    match res {
-        // helper отдаёт ModelsListResponse {data:[...]}; прокидываем data как список.
-        Ok(v) => {
-            let data = v.get("data").cloned().unwrap_or(v);
-            Json(json!({ "models": data })).into_response()
+    let models_root = st.models_root.clone();
+    match tokio::task::spawn_blocking(move || crate::openrouter::catalog(&models_root)).await.unwrap_or_else(|e| Err(e.to_string())) {
+        Ok(cached) => {
+            let models: Vec<Value> = cached.catalog().models_for(capability).map(model_view).collect();
+            Json(json!({ "models": models, "refreshed_at": cached.refreshed_at })).into_response()
         }
         Err(e) => (StatusCode::BAD_GATEWAY, format!("каталог OpenRouter: {e}")).into_response(),
     }
 }
 
+/// Модель каталога для окна: без служебных полей чат-клиента.
+fn model_view(model: &dub_llm::openrouter::CatalogModel) -> Value {
+    json!({
+        "id": model.id,
+        "name": model.name,
+        "context_length": model.context_length,
+        "pricing": model.pricing,
+        "input_modalities": model.input_modalities,
+        "voices": model.voices,
+    })
+}
+
+// ─── GET /engine/openrouter/catalog, POST /engine/openrouter/catalog/refresh ─
+// Сводка каталога: сколько моделей по стадиям и когда он обновлялся; refresh — скачать заново.
+fn catalog_summary(cached: &crate::openrouter::CachedCatalog) -> Value {
+    use dub_llm::openrouter::Capability;
+    let catalog = cached.catalog();
+    let count = |capability| catalog.models_for(capability).count();
+    json!({
+        "refreshed_at": cached.refreshed_at,
+        "total": cached.models.len(),
+        "counts": {
+            "llm": count(Capability::Text),
+            "vision": count(Capability::Vision),
+            "tts": count(Capability::Speech),
+            "asr": count(Capability::Transcription),
+        },
+    })
+}
+
+pub async fn openrouter_catalog(State(st): State<AppState>) -> Response {
+    let models_root = st.models_root.clone();
+    match tokio::task::spawn_blocking(move || crate::openrouter::catalog(&models_root)).await.unwrap_or_else(|e| Err(e.to_string())) {
+        Ok(cached) => Json(catalog_summary(&cached)).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("каталог OpenRouter: {e}")).into_response(),
+    }
+}
+
+pub async fn openrouter_catalog_refresh(State(st): State<AppState>) -> Response {
+    let models_root = st.models_root.clone();
+    match tokio::task::spawn_blocking(move || crate::openrouter::refresh(&models_root)).await.unwrap_or_else(|e| Err(e.to_string())) {
+        Ok(cached) => Json(catalog_summary(&cached)).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("каталог OpenRouter: {e}")).into_response(),
+    }
+}
+
 // ─── POST /engine/openrouter/verify {key} ───────────────────────────────────
-// Проверка ключа OpenRouter через сайдкар (Go SDK, операция verify -> credits). Ключ из формы (ввод
-// перед сохранением), НЕ логируется.
-pub async fn openrouter_verify(State(st): State<AppState>, Json(body): Json<Value>) -> Response {
+// Проверка ключа OpenRouter (GET /key) без сохранения. Ключ из формы, НЕ логируется. Ответ:
+// {ok:true, data:{label, limit, usage, …}} | {ok:false, error}.
+pub async fn openrouter_verify(Json(body): Json<Value>) -> Response {
     let key = body.get("key").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     if key.is_empty() {
         return (StatusCode::BAD_REQUEST, "пустой ключ").into_response();
     }
-    let repo = st.repo_root.clone();
     let res = tokio::task::spawn_blocking(move || {
-        crate::openrouter_cli::run_json(&repo, &key, "verify", &json!({}))
+        dub_llm::openrouter::OpenRouter::new(Some(key)).and_then(|client| client.check_key()).map_err(|e| format!("{e:#}"))
     })
     .await
     .unwrap_or_else(|e| Err(e.to_string()));
     match res {
-        Ok(v) => Json(v).into_response(),
+        Ok(dub_llm::openrouter::KeyCheck::Accepted(data)) => Json(json!({ "ok": true, "data": data })).into_response(),
+        Ok(dub_llm::openrouter::KeyCheck::Rejected(detail)) => Json(json!({ "ok": false, "error": detail })).into_response(),
         Err(e) => Json(json!({ "ok": false, "error": e })).into_response(),
     }
 }
 
-// ─── POST /engine/proxy/test {url} — проверить связность через прокси ────────────────────────────────
-// Пробуем достучаться до HF (закачка моделей) и OpenRouter (облако) через указанный прокси. Пустой url ->
-// проверка ПРЯМОГО доступа (без прокси): юзер сразу видит, нужен ли ему прокси вообще. http_status_as_error
-// выключаем — меряем транспорт (дошли до сервера через прокси), а не HTTP-статус ответа.
-pub async fn proxy_test(Json(body): Json<Value>) -> Response {
-    let url = body.get("url").and_then(Value::as_str).unwrap_or("").trim().to_string();
-    let res = tokio::task::spawn_blocking(move || -> Result<Value, String> {
-        let agent: ureq::Agent = if url.is_empty() {
-            ureq::Agent::config_builder().http_status_as_error(false).build().into()
-        } else {
-            let proxy = ureq::Proxy::new(&url).map_err(|e| format!("некорректный URL прокси: {e}"))?;
-            ureq::Agent::config_builder()
-                .proxy(Some(proxy))
-                .http_status_as_error(false)
-                .build()
-                .into()
-        };
-        let probe = |target: &str| -> Option<String> {
-            agent.get(target).call().err().map(|e| e.to_string())
-        };
-        // Лёгкие публичные JSON-эндпоинты обоих сервисов (без ключа): проверяем именно то, что проксируем.
-        let hf = probe("https://huggingface.co/api/models/immich-app/buffalo_l");
-        let or = probe("https://openrouter.ai/api/v1/models");
-        Ok(json!({
-            "ok": hf.is_none() && or.is_none(),
-            "hf": hf.is_none(),
-            "openrouter": or.is_none(),
-            "hf_error": hf,
-            "openrouter_error": or,
-        }))
-    })
-    .await
-    .unwrap_or_else(|e| Err(e.to_string()));
+// ─── GET /engine/server/models?url= — модели локального OpenAI-совместимого сервера ──────────────────────
+// Сервер пользователя (Ollama, LM Studio, vLLM, llama-server) отвечает на GET <адрес>/v1/models списком
+// {data:[{id}]}. Спрашиваем через сервер студии, чтобы окно не ходило на чужой адрес само. Без url — адрес из
+// настроек. Ключ из хранилища уходит только на адрес, для которого его сохранили.
+pub async fn server_models(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let url = q
+        .get("url")
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| crate::models::server_url(&st.models_root));
+    let res = tokio::task::spawn_blocking(move || list_server_models(&url, crate::credentials::local_server_key_for(&url)))
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
     match res {
-        Ok(v) => Json(v).into_response(),
+        Ok(models) => Json(json!({ "models": models })).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": "server_unreachable", "detail": e }))).into_response(),
+    }
+}
+
+/// id моделей сервера по адресу `url` (с `/v1` или без).
+pub(crate) fn list_server_models(url: &str, key: Option<String>) -> Result<Vec<String>, String> {
+    let base = dub_llm::server_base(url);
+    if base.is_empty() {
+        return Err("адрес сервера не задан".into());
+    }
+    let endpoint = format!("{base}/v1/models");
+    let client = dub_llm::net::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| format!("http: {e}"))?;
+    let mut request = client.get(&endpoint);
+    if let Some(key) = key {
+        request = request.bearer_auth(key);
+    }
+    let response = request.send().map_err(|e| format!("сервер {base} не ответил: {}", dub_llm::net::why(&e)))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("{endpoint} ответил {status}"));
+    }
+    let body: Value = response.json().map_err(|e| format!("{endpoint} вернул не JSON: {e}"))?;
+    let models = body
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{endpoint} вернул не список моделей OpenAI (нет поля data)"))?;
+    Ok(models.iter().filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string)).collect())
+}
+
+// ─── POST /engine/proxy/test {mode?, kind?, url, password?} — проверить связность ──────────────────────────
+// Отвечают ли HF (закачка моделей) и OpenRouter (облако) при таком прокси — до сохранения. mode по умолчанию
+// custom (прежняя форма {url}); прямой доступ — mode=off, прокси Windows — mode=system. Ответ с любым
+// HTTP-статусом считается: меряем транспорт. 15 с на каждый, оба параллельно, причины ошибок цепочкой.
+pub async fn proxy_test(State(st): State<AppState>, Json(body): Json<Value>) -> Response {
+    let mode = match body.get("mode").and_then(Value::as_str) {
+        None => dub_llm::net::ProxyMode::Custom,
+        Some(mode) => match dub_llm::net::ProxyMode::parse(mode) {
+            Some(mode) => mode,
+            None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_proxy_mode", "detail": mode }))).into_response(),
+        },
+    };
+    let kind = match body.get("kind").and_then(Value::as_str) {
+        None => crate::models::proxy_kind(&crate::models::load_selection(&st.models_root)),
+        Some(kind) => match dub_llm::net::ProxyKind::parse(kind) {
+            Some(kind) => kind,
+            None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_proxy_kind", "detail": kind }))).into_response(),
+        },
+    };
+    let address = crate::secrets_api::proxy_test_address(
+        &st.models_root,
+        crate::credentials::secrets_dir().as_deref(),
+        body.get("url").and_then(Value::as_str).unwrap_or(""),
+        body.get("password").and_then(Value::as_str),
+    );
+    let settings = dub_llm::net::ProxySettings { mode, kind, address: Some(address).filter(|a| !a.trim().is_empty()) };
+    let res = tokio::task::spawn_blocking(move || dub_llm::net::test(settings).map_err(|e| format!("{e:#}")))
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match res {
+        Ok(v) => {
+            let hf = v["huggingface"].as_bool() == Some(true);
+            let or = v["openrouter"].as_bool() == Some(true);
+            Json(json!({
+                "ok": hf && or,
+                "hf": hf,
+                "openrouter": or,
+                "hf_error": v["huggingface_error"],
+                "openrouter_error": v["openrouter_error"],
+            }))
+            .into_response()
+        }
         Err(e) => Json(json!({ "ok": false, "error": e })).into_response(),
     }
 }
@@ -189,17 +278,16 @@ pub async fn select_model(State(st): State<AppState>, Json(body): Json<Value>) -
         if !crate::models::is_selection_key(key) {
             return (StatusCode::BAD_REQUEST, format!("unknown selection key: {key:?}")).into_response();
         }
-        if val.trim().is_empty()
-            && key != "whisper_xxl_args"
-            && !key.starts_with("or_")
-            && key != "proxy_url"
-        {
+        if val.trim().is_empty() {
             return (StatusCode::BAD_REQUEST, "empty value").into_response();
+        }
+        if !crate::models::is_selection_value(key, val) {
+            return (StatusCode::BAD_REQUEST, format!("invalid value for {key}: {val:?}")).into_response();
         }
         if let Err(e) = crate::models::set_selection(&st.models_root, key, val) {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("write selection: {e}")).into_response();
         }
-        return Json(crate::models::load_selection(&st.models_root)).into_response();
+        return Json(crate::models::public_selection(&st.models_root)).into_response();
     }
     // Форма 2: {"id":"whisper-small"} — id компонента манифеста -> набор слотов (активация при скачивании
     // и переключение варианта). Пустой набор -> неизвестный компонент.
@@ -213,7 +301,7 @@ pub async fn select_model(State(st): State<AppState>, Json(body): Json<Value>) -
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("write selection: {e}")).into_response();
         }
     }
-    Json(crate::models::load_selection(&st.models_root)).into_response()
+    Json(crate::models::public_selection(&st.models_root)).into_response()
 }
 
 // ─── PUT /projects/{pid} ────────────────────────────────────────────────────
@@ -232,20 +320,23 @@ pub async fn put_project(
         Ok(p) => p,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad project: {e}")).into_response(),
     };
-    // The restored segment WAVs have their own audio revisions, but the mixed
-    // master on disk still belongs to the state we are undoing.
-    proj.audio.mix_dirty = true;
-    if let Err(e) = save_project_atomic(&dir, &proj) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+    crate::fitplan::strip_computed(&mut proj);
+    {
+        let _held = crate::project_writes();
+        // Глоссарий меняет только его ручка: откат правок окна (undo) присылает снимок со старым глоссарием.
+        match st.load_project(&pid) {
+            Ok(stored) => proj.glossary = stored.glossary,
+            Err(resp) => return resp,
+        }
+        if let Err(e) = crate::write_project(&dir, &proj) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+        }
     }
-    match proj.to_json() {
-        Ok(s) => ([("content-type", "application/json")], s).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    crate::project_response(&st, &dir, &proj)
 }
 
-// ─── GET /projects/{pid}/waveform?track=vocals|bgm|dub|master&n=600 ──────────
-// Даунсэмпл-пики аудио (ffmpeg s16le 8kHz), кэш waveform_[track].json. CPU, вне GPU-воркера.
+// ─── GET /projects/{pid}/waveform?n=600 ─────────────────────────────────────
+// Даунсэмпл-пики аудио (ffmpeg s16le 8kHz), кэш waveform.json. CPU, вне GPU-воркера. Порт app.py.
 pub async fn waveform(
     State(st): State<AppState>,
     AxPath(pid): AxPath<String>,
@@ -255,76 +346,20 @@ pub async fn waveform(
         Ok(d) => d,
         Err(resp) => return resp,
     };
-    let track = q.get("track").map(|s| s.as_str()).unwrap_or("master");
-    let cache_name = match track {
-        "vocals" => "waveform_vocals.json",
-        "bgm" | "instrumental" => "waveform_bgm.json",
-        "dub" => "waveform_dub.json",
-        _ => "waveform.json",
-    };
+    let cache = dir.join("waveform.json");
+    if let Ok(txt) = std::fs::read_to_string(&cache) {
+        return ([("content-type", "application/json")], txt).into_response();
+    }
     let proj = match st.load_project(&pid) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    // Динамический расчет числа точек волны: 20 точек на 1 секунду аудио (1 пик каждые 50 мс),
-    // чтобы и на 1-минутном, и на 2-часовом видео пики речи были студийно детализированы.
-    let dur = proj.meta.duration.max(1.0);
-    let dynamic_n = (dur * 20.0).round() as usize;
-    let n: usize = q.get("n").and_then(|v| v.parse().ok()).unwrap_or(dynamic_n.clamp(600, 200_000));
-    let cache = dir.join(cache_name);
-
-    // Выбираем соответствующий аудиофайл под запрошенный трек
-    let target_file: Option<PathBuf> = match track {
-        "vocals" => {
-            let p1 = dir.join("stems/vocals.wav");
-            let p2 = dir.join("vocals16_clean.wav");
-            let p3 = dir.join("vocals16.wav");
-            if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else if p3.is_file() { Some(p3) } else { None }
-        }
-        "bgm" | "instrumental" => {
-            let p1 = dir.join("stems/instrumental.wav");
-            let p2 = dir.join("bgm.wav");
-            if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else { None }
-        }
-        "dub" => {
-            let p1 = dir.join("dub_vocals.wav");
-            let p2 = dir.join("dub_vocals_raw.wav");
-            let p3 = dir.join("dub_audio.m4a");
-            let _p4 = dir.join("output.wav");
-            if p1.is_file() { Some(p1) } else if p2.is_file() { Some(p2) } else if p3.is_file() { Some(p3) } else { None }
-        }
-        _ => Some(PathBuf::from(&proj.meta.video)),
-    };
-
-    // Если кэш существует и новее целевого аудиофайла — проверяем также его разрешение
-    if let Some(ref tf) = target_file {
-        if let (Ok(c_meta), Ok(t_meta)) = (cache.metadata(), tf.metadata()) {
-            if let (Ok(c_mtime), Ok(t_mtime)) = (c_meta.modified(), t_meta.modified()) {
-                if c_mtime >= t_mtime {
-                    if let Ok(txt) = std::fs::read_to_string(&cache) {
-                        // Если в кэше достаточно точек (не старый низкорезолюционный кэш на 600 точек для длинного видео)
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&txt) {
-                            if let Some(arr) = val.get("peaks").and_then(|v| v.as_array()) {
-                                if arr.len() >= n.min(600) {
-                                    return ([("content-type", "application/json")], txt).into_response();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } else if let Ok(txt) = std::fs::read_to_string(&cache) {
-        return ([("content-type", "application/json")], txt).into_response();
-    }
-
-    let peaks = if let Some(tf) = target_file {
-        tokio::task::spawn_blocking(move || crate::wavio::waveform_peaks(&tf, n))
+    let n: usize = q.get("n").and_then(|v| v.parse().ok()).unwrap_or(600);
+    let video = PathBuf::from(&proj.meta.video);
+    let peaks =
+        tokio::task::spawn_blocking(move || crate::wavio::waveform_peaks(&video, n))
             .await
-            .unwrap_or_default()
-    } else {
-        vec![]
-    };
+            .unwrap_or_default();
     let empty = peaks.is_empty();
     let out = json!({ "peaks": peaks });
     if !empty {
@@ -341,20 +376,26 @@ pub async fn remix_project(
     AxPath(pid): AxPath<String>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let instruction = q.get("instruction").cloned().unwrap_or_default();
-    if instruction.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "empty remix instruction").into_response();
+    let args = json!({ "instruction": q.get("instruction").cloned().unwrap_or_default() });
+    match remix_enqueue(&st, &pid, &args).await {
+        Ok(job_id) => Json(json!({ "job_id": job_id })).into_response(),
+        Err(resp) => *resp,
     }
-    let dir = match st.proj_dir(&pid) {
-        Ok(d) => d,
-        Err(resp) => return resp,
-    };
+}
+
+pub(crate) async fn remix_enqueue(st: &AppState, pid: &str, args: &Value) -> Result<String, Box<Response>> {
+    let instruction = args.get("instruction").and_then(Value::as_str).unwrap_or("").to_string();
+    if instruction.trim().is_empty() {
+        return Err(Box::new((StatusCode::BAD_REQUEST, "empty remix instruction").into_response()));
+    }
+    let dir = st.proj_dir(pid).map_err(Box::new)?;
     let proj_path = dir.join("project.json");
     if !proj_path.is_file() {
-        return (StatusCode::CONFLICT, "project not analyzed yet").into_response();
+        return Err(Box::new((StatusCode::CONFLICT, "project not analyzed yet").into_response()));
     }
     let llama_bin = st.llama_bin.clone();
-    let mt_model = st.opts.mt_model_path.clone();
+    // Квант Gemma — выбранный сейчас (models::resolve_mt), а не найденный при старте сервера.
+    let (mt_model, _) = crate::models::resolve_mt(&st.models_root, &crate::models::load_selection(&st.models_root));
     let models_root = st.models_root.clone();
     let instr = instruction.trim().to_string();
     let dir_for_job = dir.clone();
@@ -362,18 +403,19 @@ pub async fn remix_project(
     let job: jobs::JobFn = Box::new(move |progress: jobs::ProgressFn| {
         use dub_translate::{flat_rewrite, Seg};
 
-        let text = std::fs::read_to_string(&proj_path).map_err(|e| e.to_string())?;
-        let mut p = Project::from_json(&text).map_err(|e| e.to_string())?;
+        let read = |path: &std::path::Path| -> Result<Project, String> {
+            let text = std::fs::read_to_string(path).map_err(|e| format!("чтение {}: {e}", path.display()))?;
+            Project::from_json(&text).map_err(|e| format!("разбор {}: {e}", path.display()))
+        };
+        let p = read(&proj_path)?;
         if p.segments.is_empty() {
             return Err("no transcript to remix — analyze first".into());
         }
-        let before = p.clone();
-        let expected = crate::alignment::fingerprint(&before)?;
         progress(json!({ "type": "progress",
             "msg": format!("ремикс {} строк → {}", p.segments.len(),
                            &instr[..instr.len().min(60)]) }));
 
-        // LLM-провайдер: облако OpenRouter (если включено) ИЛИ локальный llama-server (плоский rewrite).
+        // LLM-провайдер перевода: своя Gemma, локальный сервер или OpenRouter (плоский rewrite).
         // Text-режим: mmproj не нужен (передаём пустой путь — фабрика его в Text-режиме игнорирует).
         let prov = crate::llm_provider::open(
             &crate::llm_provider::LlmOpen {
@@ -387,6 +429,7 @@ pub async fn remix_project(
         .map_err(|e| format!("ремикс: LLM недоступен — {e}"))?;
         let client = prov.client();
 
+        let inputs: Vec<(String, String)> = p.segments.iter().map(|s| (s.id.clone(), s.src_text.clone())).collect();
         let mut segs: Vec<Seg> = p
             .segments
             .iter()
@@ -399,33 +442,31 @@ pub async fn remix_project(
         drop(prov);
         r.map_err(|e| format!("remix: {e}"))?;
 
-        for (i, s) in p.segments.iter_mut().enumerate() {
-            if let Some(sg) = segs.get(i) {
-                if !sg.tgt.trim().is_empty() {
-                    s.tgt_text = sg.tgt.clone();
-                }
+        // Ремикс шёл минутами: правки, сделанные за это время, остаются, а новый текст ложится, только пока
+        // реплики те же, что переписывались.
+        let _held = crate::project_writes();
+        let mut fresh = read(&proj_path)?;
+        if fresh.segments.iter().map(|s| (s.id.clone(), s.src_text.clone())).collect::<Vec<_>>() != inputs {
+            return Err("ремикс: реплики изменились, пока шёл ремикс — проект не менялся, запустите ремикс ещё раз".into());
+        }
+        for (s, sg) in fresh.segments.iter_mut().zip(segs) {
+            if !sg.tgt.trim().is_empty() {
+                s.tgt_text = sg.tgt;
             }
-            // Ротация аудио-версии (не только dirty): ремикс перезаписал бы seg-файл на месте,
-            // и Undo (PUT снимка до ремикса) проиграл бы новый текст под старым именем.
-            crate::segment_cache::invalidate_audio(s);
+            s.dirty = true;
         }
-        p.audio.rewrite = Some(instr.clone());
-        p.audio.mix_dirty = true;
-        let _guard = crate::PROJECT_WRITE_LOCK.lock().map_err(|e| e.to_string())?;
-        let current_text = std::fs::read_to_string(&proj_path).map_err(|e| e.to_string())?;
-        let current = Project::from_json(&current_text).map_err(|e| e.to_string())?;
-        if crate::alignment::fingerprint(&current)? != expected {
-            return Err("REMIX_PROJECT_CHANGED: Проект изменён во время ремикса. Повторите запуск.".into());
-        }
-        crate::save_project_unlocked(&dir_for_job, &p)?;
-        serde_json::to_value(&p).map_err(|e| e.to_string())
+        fresh.audio.rewrite = Some(instr.clone());
+        crate::write_project(&dir_for_job, &fresh)?;
+        serde_json::to_value(&fresh).map_err(|e| e.to_string())
     });
-    let job_id = st.jobs.enqueue_with_meta("remix", &pid, job).await;
-    Json(json!({ "job_id": job_id })).into_response()
+    st.jobs
+        .enqueue(jobs::JobMeta::persistent(jobs::JobKind::Remix, pid, dir, args.clone()), job)
+        .await
+        .map_err(|e| Box::new(crate::enqueue_error(e)))
 }
 
 // ─── GET /projects/{pid}/preview?t=&rev= ────────────────────────────────────
-// ОДИН превью-кадр (JPEG) через быстрый spawn_blocking (не блокирует JobQueue).
+// ОДИН превью-кадр (PNG) через GPU-воркер (сериализовано). Порт app.py.preview (таймаут 300с).
 pub async fn preview(
     State(st): State<AppState>,
     AxPath(pid): AxPath<String>,
@@ -448,20 +489,16 @@ pub async fn preview(
     let lowres = q.get("lr").map(|v| v == "1" || v == "true").unwrap_or(false);
     let fonts_dir = st.fonts_dir.clone();
     let work_dir = dir.clone();
-
-    match tokio::task::spawn_blocking(move || {
+    frame_job(&st, &pid, 300, "image/jpeg", move |_p| {
         crate::frame::preview_frame(&proj, &input, &work_dir, &fonts_dir, t, lowres)
     })
     .await
-    {
-        Ok(Ok(bytes)) => ([("content-type", "image/jpeg")], bytes).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
 }
 
 // ─── GET /projects/{pid}/original?t= ────────────────────────────────────────
-// Сырой кадр ОРИГИНАЛА (PNG) на t — для before/after.
+// Сырой кадр ОРИГИНАЛА (PNG) на t — для before/after. Порт app.py.original (source_frame, таймаут 60с).
+// ВНИМАНИЕ: возвращает ОДИН PNG-кадр (как источник истины app.py), а не всё видео — фронт (ComparePane)
+// использует это как <img src>.
 pub async fn original_frame(
     State(st): State<AppState>,
     AxPath(pid): AxPath<String>,
@@ -480,12 +517,89 @@ pub async fn original_frame(
     }
     let t: f64 = q.get("t").and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let work_dir = dir.clone();
+    frame_job(&st, &pid, 60, "image/png", move |_p| crate::frame::source_frame(&input, &work_dir, t)).await
+}
 
-    match tokio::task::spawn_blocking(move || crate::frame::source_frame(&input, &work_dir, t))
-        .await
-    {
-        Ok(Ok(bytes)) => ([("content-type", "image/png")], bytes).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+/// Общий помощник: поставить синхронную кадр-джобу в GPU-воркер, ждать с таймаутом, вернуть
+/// байты с заданным content-type (`mime`) или 504. Порт паттерна app.py.preview/original.
+async fn frame_job<F>(st: &AppState, pid: &str, timeout_s: u64, mime: &'static str, f: F) -> Response
+where
+    F: FnOnce(jobs::ProgressFn) -> Result<Vec<u8>, String> + Send + 'static,
+{
+    let job: jobs::JobFn = Box::new(move |progress| {
+        let png = f(progress)?;
+        // Возвращаем байты как base64 в JSON-результат нельзя эффективно; вместо этого прокидываем через
+        // канал: сериализуем как массив байт в Value (voркер отдаёт oneshot Result<Value>). Читаем ниже.
+        Ok(Value::Array(png.into_iter().map(|b| Value::from(b as u64)).collect()))
+    });
+    let meta = jobs::JobMeta::new(jobs::JobKind::Frame, Some(pid));
+    let (job_id, rx) = match st.jobs.enqueue_awaitable(meta, job).await {
+        Ok(v) => v,
+        Err(e) => return crate::enqueue_error(e),
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_s), rx).await {
+        Ok(Ok(Ok(v))) => {
+            st.jobs.remove(&job_id).await;
+            let bytes: Vec<u8> = v
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u8)).collect())
+                .unwrap_or_default();
+            ([("content-type", mime)], bytes).into_response()
+        }
+        Ok(Ok(Err(e))) => {
+            st.jobs.remove(&job_id).await;
+            (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
+        }
+        Ok(Err(_)) => {
+            st.jobs.remove(&job_id).await;
+            (StatusCode::INTERNAL_SERVER_ERROR, "job canceled").into_response()
+        }
+        Err(_) => {
+            // Ожидающий ушёл: джоба в очереди снимается, выполняемая прерывается (её ffmpeg убивается).
+            let _ = st.jobs.cancel(&job_id).await;
+            (StatusCode::GATEWAY_TIMEOUT, "frame render timed out").into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod provider_endpoint_tests {
+    use super::*;
+    use dub_llm::test_http::{serve, Reply};
+
+    #[test]
+    fn the_saved_server_key_goes_only_to_its_own_address() {
+        let saved = serve(vec![Reply::json(200, r#"{"data":[{"id":"m"}]}"#)]);
+        let foreign = serve(vec![Reply::json(200, r#"{"data":[{"id":"m"}]}"#)]);
+        let dir = std::env::temp_dir().join(format!("dub-server-key-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple()));
+        crate::credentials::store_local_server_key_in(&dir, &format!("{}/v1", saved.base()), Some("lm-secret")).unwrap();
+        let key_for = |url: &str| crate::credentials::local_server_key_in(&dir, url);
+
+        list_server_models(&foreign.base(), key_for(&foreign.base())).unwrap();
+        let sent = foreign.request(0).to_ascii_lowercase();
+        assert!(!sent.contains("authorization:") && !sent.contains("lm-secret"), "{sent}");
+
+        list_server_models(&saved.base(), key_for(&saved.base())).unwrap();
+        assert!(saved.request(0).to_ascii_lowercase().contains("authorization: bearer lm-secret"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_local_server_lists_its_models_in_any_address_form() {
+        let server = serve(vec![
+            Reply::json(200, r#"{"object":"list","data":[{"id":"gemma3:12b"},{"id":"qwen2.5vl:7b"}]}"#),
+            Reply::json(200, r#"{"data":[]}"#),
+            Reply::json(200, r#"{"models":[]}"#),
+            Reply::json(401, r#"{"error":"no key"}"#),
+        ]);
+        assert_eq!(list_server_models(&format!("{}/v1/", server.base()), Some("k".into())).unwrap(), ["gemma3:12b", "qwen2.5vl:7b"]);
+        let first = server.request(0);
+        assert!(first.starts_with("GET /v1/models "), "{first}");
+        assert!(first.to_ascii_lowercase().contains("authorization: bearer k"));
+        assert!(list_server_models(&server.base(), None).unwrap().is_empty());
+        assert!(!server.request(1).to_ascii_lowercase().contains("authorization:"));
+        assert!(list_server_models(&server.base(), None).unwrap_err().contains("data"));
+        assert!(list_server_models(&server.base(), None).unwrap_err().contains("401"));
+        assert!(list_server_models("  ", None).is_err());
     }
 }

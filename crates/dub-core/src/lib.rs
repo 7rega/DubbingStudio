@@ -3,6 +3,7 @@
 mod opts;
 mod project;
 pub mod atomic;
+pub mod proc;
 
 pub use opts::EngineOpts;
 pub use project::{

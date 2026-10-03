@@ -6,10 +6,16 @@
 //!
 //! Дефолты моделей (Gemma-4 12B QAT q4_0 + mmproj) — из dub-core EngineOpts; их сюда передаёт сервер.
 
+mod answer;
 mod client;
+pub mod net;
+pub mod openrouter;
 mod server;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_http;
 
-pub use client::{ChatClient, Message, Part, Sampling};
+pub use answer::without_thinking;
+pub use client::{server_base, ChatClient, Completion, Endpoint, Message, Part, Sampling, StructuredOutput};
 pub use server::{resolve_llama_bin, LlamaServer, ServerOpts};
 
 use thiserror::Error;
@@ -22,6 +28,13 @@ pub enum LlmError {
     Http(String),
     #[error("api: {0}")]
     Api(String),
+    /// Сервер отверг запрос (4xx, кроме 429): повторять тот же запрос бесполезно.
+    #[error("api: {status}: {body}")]
+    Rejected { code: u16, status: String, body: String },
+    #[error("ответ обрезан: {0}")]
+    CutShort(String),
+    #[error("сервер обрезал запрос: {0}")]
+    PromptCut(String),
 }
 
 /// Обрезать блок рассуждений <think>...</think> — как re.sub(r"<think>.*?</think>", "", ...) в питоне.

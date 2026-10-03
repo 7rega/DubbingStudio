@@ -6,11 +6,12 @@
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
-use regex::Regex;
 use serde_json::Value;
 
+use dub_core::GlossaryEntry;
 use dub_llm::{strip_think, ChatClient, Message, Part, Sampling};
 
+use crate::contract::{label, rule as contract_rule, Answer, Contract, Format, LineCheck};
 use crate::seg::Seg;
 use crate::vision;
 use crate::TranslateError;
@@ -44,19 +45,22 @@ pub struct CtxConfig {
     /// субтитров/титров — в режимах без субтитров это 10-20 лишних vision-вызовов Gemma (минуты на
     /// длинном видео) ради данных, которые никто не прочитает. false -> фаза 1 пропускается целиком.
     pub want_layout: bool,
-    /// Нужен ли мультимодальный анализ видеокадров (Vision). Если false, layout и scene_context
-    /// пропускаются полностью (Fast Text Mode — чистый текстовый инференс без --mmproj и без PNG).
-    pub want_vision: bool,
     /// Стилевая инструкция перевода (#112): доп-указание тона/регистра/лексики. Пусто = без стиля.
     /// Вставляется в инструкционную часть TP-промпта ПЕРЕД форматом-контрактом (он остаётся приоритетным).
     pub style: String,
+    /// Глоссарий проекта (и сериала); перевод берёт из него glossary::for_translation.
+    pub glossary: Vec<GlossaryEntry>,
 }
 
 /// run — единый проход. rewrite=Some(instr) -> творческий ре-дубляж; None -> точный перевод.
-/// llm — уже поднятый клиент к llama-server с mmproj. Пишет segs[i].tgt и возвращает extra.
+/// llm — клиент перевода; vision — клиент мультимодальной модели для кадров и аудио-контекста (у локальной
+/// Gemma это тот же сервер с mmproj). vision=None — фазы 1-3 пропускаются, перевод идёт без них.
+/// Пишет segs[i].tgt и возвращает extra. contract — формат ответа джобы (общий для всех её проходов).
 pub fn run(
     llm: &ChatClient,
+    vision: Option<&ChatClient>,
     cfg: &CtxConfig,
+    contract: &Contract,
     segs: &mut [Seg],
     rewrite: Option<&str>,
     mut log: impl FnMut(&str),
@@ -69,11 +73,13 @@ pub fn run(
         "brands": [], "audio_context": "", "scene_context": ""
     });
 
-    // ── фаза 1: VISION layout — ТОЛЬКО если vision включён И субтитры/титры будут вжигаться ─
+    // ── фаза 1: VISION layout — ТОЛЬКО если субтитры/титры будут вжигаться ─
     // (гейт по режиму: в «без субтитров»/burn=off выход layout никем не используется, а это 2 vision-
     // вызова на каждый из 5-10 кейфреймов = минуты Gemma на длинном видео впустую).
-    if cfg.want_vision && cfg.want_layout {
-        match vision::analyze_layout(llm, &cfg.input, &tmp, cfg.total, cfg.vh) {
+    if cfg.want_layout && vision.is_none() {
+        log("  ctx vision layout: пропущен (vision-модель не выбрана или недоступна)");
+    } else if let (true, Some(vision_llm)) = (cfg.want_layout, vision) {
+        match vision::analyze_layout(vision_llm, &cfg.input, &tmp, cfg.total, cfg.vh) {
             Ok(layout) => {
                 extra["sub_style"] = layout.sub_style.unwrap_or(Value::Null);
                 extra["sub_y"] = layout.sub_y.map(|y| Value::from(y)).unwrap_or(Value::Null);
@@ -86,38 +92,25 @@ pub fn run(
             }
             Err(e) => log(&format!("  ctx vision skipped: {e}")),
         }
-    } else if !cfg.want_vision {
-        log("  ctx vision layout: пропущен (Fast Text Mode)");
     } else {
         log("  ctx vision layout: пропущен (субтитры не вжигаются — раскладка не нужна)");
     }
 
     // ── фаза 2: VISION scene-контекст ──────────────────────────────────────
-    if cfg.want_vision {
-        match vision::scene_context(llm, &cfg.input, &tmp, cfg.total, &tgt) {
+    match vision {
+        Some(vision_llm) => match vision::scene_context(vision_llm, &cfg.input, &tmp, cfg.total, &tgt) {
             Ok(sc) => extra["scene_context"] = Value::from(sc),
             Err(e) => log(&format!("  ctx scene skipped: {e}")),
-        }
-    } else {
-        log("  ctx vision scene: пропущен (Fast Text Mode)");
+        },
+        None => log("  ctx scene: пропущен (vision-модель не выбрана или недоступна)"),
     }
 
-    // ── фаза 3: AUDIO-контекст (окна <=28с). Доступно только в мультимодальных аудио-LLM (напр. облако) ──
-    // Local llama-server с Gemma — это Vision+Text модель (без audio mmproj), отправка audio даёт 500.
-    if llm.is_remote() && cfg.want_vision {
-        if let Some(vocals) = &cfg.vocals16 {
-            match audio_context(llm, vocals, &tgt) {
-                Ok(ac) if !ac.is_empty() => extra["audio_context"] = Value::from(ac),
-                Ok(_) => {}
-                Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("not supported") {
-                        log("  ctx audio: модель не поддерживает audio input (пропущен)");
-                    } else {
-                        log(&format!("  ctx audio skipped: {e}"));
-                    }
-                }
-            }
+    // ── фаза 3: AUDIO-контекст (окна <=28с). Fail-safe: нет вокала / модель не умеет audio -> пусто ──
+    if let (Some(vocals), Some(vision_llm)) = (&cfg.vocals16, vision) {
+        match audio_context(vision_llm, vocals, &tgt) {
+            Ok(ac) if !ac.is_empty() => extra["audio_context"] = Value::from(ac),
+            Ok(_) => {}
+            Err(e) => log(&format!("  ctx audio skipped: {e}")),
         }
     }
 
@@ -128,14 +121,14 @@ pub fn run(
     }).unwrap_or_default();
 
     // Единый список исходных строк (речь + тайтлы) в ГЛОБАЛЬНОЙ нумерации 1..N (тайтлы после речи), как
-    // раньше. Хранится без "N. " префикса — нумеруем локально внутри чанка при отправке.
+    // раньше. Хранится без "N. " префикса — нумеруем локально внутри пакета при отправке.
     let mut line_texts: Vec<String> = segs.iter().map(|s| s.text.trim().to_string()).collect();
     line_texts.extend(title_texts.iter().cloned());
 
-    // Бюджет символов на строку (#107): 14 симв/сек × длительность сегмента — мягкий лимит для укладки
+    // Бюджет символов на строку (#107): темп голоса × длительность сегмента — мягкий лимит для укладки
     // перевода в тайминг слота. У тайтлов длительности нет (None -> без лимита в промпте).
-    let mut budgets: Vec<Option<usize>> = segs.iter().map(|s| char_budget(s.end - s.start)).collect();
-    budgets.extend(std::iter::repeat(None).take(title_texts.len()));
+    let mut budgets: Vec<Option<usize>> = segs.iter().map(|s| s.budget(&cfg.tgt_lang)).collect();
+    budgets.extend(std::iter::repeat_n(None, title_texts.len()));
 
     let mut ctx = String::new();
     if let Some(sc) = extra["scene_context"].as_str() {
@@ -149,19 +142,21 @@ pub fn run(
         }
     }
 
-    // Батч-перевод длинного скрипта (#82): чанки по бюджету + скользящий контекст + term-lock глоссарий.
+    // Батч-перевод длинного скрипта (#82): чанки по бюджету + скользящий контекст + глоссарий.
     // Возвращает by_n = {глобальный_N -> перевод} — тот же контракт, что раньше давал единый вызов.
-    let by_n = translate_lines(llm, &line_texts, &budgets, &tgt, rewrite, &cfg.style, &ctx, &mut log)?;
+    let glossary = dub_core::glossary::for_translation(&cfg.glossary, &cfg.tgt_lang);
+    let job = Job { llm, contract, tgt: &tgt, tgt_code: &cfg.tgt_lang, rewrite, style: &cfg.style, glossary };
+    let by_n = translate_lines(&job, &line_texts, &budgets, &ctx, &mut log)?;
 
     for (i, s) in segs.iter_mut().enumerate() {
         let t = by_n.get(&(i + 1)).cloned().unwrap_or_default();
-        s.tgt = if t.is_empty() { s.text.trim().to_string() } else { t };
+        s.tgt = if t.is_empty() { s.text.trim().to_string() } else { crate::fix_translation(&t, &cfg.tgt_lang) };
     }
     // переводы тайтлов идут после речевых строк.
     if let Some(arr) = extra["titles"].as_array_mut() {
         for (j, ttl) in arr.iter_mut().enumerate() {
             let default = ttl.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string();
-            let tr = by_n.get(&(n_seg + j + 1)).cloned().unwrap_or(default);
+            let tr = by_n.get(&(n_seg + j + 1)).map(|t| crate::fix_translation(t, &cfg.tgt_lang)).unwrap_or(default);
             ttl.as_object_mut().map(|o| o.insert("tgt".into(), Value::from(tr)));
         }
     }
@@ -208,274 +203,170 @@ fn chunk_bounds(line_texts: &[String]) -> Vec<(usize, usize)> {
     bounds
 }
 
-/// Плотность речи для бюджета длины (#107): ~13 символов/сек комфортной дикции. Бюджет строки =
-/// round(13 × длительность_сек); длительность ≤0 (нет таймингов) -> None (без лимита).
-const CHARS_PER_SEC: f64 = 13.0;
-const MIN_BUDGET: usize = 12; // пол бюджета (#116): «(≤3)» на междометиях искажает перевод
-pub(crate) fn char_budget(dur: f64) -> Option<usize> {
-    if dur > 0.0 {
-        Some(((dur * CHARS_PER_SEC).round() as usize).max(MIN_BUDGET))
-    } else {
-        None
-    }
+/// Что постоянно на всю джобу перевода.
+struct Job<'a> {
+    llm: &'a ChatClient,
+    contract: &'a Contract,
+    /// Имя целевого языка для промпта.
+    tgt: &'a str,
+    tgt_code: &'a str,
+    rewrite: Option<&'a str>,
+    style: &'a str,
+    /// Глоссарий цели, ручные записи раньше.
+    glossary: Vec<GlossaryEntry>,
 }
 
-/// Вычистить ведущий маркер лимита «(≤NN)» из перевода. Устойчиво (#116): пробелы после «(» и перед
-/// числом, варианты ≤/<=/=<. Цифры/скобки в самом переводе не трогаем.
-pub(crate) fn strip_budget_marker(s: &str) -> String {
-    let re = Regex::new(r"^\s*\(\s*(?:\u{2264}|<=|=<)\s*\d+\s*\)\s*").unwrap();
-    re.replace(s, "").into_owned()
-}
-
-/// Перевести все строки чанками со скользящим контекстом и глоссарием (term-lock).
+/// Перевести все строки пакетами со скользящим контекстом и глоссарием; каждая строка ответа проверяется
+/// (contract::LineCheck), непрошедшие переспрашиваются (batch::drive).
 /// Ключи результата — ГЛОБАЛЬНЫЕ номера строк 1..line_texts.len() (как by_n у старого единого вызова).
 fn translate_lines(
-    llm: &ChatClient,
+    job: &Job,
     line_texts: &[String],
     budgets: &[Option<usize>],
-    tgt: &str,
-    rewrite: Option<&str>,
-    style: &str,
     ctx: &str,
     log: &mut impl FnMut(&str),
 ) -> Result<std::collections::HashMap<usize, String>, TranslateError> {
-    let mut by_n: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
     if line_texts.is_empty() {
-        return Ok(by_n);
+        return Ok(Default::default());
     }
+    let llm = job.llm;
+    let tgt = job.tgt;
 
     // Страховка от переполнения n_ctx: блок контекста (scene+audio) приклеивается к КАЖДОМУ чанку.
     // Если он раздулся (любой будущий источник) — обрезаем по бюджету символов, а не роняем перевод.
     const CTX_CHAR_BUDGET: usize = 6000; // ≈1.5-2К токенов; n_ctx=12288 остаётся с запасом под строки+ответ
-    let ctx_capped: String;
-    let ctx: &str = if ctx.chars().count() > CTX_CHAR_BUDGET {
-        ctx_capped = format!(
-            "{}\n[context truncated]\n\n",
-            ctx.chars().take(CTX_CHAR_BUDGET).collect::<String>()
-        );
+    let ctx: String = if ctx.chars().count() > CTX_CHAR_BUDGET {
         log(&format!(
             "  ctx translate: блок контекста {} симв. -> обрезан до {} (защита n_ctx)",
             ctx.chars().count(),
             CTX_CHAR_BUDGET
         ));
-        &ctx_capped
+        format!("{}\n[context truncated]\n\n", ctx.chars().take(CTX_CHAR_BUDGET).collect::<String>())
     } else {
-        ctx
+        ctx.to_string()
     };
 
     let bounds = chunk_bounds(line_texts);
-    // Глоссарий/term-lock — ТОЛЬКО на длинном скрипте (>1 чанка). На коротком (1 чанк) в HEAD глоссария
-    // НЕ было → gloss_suffix в промпте + лишние Gemma-вызовы + term_lock над выходом меняли бы старый
-    // единый вызов = нарушение питон-паритета (ревью-находка F). При 1 чанке gloss пуст → suffix пуст →
-    // term_lock no-op → промпт и выход совпадают со старым путём.
-    let gloss = if bounds.len() > 1 {
-        crate::translate::glossary_pairs(
-            llm,
-            line_texts.iter().map(|s| s.as_str()),
-            &crate::translate::name_src(""),
-            tgt,
-        )
-        .unwrap_or_default()
+    // Авто-пары имён — ТОЛЬКО на длинном скрипте (>1 чанка), как в HEAD: на коротком единый вызов без них
+    // (питон-паритет). Их сбой перевод не валит — строка в журнал. Ремикс пишет новый текст: ни имён, ни
+    // глоссария (как плоский rewrite).
+    let names = if bounds.len() > 1 && job.rewrite.is_none() {
+        let texts = line_texts.iter().map(|s| s.as_str());
+        match crate::translate::glossary_pairs(llm, texts, &crate::translate::name_src(""), tgt, Some(6), &job.glossary) {
+            Ok(pairs) => pairs,
+            Err(e) => {
+                log(&format!("  ctx translate: авто-глоссарий имён пропущен ({e})"));
+                Vec::new()
+            }
+        }
     } else {
-        Default::default()
+        Vec::new()
     };
-    let gloss_suffix = crate::translate::glossary_suffix(&gloss);
+    let glossary: &[GlossaryEntry] = if job.rewrite.is_some() { &[] } else { &job.glossary };
     if bounds.len() > 1 {
-        log(&format!("  ctx translate: {} строк -> {} чанков (глоссарий: {} терм.)", line_texts.len(), bounds.len(), gloss.len()));
+        log(&format!(
+            "  ctx translate: {} строк -> {} чанков (глоссарий: {} терм., имён: {})",
+            line_texts.len(),
+            bounds.len(),
+            glossary.len(),
+            names.len()
+        ));
     }
 
-    // re: 'N. <line>' — держим ПОСЛЕДНЕЕ вхождение номера (питон dict-comprehension).
-    let re = Regex::new(r"(?m)^\s*(?:[-*#]\s*)?(?:\*\*)?(?:\[)?(\d+)(?:\])?(?:\*\*)?\s*(?:[.)\]:\-]|\*\*\.?|\.\*\*)\s*(.+?)\s*$").unwrap();
+    job.contract.announce(llm, log);
 
-    // БРОНЕБОЙНЫЙ перевод (BORROWINGS #5 / VideoLingo per-chunk degrade): каждый чанк переводим отдельно
-    // из рабочего стека. Если запрос НЕ влез в контекст модели (или ЛЮБАЯ ошибка) — рубим чанк пополам и
-    // кладём половины обратно в стек; так до 1 строки. Дошли до 1 строки и всё равно сбой — оставляем строку
-    // без перевода (фолбэк на исходник в run()), но ОСТАЛЬНЫЕ переводим. Раньше `?` ронял ВЕСЬ перевод при
-    // первом же переполнении (все N строк пустые) — теперь один сбой затрагивает только свою строку.
-    let mut stack: Vec<(usize, usize)> = bounds.iter().rev().cloned().collect();
-    let mut ok_lines = 0usize;
-    let mut fail_lines = 0usize;
-    while let Some((start, end)) = stack.pop() {
-        let clen = end - start;
-        if clen == 0 {
-            continue;
-        }
-        // локально-нумерованный блок 1..clen для этого чанка (маленькие номера надёжнее больших).
-        // После номера — мягкий лимит символов «(≤NN)» из бюджета строки (#107); у строк без бюджета
-        // (тайтлы) лимита нет. Лимит вычищается из ответа защитно (strip_budget_marker).
-        let numbered = line_texts[start..end]
-            .iter()
-            .enumerate()
-            .map(|(k, t)| match budgets.get(start + k).copied().flatten() {
-                Some(lim) => format!("{}. (\u{2264}{lim}) {t}", k + 1),
-                None => format!("{}. {t}", k + 1),
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Скользящий контекст: CTX_BEFORE уже-переведённых строк прошлого чанка (src -> tgt) + CTX_AFTER
-        // сырых исходных строк следующего чанка. Только как СПРАВКА для связности, НЕ переводить их.
-        let mut ctx_block = String::new();
-        if start > 0 {
-            let b0 = start.saturating_sub(CTX_BEFORE);
-            let prev: Vec<String> = (b0..start)
-                .map(|gi| {
-                    let tr = by_n.get(&(gi + 1)).map(|s| s.as_str()).unwrap_or("");
-                    format!("{} => {}", line_texts[gi], tr)
-                })
-                .collect();
-            if !prev.is_empty() {
-                ctx_block += &format!("=== PREVIOUS LINES (already translated, for continuity — do NOT re-output) ===\n{}\n\n", prev.join("\n"));
-            }
-        }
-        if end < line_texts.len() {
-            let a1 = (end + CTX_AFTER).min(line_texts.len());
-            let after: Vec<String> = line_texts[end..a1].to_vec();
-            if !after.is_empty() {
-                ctx_block += &format!("=== UPCOMING LINES (context only — do NOT translate) ===\n{}\n\n", after.join("\n"));
-            }
-        }
-
-        // TP — ДОСЛОВНО как в старом едином вызове (rewrite -> творческий; иначе точный перевод), плюс
-        // суффикс глоссария и блок скользящего контекста. При одном чанке (короткий скрипт) блоки пусты =>
-        // промпт совпадает со старым по формулировке.
-        // Мягкий бюджет длины (#107): если после номера в скобках стоит «(≤NN)» — уложиться в NN символов;
-        // при нехватке места убирать вводные слова и дубли, НЕ выдумывать факты. Скобку в ответ не писать.
-        let budget_rule = " After each number, a parenthesis like (\u{2264}45) gives a soft character limit for that \
+    // Мягкий бюджет длины (#107): если после номера в скобках стоит «(≤NN)» — уложиться в NN символов;
+    // при нехватке места убирать вводные слова и дубли, НЕ выдумывать факты. Скобку в ответ не писать.
+    let budget_rule = " After each number, a parenthesis like (\u{2264}45) gives a soft character limit for that \
 line — stay within it: if it doesn't fit, drop filler words and repetitions, keep the meaning, invent nothing. \
 Do NOT copy the (\u{2264}NN) marker into your output.";
-        // Стиль (#112) — доп-инструкция в инструкционной части ПЕРЕД форматом-контрактом «Output ONLY 'N. …'»
-        // (он остаётся финальным и приоритетным, поэтому стиль не ломает разбор нумерованного ответа).
-        let style_c = crate::translate::style_clause(style);
-        let tp = if let Some(instr) = rewrite {
-            format!(
+    let style_c = crate::translate::style_clause(job.style);
+    let gloss_rule = if glossary.is_empty() { "" } else { crate::gloss::RULE };
+    let names_c = crate::gloss::names_clause(&names);
+    // Неизменная часть — инструкция, стиль, правило глоссария, формат и контекст сцены: одинакова для
+    // всех пакетов джобы, llama-server переиспользует её KV-кэш. Меняется только сообщение со строками.
+    let system = |fmt: Format| -> String {
+        let rule = contract_rule(fmt, tgt);
+        match job.rewrite {
+            Some(instr) => format!(
                 "You are a creative scriptwriter writing a BRAND-NEW voice-over script in {tgt} for this video. \
 IGNORE the literal meaning of the source lines — they are ONLY a rhythm/length template. Write a completely NEW \
 script whose CONTENT follows this instruction: \"{instr}\". Every line must fit the instruction, NOT translate the \
-source. Keep the SAME number of lines and each line about the SAME LENGTH (it will be dubbed to fit the timing).{budget_rule}{style_c} \
-Use the scene/audio context below for tone.{gloss_suffix}\n\n{ctx}{ctx_block}=== LINES (rhythm template) ===\n{numbered}\n\nOutput ONLY 'N. <line>' per line, nothing else."
-            )
-        } else {
-            format!(
+source. Keep the SAME number of lines and each line about the SAME LENGTH (it will be dubbed to fit the timing).{budget_rule}{style_c}{names_c}{gloss_rule} \
+{rule} Use the scene/audio context below for tone.\n\n{ctx}"
+            ),
+            None => format!(
                 "Translate EACH numbered line into natural, spoken {tgt} for dubbing — keep the order and the \
-numbering, match tone/slang/intent.{budget_rule}{style_c} Use ALL the context below (what the words alone don't convey):{gloss_suffix}\n\n\
-{ctx}{ctx_block}=== LINES ===\n{numbered}\n\nOutput ONLY 'N. <translation>' per line, nothing else."
-            )
+numbering, match tone/slang/intent.{budget_rule}{style_c}{names_c}{gloss_rule} {rule} Use ALL the context below and with the lines \
+(what the words alone don't convey).\n\n{ctx}"
+            ),
+        }
+    };
+    let lines_title = if job.rewrite.is_some() { "=== LINES (rhythm template) ===" } else { "=== LINES ===" };
+
+    let log_cell = std::cell::RefCell::new(log);
+    let mut ask = |idx: &[usize], done: &std::collections::HashMap<usize, String>| -> Result<Answer, TranslateError> {
+        // Локальная нумерация 1..len (маленькие номера надёжнее больших; label формата). После номера — мягкий
+        // лимит символов «(≤NN)» из бюджета строки (#107); у строк без бюджета (тайтлы) лимита нет.
+        let numbered = |fmt: Format| {
+            idx.iter()
+                .enumerate()
+                .map(|(k, &gi)| match budgets.get(gi).copied().flatten() {
+                    Some(lim) => format!("{}. (\u{2264}{lim}) {}", label(fmt, k + 1, idx.len()), line_texts[gi]),
+                    None => format!("{}. {}", label(fmt, k + 1, idx.len()), line_texts[gi]),
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
         };
-
-        // mt (макс. выход) капим — не резервировать гигантский n_predict из контекста на большой чанк.
-        let mt = (80 + 45 * clen).min(2048) as u32;
+        // Скользящий контекст: CTX_BEFORE уже-переведённых строк перед пакетом (src -> tgt) + CTX_AFTER сырых
+        // строк после него. Только как СПРАВКА для связности, НЕ переводить их.
+        let (lo, hi) = (idx[0], idx[idx.len() - 1]);
+        let mut ctx_block = String::new();
+        let prev: Vec<String> = (lo.saturating_sub(CTX_BEFORE)..lo)
+            .map(|gi| format!("{} => {}", line_texts[gi], done.get(&gi).map(String::as_str).unwrap_or("")))
+            .collect();
+        if !prev.is_empty() {
+            ctx_block += &format!("=== PREVIOUS LINES (already translated, for continuity — do NOT re-output) ===\n{}\n\n", prev.join("\n"));
+        }
+        let after: Vec<&str> = line_texts[(hi + 1).min(line_texts.len())..(hi + 1 + CTX_AFTER).min(line_texts.len())]
+            .iter()
+            .map(String::as_str)
+            .collect();
+        if !after.is_empty() {
+            ctx_block += &format!("=== UPCOMING LINES (context only — do NOT translate) ===\n{}\n\n", after.join("\n"));
+        }
+        let texts: Vec<&str> = idx.iter().map(|&gi| line_texts[gi].as_str()).collect();
+        let gloss_block = crate::gloss::block(glossary, &texts);
+        let messages = |fmt: Format| {
+            vec![
+                Message::system(system(fmt)),
+                Message::user_text(format!("{gloss_block}{ctx_block}{lines_title}\n{}\n\n{}", numbered(fmt), contract_rule(fmt, tgt))),
+            ]
+        };
+        // mt (макс. выход) капим — не резервировать гигантский n_predict из контекста на большой пакет.
+        let mt = (96 + 52 * idx.len()).min(2560) as u32;
         let s = Sampling::new(0.2, 0.95, mt).top_k(64);
-        match llm.chat(&[Message::user_text(tp)], &s) {
-            Ok(resp) => {
-                let raw = strip_think(&resp);
-                // Парсим локальные номера 1..clen -> глобальный (start+k). Term-lock применяем к выходу.
-                let mut local: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
-                for c in re.captures_iter(&raw) {
-                    if let Ok(k) = c[1].parse::<usize>() {
-                        let mut val = c[2].trim();
-                        if val.starts_with("**") && val.ends_with("**") && val.len() >= 4 {
-                            val = val[2..val.len() - 2].trim();
-                        }
-                        // защита: модель могла протащить маркер лимита «(≤NN)» в перевод -> вычищаем.
-                        local.insert(k, term_lock(&strip_budget_marker(val), &gloss));
-                    }
-                }
-                let mut got = 0usize;
-                for k in 1..=clen {
-                    if let Some(t) = local.get(&k) {
-                        by_n.insert(start + k, t.clone());
-                        got += 1;
-                    } else {
-                        // СТРАХОВКА (#122): если модель пропустила номер k или склеила строки — вызываем точечный per-line перевод
-                        let gi = start + k - 1;
-                        let txt = line_texts[gi].trim();
-                        if !txt.is_empty() {
-                            let budget = budgets.get(gi).copied().flatten();
-                            match crate::translate::translate_one(
-                                llm,
-                                txt,
-                                tgt,
-                                "",
-                                &gloss_suffix,
-                                budget,
-                                &style_c,
-                            ) {
-                                Ok(t1) if !t1.trim().is_empty() => {
-                                    by_n.insert(start + k, term_lock(&t1, &gloss));
-                                    got += 1;
-                                }
-                                _ => {
-                                    // Фолбэк на исходный текст если даже translate_one не вернул перевод
-                                    by_n.insert(start + k, txt.to_string());
-                                }
-                            }
-                        } else {
-                            by_n.insert(start + k, String::new());
-                        }
-                    }
-                }
-                ok_lines += got;
-                fail_lines += clen - got;
-            }
-            Err(e) => {
-                if clen > 1 {
-                    // не влезло / ошибка -> рубим пополам и повторяем (pop-порядок: сначала левая половина)
-                    let mid = start + clen / 2;
-                    stack.push((mid, end));
-                    stack.push((start, mid));
-                    log(&format!("  ctx translate: чанк [{}..{}) не влез ({e}) -> дроблю пополам", start + 1, end));
-                } else {
-                    // одна строка и всё равно сбой -> оставляем как есть (исходник), НЕ рушим остальные
-                    fail_lines += 1;
-                    by_n.insert(start + 1, line_texts[start].trim().to_string());
-                    log(&format!("  ctx translate: строка {} не переведена ({e}) -> оставлена как есть", start + 1));
-                }
-            }
+        let mut answer = job.contract.ask(llm, &messages, &s, idx.len(), &mut |m: &str| (log_cell.borrow_mut())(m))?;
+        for line in answer.lines.iter_mut().flatten() {
+            *line = crate::gloss::term_lock(line, glossary, &names);
         }
+        Ok(answer)
+    };
+    let check = |gi: usize, line: Option<&str>, cut: bool| {
+        LineCheck { src: &line_texts[gi], budget: budgets[gi], tgt_lang: job.tgt_code, glossary, rewrite: job.rewrite.is_some() }
+            .check(line, cut)
+    };
+    let chunks: Vec<Vec<usize>> = bounds.iter().map(|&(a, b)| (a..b).collect()).collect();
+    let out = crate::batch::drive(chunks, &mut ask, &check, &|gi| gi + 1, &mut |m: &str| (log_cell.borrow_mut())(m))?;
+    if line_texts.len() > SHORT_LINES || !out.failed.is_empty() || !out.flawed.is_empty() {
+        (log_cell.borrow_mut())(&format!(
+            "  ctx translate: готово — {} строк переведено ({} с замечанием), {} на исходнике",
+            out.accepted.len(),
+            out.flawed.len(),
+            out.failed.len()
+        ));
     }
-    if line_texts.len() > SHORT_LINES || fail_lines > 0 {
-        log(&format!("  ctx translate: готово — {ok_lines} строк переведено, {fail_lines} на исходнике"));
-    }
-    Ok(by_n)
-}
-
-/// term-lock: если исходное ИМЯ утекло в перевод непереведённым — заменить на его целевую форму из
-/// глоссария (посл. страховка к промпту "Keep these names consistent"). Регистрозависимо, целыми словами.
-fn term_lock(line: &str, gloss: &[(String, String)]) -> String {
-    if gloss.is_empty() {
-        return line.to_string();
-    }
-    let mut out = line.to_string();
-    for (src, dst) in gloss {
-        if src == dst || !out.contains(src.as_str()) {
-            continue;
-        }
-        out = replace_word(&out, src, dst);
-    }
-    out
-}
-
-/// Заменить целые вхождения `src` (границы — не буквенно-цифровой символ) на `dst`. Не трогает src внутри
-/// более длинных слов (напр. "Sam" в "Samples"). Учитывает Unicode-алфавит для границ.
-fn replace_word(hay: &str, src: &str, dst: &str) -> String {
-    let bytes_ok = |c: char| c.is_alphanumeric();
-    let mut out = String::with_capacity(hay.len());
-    let mut rest = hay;
-    while let Some(pos) = rest.find(src) {
-        let before_ok = rest[..pos].chars().next_back().map_or(true, |c| !bytes_ok(c));
-        let after = &rest[pos + src.len()..];
-        let after_ok = after.chars().next().map_or(true, |c| !bytes_ok(c));
-        out.push_str(&rest[..pos]);
-        if before_ok && after_ok {
-            out.push_str(dst);
-        } else {
-            out.push_str(src);
-        }
-        rest = after;
-    }
-    out.push_str(rest);
-    out
+    Ok(out.accepted.into_iter().map(|(gi, t)| (gi + 1, t)).collect())
 }
 
 /// AUDIO-контекст — нарезка вокала на окна <=28с и запрос input_audio. Fail-safe вызывающим.
@@ -484,9 +375,6 @@ fn audio_context(llm: &ChatClient, vocals: &Path, tgt: &str) -> Result<String, T
     let mut reader = hound::WavReader::open(vocals).map_err(|e| TranslateError::Audio(e.to_string()))?;
     let spec = reader.spec();
     let sr = spec.sample_rate as usize;
-    if sr == 0 {
-        return Err(TranslateError::Audio("WAV sample rate is 0".into()));
-    }
     // читаем как f32 mono (микшируем каналы усреднением, как d.mean(axis=1) в питоне)
     let ch = spec.channels as usize;
     let samples: Vec<f32> = match spec.sample_format {
@@ -617,33 +505,53 @@ mod tests {
     }
 
     #[test]
-    fn replace_word_whole_words_only() {
-        assert_eq!(replace_word("Sam went home", "Sam", "Сэм"), "Сэм went home");
-        // не трогает src внутри более длинного слова
-        assert_eq!(replace_word("Samples of Sam", "Sam", "Сэм"), "Samples of Сэм");
-        // несколько вхождений
-        assert_eq!(replace_word("Sam and Sam", "Sam", "Сэм"), "Сэм and Сэм");
-        // нет вхождений
-        assert_eq!(replace_word("nothing", "Sam", "Сэм"), "nothing");
+    fn budget_by_voice_rate_and_marker_strip() {
+        let mut s = Seg::new("x", 0);
+        s.end = 2.0;
+        assert_eq!(s.budget("en"), Some(30));
+        s.cps = Some(14.0);
+        assert_eq!(s.budget("en"), Some(28));
+        s.end = 0.0;
+        assert_eq!(s.budget("en"), None);
+        let strip = crate::translate::strip_budget_marker;
+        assert_eq!(strip("(≤45) перевод"), "перевод");
+        assert_eq!(strip("(<=12)  x"), "x");
+        assert_eq!(strip("без маркера"), "без маркера");
     }
 
     #[test]
-    fn char_budget_and_marker_strip() {
-        assert_eq!(char_budget(2.0), Some(26)); // 13 симв/сек × 2с
-        assert_eq!(char_budget(0.0), None);
-        assert_eq!(strip_budget_marker("(≤45) перевод"), "перевод");
-        assert_eq!(strip_budget_marker("(<=12)  x"), "x");
-        assert_eq!(strip_budget_marker("без маркера"), "без маркера");
+    fn each_line_is_checked_and_the_instruction_stays_the_same_across_batches() {
+        use dub_llm::test_http::{body_json, serve, Reply};
+        let reply = |content: &str| Reply::json(200, &serde_json::json!({ "choices": [{ "message": { "content": content }, "finish_reason": "stop" }] }).to_string());
+        let server = serve(vec![reply(r#"{"1":"Привет, Гарри","2":"Hello there"}"#), reply(r#"{"1":"Ну привет"}"#)]);
+        let llm = ChatClient::new(server.base()).unwrap();
+        let glossary = vec![GlossaryEntry { term: "Harry".into(), translation: "Гарри".into(), ..GlossaryEntry::default() }];
+        let job = Job { llm: &llm, contract: &Contract::for_client(&llm), tgt: "Russian", tgt_code: "ru", rewrite: None, style: "", glossary };
+        let lines: Vec<String> = vec!["Hi, Harry".into(), "Hello there".into()];
+        let mut log: Vec<String> = Vec::new();
+        let by_n = translate_lines(&job, &lines, &[Some(14), Some(14)], "=== VISUAL SCENE ===\nA castle\n\n", &mut |m: &str| log.push(m.to_string())).unwrap();
+        assert_eq!(by_n[&1], "Привет, Гарри");
+        assert_eq!(by_n[&2], "Ну привет");
+        let (a, b) = (body_json(&server.request(0)), body_json(&server.request(1)));
+        assert_eq!(a["messages"][0], b["messages"][0], "a stable prefix for the KV cache");
+        assert!(a["messages"][0]["content"].as_str().unwrap().contains("A castle"));
+        assert!(a["messages"][1]["content"].as_str().unwrap().contains("Harry → Гарри"));
+        assert!(b["messages"][1]["content"].as_str().unwrap().contains("Hi, Harry => Привет, Гарри"), "the retry sees what is done");
+        assert!(log.iter().any(|l| l.contains("повторяет исходник")), "{log:?}");
     }
 
     #[test]
-    fn term_lock_applies_glossary() {
-        let gloss = vec![("Sam".to_string(), "Сэм".to_string()), ("Bob".to_string(), "Боб".to_string())];
-        assert_eq!(term_lock("Sam met Bob today", &gloss), "Сэм met Боб today");
-        // src==dst или уже переведено -> без изменений
-        let g2 = vec![("Sam".to_string(), "Sam".to_string())];
-        assert_eq!(term_lock("Sam here", &g2), "Sam here");
-        // пустой глоссарий
-        assert_eq!(term_lock("plain", &[]), "plain");
+    fn a_remix_takes_no_glossary() {
+        use dub_llm::test_http::{body_json, serve, Reply};
+        let reply = |content: &str| Reply::json(200, &serde_json::json!({ "choices": [{ "message": { "content": content }, "finish_reason": "stop" }] }).to_string());
+        let server = serve(vec![reply(r#"{"1":"Harry ест пиццу"}"#)]);
+        let llm = ChatClient::new(server.base()).unwrap();
+        let glossary = vec![GlossaryEntry { term: "Harry".into(), translation: "Гарри".into(), ..GlossaryEntry::default() }];
+        let job = Job { llm: &llm, contract: &Contract::for_client(&llm), tgt: "Russian", tgt_code: "ru", rewrite: Some("about pizza"), style: "", glossary };
+        let by_n = translate_lines(&job, &["Hi, Harry".into()], &[Some(30)], "", &mut |_: &str| {}).unwrap();
+        assert_eq!(by_n[&1], "Harry ест пиццу", "no term lock");
+        let body = body_json(&server.request(0));
+        let all = format!("{}{}", body["messages"][0]["content"], body["messages"][1]["content"]);
+        assert!(!all.contains("GLOSSARY") && !all.contains("Гарри"), "{all}");
     }
 }

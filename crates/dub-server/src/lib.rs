@@ -19,7 +19,10 @@ mod compose;
 pub mod duck;
 mod endpoints;
 mod llm_provider;
-mod openrouter_cli;
+pub mod credentials;
+pub mod secrets_api;
+mod openrouter;
+pub use dub_llm::net;
 mod f0;
 mod frame;
 mod hw;
@@ -285,12 +288,10 @@ pub fn augment_path_for_tools(repo_root: &Path) {
     }
 }
 
-/// Прописать прокси из models/active.json в env процесса (если включён), чтобы стандартные HTTP-клиенты
-/// (ureq default-agent, reqwest в record.rs, Tauri-апдейтер в десктоп-процессе) шли через него. Вызывать
-/// на старте — ДО первого HTTP-запроса. Закачки моделей и облако строят клиент явно и подхватывают смену
-/// прокси без рестарта; остальному (апдейтер/метаданные HF) смена прокси требует рестарта.
-pub fn apply_proxy_env(repo_root: &Path) {
-    models::apply_proxy_env(&repo_root.join("models"));
+/// Сделать настройки прокси из models/active.json маршрутом всех запросов приложения. Вызывать
+/// на старте до первого HTTP-запроса; смена прокси в окне перестраивает маршрут сразу.
+pub fn init_proxy_route(repo_root: &Path) {
+    models::apply_proxy_route(&repo_root.join("models"));
 }
 
 /// Поднять axum-сервер БЛОКИРУЮЩЕ на собственном tokio-рантайме. Для встраивания в десктоп-оболочку ОДНИМ
@@ -301,7 +302,7 @@ pub fn serve_blocking(repo_root: impl AsRef<Path>, port: u16) -> anyhow::Result<
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
         augment_path_for_tools(&root);
-        apply_proxy_env(&root);
+        init_proxy_route(&root);
         let state = AppState::new(&root);
         let app = build_router(state);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -318,6 +319,13 @@ impl AppState {
         let _ = std::fs::create_dir_all(&workspace);
         let web_root = spa::find_web_root(&repo_root);
         let mroot = models_root(&repo_root);
+        match credentials::migrate_legacy_selection(&mroot) {
+            Ok(moved) if moved.openrouter_key || moved.proxy_password => {
+                tracing::info!("секреты перенесены из active.json в хранилище секретов: {moved:?}")
+            }
+            Ok(_) => {}
+            Err(e) => tracing::error!("секреты из active.json не перенесены в хранилище: {e:#}"),
+        }
         let tdt_dir = std::env::var("DUB_STUDIO_TDT")
             .map(PathBuf::from)
             .unwrap_or_else(|_| mroot.join("tdt"));
@@ -431,7 +439,23 @@ pub fn build_router(state: AppState) -> Router {
         .route("/engine/openrouter/models", get(endpoints::openrouter_models))
         .route("/engine/openrouter/voices", get(endpoints::openrouter_voices))
         .route("/engine/openrouter/verify", post(endpoints::openrouter_verify))
+        .route("/engine/openrouter/catalog", get(endpoints::openrouter_catalog))
+        .route("/engine/openrouter/catalog/refresh", post(endpoints::openrouter_catalog_refresh))
+        .route(
+            "/engine/openrouter/settings",
+            get(secrets_api::openrouter_settings)
+                .put(secrets_api::update_openrouter_settings)
+                .delete(secrets_api::delete_openrouter_settings),
+        )
         .route("/engine/proxy/test", post(endpoints::proxy_test))
+        .route("/engine/proxy/settings", get(secrets_api::proxy_settings).put(secrets_api::update_proxy_settings))
+        .route("/engine/server/models", get(endpoints::server_models))
+        .route(
+            "/engine/server/key",
+            get(secrets_api::server_key)
+                .put(secrets_api::update_server_key)
+                .delete(secrets_api::delete_server_key),
+        )
         .route("/engine/presets", get(endpoints::presets_list))
         .route("/engine/preset", post(endpoints::preset_apply))
         // «Первый запуск»: статус компонентов + автозакачка недостающего (SSE через ту же job-машину).
@@ -552,7 +576,7 @@ async fn capabilities(State(st): State<AppState>) -> Json<Value> {
         "languages": langs,
         "voice_modes": ["clone","autocast","auto","voice"],
         // Выбор ASR: движок (parakeet|whisper), модель Whisper, квант Whisper (compute_type).
-        "selection": sel,
+        "selection": models::public_selection(&st.models_root),
         "asr_engines": ["parakeet","whisper"],
         "alignment": { "languages": ["en"], "ready": dub_asr::forced::verified_model_ready(&st.models_root.join(dub_asr::forced::MODEL_DIR)), "component": "alignment-en" },
         "whisper_models": ["tiny","base","small","medium","large-v3","large-v3-turbo"],
@@ -1870,9 +1894,9 @@ async fn analyze_project(
         paths.asr = models::resolve_asr_choice(&paths.repo_root, &paths.models_root, &sel);
         eprintln!("[models] analyze (after setup): ASR={}", paths.asr.describe());
         // Трекинг затрат OpenRouter в ДОЛЛАРАХ (перевод/vision через облако): total_usage до/после.
-        let cost_before = openrouter_cli::total_usage_usd(&paths.models_root);
+        let cost_before = openrouter::total_usage_usd(&paths.models_root);
         let proj = analyze::run(&args, &paths, &cb)?;
-        if let (Some(b), Some(a)) = (cost_before, openrouter_cli::total_usage_usd(&paths.models_root)) {
+        if let (Some(b), Some(a)) = (cost_before, openrouter::total_usage_usd(&paths.models_root)) {
             let spent = (a - b).max(0.0);
             if spent > 0.0 {
                 cb(json!({ "stage": "cost", "msg": format!("OpenRouter: потрачено ${spent:.4} за анализ (всего использовано ${a:.2})") }));
@@ -2013,9 +2037,9 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
         // regen_dub если есть dirty-сегменты (voice/text/rewrite правились).
         let regen = proj.segments.iter().any(|s| s.dirty);
         // Трекинг затрат OpenRouter в ДОЛЛАРАХ: total_usage до/после (None -> облако не использовалось).
-        let cost_before = openrouter_cli::total_usage_usd(&paths.models_root);
+        let cost_before = openrouter::total_usage_usd(&paths.models_root);
         render::run(&proj, &paths, regen, &cb)?;
-        if let (Some(b), Some(a)) = (cost_before, openrouter_cli::total_usage_usd(&paths.models_root)) {
+        if let (Some(b), Some(a)) = (cost_before, openrouter::total_usage_usd(&paths.models_root)) {
             let spent = (a - b).max(0.0);
             if spent > 0.0 {
                 cb(json!({ "stage": "cost", "msg": format!("OpenRouter: потрачено ${spent:.4} за прогон (всего использовано ${a:.2})") }));

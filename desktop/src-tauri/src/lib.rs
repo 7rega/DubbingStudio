@@ -104,7 +104,13 @@ fn spawn_update_check(app: tauri::AppHandle, portable: bool) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
     use tauri_plugin_updater::UpdaterExt;
     tauri::async_runtime::spawn(async move {
-        let updater = match app.updater() {
+        // Прокси из настроек: GitHub, откуда обновления, — среди сайтов, ради которых прокси и ставят.
+        let builder = match dub_server::net::fixed() {
+            dub_server::net::Fixed::System => app.updater_builder(),
+            dub_server::net::Fixed::Direct => app.updater_builder().no_proxy(),
+            dub_server::net::Fixed::Through(proxy) => app.updater_builder().proxy(proxy),
+        };
+        let updater = match builder.build() {
             Ok(u) => u,
             Err(_) => return,
         };
@@ -216,6 +222,8 @@ pub fn run() {
         let _ = std::fs::write(std::path::Path::new(&temp).join("dubstudio.port"), port.to_string());
     }
     setup_server_env(&repo_root);
+    // Маршрут прокси до проверки обновлений: сервер ставит его в своём потоке, без гарантии, что раньше.
+    dub_server::init_proxy_route(&repo_root);
 
     // axum-бэкенд поднимается В ЭТОМ ЖЕ процессе на фоновом потоке — ОДИН exe, без dub-server.exe-сайдкара.
     // Поток-демон: живёт до выхода процесса, отдельно убивать не нужно (нет дочернего процесса).
