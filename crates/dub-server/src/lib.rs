@@ -49,6 +49,7 @@ mod translate;
 mod autocast;
 mod voice_slots;
 pub mod voice_library;
+pub mod downloads;
 mod wavio;
 
 use axum::extract::{Multipart, Path as AxPath, Query, State};
@@ -251,6 +252,8 @@ pub struct AppState {
     pub voices_dir: PathBuf,
     /// Флаг отмены текущей setup-закачки (POST /setup/cancel взводит; download-loop его читает).
     pub setup_cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// Менеджер фоновой загрузки моделей и компонентов.
+    pub downloads: Arc<downloads::Downloads>,
     pub tts_cache: Arc<Mutex<Option<(render::EngineKey, Arc<audiocpp::AudiocppEngine>)>>>,
 }
 
@@ -360,6 +363,7 @@ impl AppState {
             .map(PathBuf::from)
             .unwrap_or_else(|_| repo_root.join("voices"));
         let _ = std::fs::create_dir_all(voices_dir.join("cast"));
+        let downloads = Arc::new(downloads::Downloads::open(&repo_root));
         AppState {
             repo_root,
             workspace,
@@ -379,6 +383,7 @@ impl AppState {
             models_root: mroot,
             voices_dir,
             setup_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            downloads,
             tts_cache: {
                 let cache: TtsCache = Arc::new(Mutex::new(None));
                 let _ = GLOBAL_TTS_CACHE.set(cache.clone());
@@ -462,6 +467,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/setup/status", get(setup_status))
         .route("/setup/download", post(setup_download))
         .route("/setup/cancel", post(setup_cancel))
+        .route("/setup/discard", post(setup_discard))
         .route("/setup/open-models", post(setup_open_models))
         .route("/setup/browse", post(setup_browse))
         .route("/pick-folder", post(pick_folder))
@@ -597,9 +603,26 @@ fn which_ffmpeg() -> bool {
         .unwrap_or(false)
 }
 
-// ─── /setup/status ; /setup/download ; /setup/cancel ────────────────────────
+// ─── /setup/status ; /setup/download ; /setup/cancel ; /setup/discard ────────
 
-/// GET /setup/status — статус каждого компонента (installed/missing/размер) + драйвер/готовность.
+fn dl_error_response(e: setup::DlError) -> Response {
+    let status = match e.code {
+        "busy" => StatusCode::CONFLICT,
+        "disk_space" => StatusCode::INSUFFICIENT_STORAGE,
+        "nothing_to_download" | "unknown_component" | "not_removable" | "no_ids" => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, Json(json!({ "code": e.code, "detail": e.detail }))).into_response()
+}
+
+fn body_ids(body: &Value) -> Vec<String> {
+    body.get("ids")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default()
+}
+
+/// GET /setup/status — статус каждого компонента (installed/missing/размер) + драйвер/готовность + active (фоновая закачка).
 /// Читает только диск (никаких моделей не грузит) — безопасно вызывать до любой закачки.
 async fn setup_status(State(st): State<AppState>) -> Json<Value> {
     let root = st.repo_root.clone();
@@ -607,40 +630,39 @@ async fn setup_status(State(st): State<AppState>) -> Json<Value> {
     let status = tokio::task::spawn_blocking(move || setup::setup_status(&root))
         .await
         .unwrap_or_else(|_| setup::setup_status(&st.repo_root));
-    Json(serde_json::to_value(status).unwrap_or_else(|_| json!({})))
-}
-
-/// POST /setup/download {ids:[...]} — поставить джобу закачки выбранных компонентов; вернуть job_id.
-/// Прогресс — по SSE GET /jobs/{id}/events (та же машина, что analyze/render).
-async fn setup_download(State(st): State<AppState>, Json(body): Json<Value>) -> Response {
-    let ids: Vec<String> = body
-        .get("ids")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
-        .unwrap_or_default();
-    if ids.is_empty() {
-        return (StatusCode::BAD_REQUEST, "ids пуст").into_response();
+    let mut val = serde_json::to_value(status).unwrap_or_else(|_| json!({}));
+    if let Value::Object(ref mut map) = val {
+        map.insert("active".into(), serde_json::to_value(st.downloads.active()).unwrap_or(Value::Null));
     }
-    let root = st.repo_root.clone();
-    let cancel_flag = st.setup_cancel.clone();
-    cancel_flag.store(false, std::sync::atomic::Ordering::SeqCst); // свежий старт
-
-    let job: jobs::JobFn = Box::new(move |progress: jobs::ProgressFn| {
-        let cancel = {
-            let cf = cancel_flag.clone();
-            move || cf.load(std::sync::atomic::Ordering::SeqCst)
-        };
-        let cb = |ev: Value| progress(ev);
-        setup::download_components(&root, &ids, &cancel, &cb)
-    });
-    let job_id = st.jobs.enqueue_with_meta("download", "", job).await;
-    Json(json!({ "job_id": job_id })).into_response()
+    Json(val)
 }
 
-/// POST /setup/cancel — взвести флаг отмены текущей закачки (download-loop прервётся на следующем чанке).
+/// POST /setup/download {ids:[...]} — запустить фоновую закачку (мимо GPU-очереди): {download}.
+async fn setup_download(State(st): State<AppState>, Json(body): Json<Value>) -> Response {
+    let ids = body_ids(&body);
+    if ids.is_empty() {
+        return dl_error_response(setup::DlError::new("no_ids", "ids пуст"));
+    }
+    let dl = st.downloads.clone();
+    match tokio::task::spawn_blocking(move || dl.start(ids)).await {
+        Ok(Ok(job)) => Json(json!({ "download": job })).into_response(),
+        Ok(Err(e)) => dl_error_response(e),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "code": "internal", "detail": e.to_string() }))).into_response(),
+    }
+}
+
+/// POST /setup/cancel — пауза фоновой закачки: скачанное остаётся и докачивается следующим /setup/download.
 async fn setup_cancel(State(st): State<AppState>) -> Json<Value> {
     st.setup_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
-    Json(json!({ "cancelled": true }))
+    Json(json!({ "paused": st.downloads.pause() }))
+}
+
+/// POST /setup/discard — отменить фоновую закачку и удалить недокачанные .part файлы с диска.
+async fn setup_discard(State(st): State<AppState>) -> Json<Value> {
+    let dl = st.downloads.clone();
+    let root = st.repo_root.clone();
+    let discarded = tokio::task::spawn_blocking(move || dl.discard(&root)).await.unwrap_or(false);
+    Json(json!({ "discarded": discarded }))
 }
 
 /// ON-DEMAND: перед джобой догружаем компоненты, нужные ИМЕННО ДЛЯ ЭТОЙ функции/конфига, если их нет

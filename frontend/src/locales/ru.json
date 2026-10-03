@@ -596,6 +596,24 @@
     "done": "Готово",
     "error": "Ошибка"
   },
+  "downloads": {
+    "phaseWaiting": "Жду другую закачку…",
+    "phaseVerify": "Проверяю контрольные суммы…",
+    "phaseDownload": "Скачиваю…",
+    "phaseExtract": "Распаковываю…",
+    "phaseStarting": "Начинаю закачку…",
+    "paused": "На паузе — скачанное сохранено",
+    "interrupted": "Прервано закрытием приложения — продолжится с того же места",
+    "completed": "Закачка завершена",
+    "pause": "Пауза",
+    "resume": "Продолжить",
+    "discard": "Удалить",
+    "discardTitle": "Отменить и удалить недокачанные файлы",
+    "progress": "{{done}} из {{total}}",
+    "speed": "{{speed}}/с",
+    "waitingServer": "сервер просит подождать {{s}} с",
+    "errGeneric": "Ошибка закачки"
+  },
   "comp": {
     "langHint": "100+ языков. Для источника вне Европы Whisper включается автоматически.",
     "asrSwitched": "Parakeet не знает {{lang}} — ASR переключён на Whisper (99 языков).",

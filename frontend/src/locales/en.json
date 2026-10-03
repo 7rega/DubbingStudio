@@ -596,6 +596,24 @@
     "done": "Done",
     "error": "Error"
   },
+  "downloads": {
+    "phaseWaiting": "Waiting for another download…",
+    "phaseVerify": "Verifying checksums…",
+    "phaseDownload": "Downloading…",
+    "phaseExtract": "Extracting…",
+    "phaseStarting": "Starting download…",
+    "paused": "Paused — downloaded data preserved",
+    "interrupted": "Interrupted by app closure — will resume from where it stopped",
+    "completed": "Download completed",
+    "pause": "Pause",
+    "resume": "Resume",
+    "discard": "Delete",
+    "discardTitle": "Cancel and delete partially downloaded files",
+    "progress": "{{done}} of {{total}}",
+    "speed": "{{speed}}/s",
+    "waitingServer": "server requested to wait {{s}} s",
+    "errGeneric": "Download error"
+  },
   "comp": {
     "langHint": "100+ languages. For a non-European source, Whisper turns on automatically.",
     "asrSwitched": "Parakeet doesn't know {{lang}} — ASR switched to Whisper (99 languages).",

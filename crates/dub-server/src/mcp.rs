@@ -1517,6 +1517,7 @@ mod tests {
         ("POST", "/engine/preset", "studio internal: subtitle preset selection for web frontend UI"),
         ("POST", "/setup/download", "studio internal: component downloader for web frontend UI"),
         ("POST", "/setup/cancel", "studio internal: cancel download for web frontend UI"),
+        ("POST", "/setup/discard", "studio internal: discard partial download for web frontend UI"),
         ("POST", "/setup/open-models", "studio internal: open models directory in OS explorer"),
         ("POST", "/setup/browse", "studio internal: browse directory dialog for user"),
         ("POST", "/pick-folder", "studio internal: folder picker dialog for user"),

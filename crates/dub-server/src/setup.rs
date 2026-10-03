@@ -1319,6 +1319,73 @@ pub fn setup_status(repo_root: &Path) -> SetupStatus {
 //  ЗАКАЧКА (тело джобы; прогресс -> колбэк, как у analyze/render)
 // ═══════════════════════════════════════════════════════════════════════════
 
+pub const CANCELLED: &str = "отменено";
+
+#[derive(Clone, Debug)]
+pub struct DlError {
+    pub code: &'static str,
+    pub detail: String,
+}
+
+impl DlError {
+    pub fn new(code: &'static str, detail: impl Into<String>) -> Self {
+        DlError { code, detail: detail.into() }
+    }
+}
+
+impl std::fmt::Display for DlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for DlError {}
+
+pub fn check_space(repo_root: &Path, ids: &[String]) -> Result<(), DlError> {
+    let all = manifest();
+    let need: u64 = all
+        .iter()
+        .filter(|c| c.delivery == Delivery::Download && ids.iter().any(|x| x == c.id))
+        .map(|c| c.size)
+        .sum();
+    let models_dir = crate::models_root(repo_root);
+    if let Some(free) = free_bytes(&models_dir) {
+        if free < need {
+            return Err(DlError::new(
+                "disk_space",
+                format!("недостаточно места: нужно {} МБ, свободно {} МБ", need / (1024 * 1024), free / (1024 * 1024)),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Удалить недокачанные .part и .done файлы для указанных компонентов
+pub fn cleanup_job_files(repo_root: &Path, ids: &[String]) {
+    let all = manifest();
+    let tmp_dir = std::env::temp_dir().join("dub-studio-setup");
+    for c in all.iter().filter(|c| ids.iter().any(|id| id == c.id)) {
+        for f in c.files {
+            if f.extract == Extract::None {
+                let dest = repo_root.join(f.dest_rel);
+                let mut s = dest.into_os_string();
+                s.push(".part");
+                let part = PathBuf::from(s);
+                let _ = std::fs::remove_file(&part);
+                let _ = std::fs::remove_file(done_manifest_path(&part));
+            } else {
+                let file_name = Path::new(f.dest_rel)
+                    .file_name()
+                    .map(|s| s.to_os_string())
+                    .unwrap_or_else(|| "archive.tmp".into());
+                let target = tmp_dir.join(file_name);
+                let _ = std::fs::remove_file(&target);
+                let _ = std::fs::remove_file(done_manifest_path(&target));
+            }
+        }
+    }
+}
+
 /// Колбэк прогресса скачивания: сервер оборачивает его в SSE-событие джобы.
 pub type ProgressCb<'a> = dyn Fn(Value) + 'a;
 
@@ -1368,6 +1435,7 @@ pub fn download_components(
         target: PathBuf,
         extract: Extract,
         url: &'static str,
+        size: u64,
     }
     let mut planned: Vec<Planned> = Vec::new();
     for (ci, c) in selected.iter().enumerate() {
@@ -1395,7 +1463,7 @@ pub fn download_components(
             } else {
                 dest.clone()
             };
-            planned.push(Planned { ci, dest, target, extract: f.extract, url: f.url });
+            planned.push(Planned { ci, dest, target, extract: f.extract, url: f.url, size: f.size });
         }
     }
 
@@ -1434,16 +1502,18 @@ pub fn download_components(
             return Err("отменено".to_string());
         }
         let (total, ranges_ok) = probe_size(&agent, p.url);
-        comp_total[p.ci] += total;
+        let eff_total = if total > 0 { total } else { p.size };
+        comp_total[p.ci] += eff_total;
         let dl_target: PathBuf = if p.extract == Extract::None {
             let mut s = p.target.clone().into_os_string();
             s.push(".part");
             let part = PathBuf::from(s);
-            parts.push((part.clone(), p.target.clone(), total));
+            parts.push((part.clone(), p.target.clone(), eff_total));
             part
         } else {
             p.target.clone() // архивы качаем в tmp напрямую — extract их сам валидирует
         };
+        let total = eff_total;
         if ranges_ok && total > 0 {
             // РЕЗЮМ большого файла: .part уже нужного размера И рядом манифест .done -> дочитываем ТОЛЬКО
             // недостающие чанки (обрыв Xet на 12ГБ больше НЕ заставляет качать с нуля). Иначе — свежая закачка.
@@ -1549,30 +1619,39 @@ pub fn download_components(
                 finished.fetch_add(1, Ordering::SeqCst);
             });
         }
-        // Главный поток: агрегатный + ПОКОМПОНЕНТНЫЙ прогресс (parts) + проверка отмены.
-        let t0 = std::time::Instant::now();
+        // Главный поток: агрегатный + ПОКОМПОНЕНТНЫЙ прогресс + скорость по окну последних секунд + отмена.
+        let mut window: std::collections::VecDeque<(std::time::Instant, u64)> = std::collections::VecDeque::new();
         loop {
             if cancel() {
                 abort.store(true, Ordering::Relaxed);
             }
             let got: u64 = comp_done.iter().map(|a| a.load(Ordering::Relaxed)).sum();
-            let secs = t0.elapsed().as_secs_f64();
-            let mbps = if secs > 0.0 { (got as f64 / 1_000_000.0) / secs } else { 0.0 };
+            let now = std::time::Instant::now();
+            window.push_back((now, got));
+            while window.len() > 2 && now.duration_since(window[0].0) > std::time::Duration::from_secs(4) {
+                window.pop_front();
+            }
+            let (t0, g0) = window[0];
+            let dt = now.duration_since(t0).as_secs_f64();
+            let bps = if dt > 0.5 { (got.saturating_sub(g0) as f64 / dt) as u64 } else { 0 };
             let overall = if grand_total > 0 { (got as f64 / grand_total as f64) * 100.0 } else { 0.0 };
             let parts: Vec<Value> = (0..ncomp)
                 .filter(|&i| comp_total[i] > 0)
                 .map(|i| {
-                    let d = comp_done[i].load(Ordering::Relaxed);
+                    let d = comp_done[i].load(Ordering::Relaxed).min(comp_total[i]);
                     let p = (d as f64 / comp_total[i] as f64 * 100.0).min(100.0);
-                    json!({ "component": selected[i].id, "pct": p })
+                    json!({ "component": selected[i].id, "pct": p, "done": d, "total": comp_total[i] })
                 })
                 .collect();
             progress(json!({
                 "stage": "download",
+                "phase": "download",
                 "msg": "Скачиваю модели…",
                 "downloaded": got,
                 "total": grand_total,
-                "speed_mbps": mbps,
+                "speed_bps": bps,
+                "speed_mbps": bps as f64 / 1_000_000.0,
+                "waiting_s": 0,
                 "pct": overall.min(100.0),
                 "parts": parts,
             }));
@@ -1608,8 +1687,8 @@ pub fn download_components(
         return Err(e);
     }
     if cancel() {
-        cleanup(false); // отмена -> удалить незавершённое
-        return Err("отменено".to_string());
+        cleanup(true); // пауза -> СОХРАНИТЬ незавершённое (.part + .done) для докачки
+        return Err(CANCELLED.to_string());
     }
 
     // Успех: валидируем каждый .part (размер == probed total; .gguf -> магия GGUF) и АТОМАРНО переименовываем

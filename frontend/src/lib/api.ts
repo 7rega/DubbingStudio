@@ -151,11 +151,30 @@ export type SetupComponent = {
   size: number; installed: boolean; bytesOnDisk: number;
   missing: string[]; detail?: string | null; externalUrl?: string | null; vram?: number;
 };
+export type DownloadStatus = "downloading" | "completed" | "paused" | "interrupted" | "failed";
+export type DownloadPhase = "" | "waiting" | "verify" | "download" | "extract";
+export type DownloadJob = {
+  id: string;
+  ids: string[];
+  status: DownloadStatus;
+  phase: DownloadPhase;
+  downloaded: number;
+  total: number;
+  speedBps: number;
+  waitingS: number;
+  parts: { id: string; done: number; total: number }[];
+  errorCode?: string | null;
+  error?: string | null;
+  startedAt: number;
+  updatedAt: number;
+};
+
 export type SetupStatus = {
   components: SetupComponent[]; ready: boolean;
   downloadPending: number; driverOk: boolean; llamaBuild: string;
   modelsDir?: string;
   freeBytes?: number | null;
+  active?: DownloadJob | null;
 };
 
 export type HwSnapshot = {
@@ -217,8 +236,9 @@ const getCoded = <T>(path: string): Promise<T> => fetch(`${BASE}${path}`).then(c
 export const api = {
   capabilities: () => getJson<Capabilities>("/engine/capabilities"),
   setupStatus: () => getJson<SetupStatus>("/setup/status"),
-  setupDownload: (ids: string[]) => postJson<{ job_id: string }>("/setup/download", { ids }),
-  setupCancel: () => fetch(`${BASE}/setup/cancel`, { method: "POST" }).then(j<{ cancelled: boolean }>),
+  setupDownload: (ids: string[]) => postJson<{ download: DownloadJob }>("/setup/download", { ids }),
+  setupCancel: () => postJson<{ paused: boolean }>("/setup/cancel", {}),
+  setupDiscard: () => postJson<{ discarded: boolean }>("/setup/discard", {}),
   hwSnapshot: () => getJson<HwSnapshot>("/hw/snapshot"),
   setupBrowse: (id?: string) => postJson<{ picked: boolean; imported: string[]; status: SetupStatus }>("/setup/browse", id ? { id } : {}),
   setupOpenModels: () => postJson<{ path: string }>("/setup/open-models", {}),

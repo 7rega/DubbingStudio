@@ -18,6 +18,9 @@ import QualitySection from "./QualitySection";
 import HotkeysSection from "./HotkeysSection";
 import InterfaceSection from "./InterfaceSection";
 import AboutSection from "./AboutSection";
+import DownloadFooterProgress from "./DownloadFooterProgress";
+import { useSetupStatus } from "../../lib/useSetupStatus";
+import { api } from "../../lib/api";
 
 export type SettingsPanes = {
   models: ReactNode;
@@ -67,6 +70,29 @@ export default function SettingsModal({
   const [section, setSection] = useState<SettingsSection>(initial?.section ?? "models");
   const bodyRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
+
+  const { status, refresh } = useSetupStatus();
+
+  const handlePause = async () => {
+    try {
+      await api.setupCancel();
+      await refresh();
+    } catch {}
+  };
+
+  const handleResume = async (ids: string[]) => {
+    try {
+      await api.setupDownload(ids);
+      await refresh();
+    } catch {}
+  };
+
+  const handleDiscard = async () => {
+    try {
+      await api.setupDiscard();
+      await refresh();
+    } catch {}
+  };
 
   // Escape key closes modal
   useEffect(() => {
@@ -192,15 +218,20 @@ export default function SettingsModal({
             {section === "about" && <AboutSection />}
           </div>
 
-          {/* Подвал с кнопкой «Готово» */}
-          <div className="flex items-center justify-between border-t border-white/[0.08] px-6 py-3.5 bg-transparent shrink-0">
-            <span className="text-xs text-[var(--color-muted)]">
-              {t("prefs.autoSaveNote", "Все настройки сохраняются автоматически")}
-            </span>
+          {/* Подвал с контроллером загрузки и кнопкой «Готово» */}
+          <div className="flex items-center justify-between border-t border-white/[0.08] px-6 py-3 bg-transparent shrink-0 min-h-[58px]">
+            <div className="flex-1 min-w-0 mr-6">
+              <DownloadFooterProgress
+                job={status?.active}
+                onPause={handlePause}
+                onResume={handleResume}
+                onDiscard={handleDiscard}
+              />
+            </div>
             <button
               type="button"
               onClick={onClose}
-              className="px-6 py-2 rounded-xl bg-[var(--color-accent)] text-black text-xs font-bold hover:brightness-110 transition shadow"
+              className="px-6 py-2 rounded-xl bg-[var(--color-accent)] text-black text-xs font-bold hover:brightness-110 transition shadow shrink-0"
             >
               {t("prefs.done", "Готово")}
             </button>

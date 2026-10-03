@@ -23,9 +23,11 @@ import OpenRouterKey from "./components/OpenRouterKey";
 import ProxySection from "./components/ProxySection";
 import LlmProviders from "./components/LlmProviders";
 import OpenRouterModelSelect, { OpenRouterCatalogRow } from "./components/OpenRouterModelSelect";
-import { slot, llmProviderOf } from "./lib/api";
+import { slot, llmProviderOf, type DownloadJob } from "./lib/api";
 import type { SettingsTabId } from "./lib/settingsNav";
 import { useHotkeysStore, formatKeyCombo } from "./lib/hotkeys";
+import DownloadFooterProgress from "./components/settings/DownloadFooterProgress";
+import { useSetupStatus } from "./lib/useSetupStatus";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -102,8 +104,7 @@ const Group = ({ label, children }: { label: string; children: React.ReactNode }
 // Модели и компоненты в настройках: список из /setup/status с кнопками скачки/докачки и прогрессом.
 function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
   const { t } = useTranslation();
-  const [status, setStatus] = useState<SetupStatus | null>(null);
-  const [prog, setProg] = useState<{ id: string; pct: number } | null>(null);
+  const { status, refresh: refreshStatus } = useSetupStatus();
   // Выбор ASR-движка (parakeet|whisper) + квант Whisper (compute) — из capabilities.selection.
   const [cap, setCap] = useState<Capabilities | null>(null);
   const [asrEngine, setAsrEngine] = useState<string>("parakeet");
@@ -126,7 +127,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
     setWhisperExecutable(slot(s, "whisper_executable") ?? "standard");
     setXxlArgs(slot(s, "whisper_xxl_args") ?? "");
   }).catch(() => {});
-  const refresh = () => { api.setupStatus().then(setStatus).catch(() => {}); loadCap(); };
+  const refresh = () => { refreshStatus().catch(() => {}); loadCap(); };
   useEffect(() => { refresh(); }, []);
   const selv = (k: string) => slot(cap?.selection, k) ?? "";
   const hasOrKey = cap?.selection?.or_key_set === true;
@@ -137,20 +138,20 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
     if (!orTtsModel) { setOrVoices([]); setTtsRu(null); return; }
     api.openrouterVoices(orTtsModel).then((r) => { setOrVoices(r.voices); setTtsRu(r.supportsRussian); }).catch(() => {});
   }, [orTtsModel]);
+  const isDownloading = status?.active?.status === "downloading";
   const dl = async (id: string) => {
-    if (prog) return;
-    setProg({ id, pct: 0 }); setErr(null);
+    setErr(null);
     try {
-      const { job_id } = await api.setupDownload([id]);
-      await api.watchJob(job_id, (e) => { if (e.type === "progress" && (e.component === id || !e.component)) setProg({ id, pct: e.pct ?? 0 }); });
-    } catch (e) { setErr(`${id}: ${e instanceof Error ? e.message : String(e)}`); } finally { setProg(null); await refresh(); }
+      await api.setupDownload([id]);
+      await refreshStatus();
+    } catch (e) { setErr(`${id}: ${e instanceof Error ? e.message : String(e)}`); }
   };
   const browseId = async (id: string) => {
-    if (prog) return;
-    try { const r = await api.setupBrowse(id); if (r.picked) setStatus(r.status); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    if (isDownloading) return;
+    try { const r = await api.setupBrowse(id); if (r.picked) refreshStatus(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   };
   const BrowseBtn = ({ id }: { id: string }) => (
-    <button onClick={() => browseId(id)} disabled={!!prog} title={t("settings.browseFolder")}
+    <button onClick={() => browseId(id)} disabled={isDownloading} title={t("settings.browseFolder")}
       className="shrink-0 inline-flex items-center px-2 py-1 rounded-lg border border-white/[0.1] bg-white/[0.02] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] disabled:opacity-40 transition-colors">
       <FolderDown size={12} />
     </button>
@@ -159,9 +160,9 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
   const byId = Object.fromEntries(status.components.map((c) => [c.id, c]));
   const get = (id: string) => byId[id] as SetupComponent | undefined;
 
-  // строка одного компонента (кнопка скачать/докачать + прогресс)
+  // строка одного компонента (кнопка скачать/докачать)
   const Row = (c: SetupComponent) => {
-    const active = prog?.id === c.id;
+    const isTarget = isDownloading && (status?.active?.ids.includes(c.id) ?? false);
     return (
       <div key={c.id} className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-white/[0.035] border border-white/[0.08]">
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.installed ? "bg-[var(--color-accent)]" : "bg-[var(--color-muted)]"}`} />
@@ -169,27 +170,19 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
           <div className="text-[12px] font-medium truncate">{c.name}</div>
           <div className="mono text-[10px] text-[var(--color-muted)] truncate">{c.purpose} · {c.vram ? `${fmtBytes(c.vram)} VRAM · ` : ""}{fmtBytes(c.size)} {t("settings.disk")}</div>
         </div>
-        {active ? (
-          <div className="w-24 shrink-0">
-            <div className="h-1.5 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-[var(--color-accent)] transition-[width]" style={{ width: `${prog?.pct ?? 0}%` }} /></div>
-            <div className="mono text-[10px] text-[var(--color-muted)] text-right mt-0.5">{Math.round(prog?.pct ?? 0)}%</div>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <BrowseBtn id={c.id} />
-            <button onClick={() => dl(c.id)} disabled={!!prog}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] border border-white/[0.1] bg-white/[0.02] text-[var(--color-accent-2)] hover:border-[var(--color-accent)] hover:text-white transition-colors disabled:opacity-40">
-              {c.installed ? <RefreshCw size={12} /> : <Download size={12} />}{c.installed ? t("settings.redownload") : t("setup.downloadOne")}
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <BrowseBtn id={c.id} />
+          <button onClick={() => dl(c.id)} disabled={isDownloading}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] border border-white/[0.1] bg-white/[0.02] text-[var(--color-accent-2)] hover:border-[var(--color-accent)] hover:text-white transition-colors disabled:opacity-40">
+            {isTarget ? <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" /> : c.installed ? <RefreshCw size={12} /> : <Download size={12} />}
+            {isTarget ? t("setup.downloading", "Скачиваю…") : c.installed ? t("settings.redownload") : t("setup.downloadOne")}
+          </button>
+        </div>
       </div>
     );
   };
 
-  // модель с выбором кванта: дропдаун вариантов + скачать выбранный. КОНТРОЛИРУЕМЫЙ — выбранное значение
-  // берётся из поднятого picks / активного выбора (active.json), НЕ из внутреннего useState (иначе ре-рендер
-  // секции сбрасывал бы дропдаун на дефолт). При смене — пишем picks и активируем на бэке (если установлен).
+  // модель с выбором кванта: дропдаун вариантов + скачать выбранный.
   const VariantPicker = ({ base, ids }: { base: string; ids: string[] }) => {
     const variants = ids.map(get).filter(Boolean) as SetupComponent[];
     const installed = variants.find((v) => v.installed);
@@ -201,7 +194,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
       if (v.id === "parakeet-ultra") return "ultra (fp32)";
       return (v.name.match(/\b(q\d[\w]*|int8|fp32|bf16|f16|large-v3-turbo|large-v3|tiny|base|small|medium)\b/i)?.[1] ?? v.name);
     };
-    const active = prog?.id === c.id;
+    const isTarget = isDownloading && (status?.active?.ids.includes(c.id) ?? false);
     const title = c.id === "parakeet-ultra" ? "Parakeet Ultra 0.6B" : base;
     return (
       <div className="px-3 py-2 rounded-xl bg-white/[0.035] border border-white/[0.08]">
@@ -221,17 +214,14 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
             className="shrink-0 bg-[#12141a] border border-white/[0.12] rounded-lg px-2.5 py-1 text-[11px] mono text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none">
             {variants.map((v) => <option key={v.id} value={v.id}>{quant(v)}{v.installed ? " ✓" : ""} · {fmtBytes(v.size)}{v.vram ? ` / ${fmtBytes(v.vram)} VRAM` : ""}</option>)}
           </select>
-          {active ? (
-            <span className="mono text-[11px] text-[var(--color-accent)] w-10 text-right">{Math.round(prog?.pct ?? 0)}%</span>
-          ) : (
-            <>
-              <BrowseBtn id={c.id} />
-              <button onClick={() => dl(c.id)} disabled={!!prog} title={c.installed ? t("settings.redownload") : t("setup.downloadOne")}
-                className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] border border-white/[0.1] bg-white/[0.02] text-[var(--color-accent-2)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
-                {c.installed ? <RefreshCw size={12} /> : <Download size={12} />}
-              </button>
-            </>
-          )}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <BrowseBtn id={c.id} />
+            <button onClick={() => dl(c.id)} disabled={isDownloading} title={c.installed ? t("settings.redownload") : t("setup.downloadOne")}
+              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] border border-white/[0.1] bg-white/[0.02] text-[var(--color-accent-2)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
+              {isTarget ? <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" /> : c.installed ? <RefreshCw size={12} /> : <Download size={12} />}
+              {isTarget ? t("setup.downloading", "Скачиваю…") : c.installed ? t("settings.redownload") : t("setup.downloadOne")}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -261,8 +251,8 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
   const needsGemma = llmProviderOf(cap?.selection, "llm") === "local" || llmProviderOf(cap?.selection, "vision") === "local";
 
   const browse = async () => {
-    if (prog) return;
-    try { const r = await api.setupBrowse(); if (r.picked) setStatus(r.status); } catch { /* ignore */ }
+    if (isDownloading) return;
+    try { const r = await api.setupBrowse(); if (r.picked) refreshStatus(); } catch { /* ignore */ }
   };
 
   if (part === "cloud") return (
@@ -290,7 +280,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
   return (
     <div>
       <div className="mb-3">
-        <ModelsFolder status={status} onBrowse={browse} disabled={!!prog} />
+        <ModelsFolder status={status} onBrowse={browse} disabled={isDownloading} />
       </div>
       {err && (
         <div className="mb-3 flex items-start gap-2 px-2.5 py-2 rounded-lg border border-[var(--color-danger,#ef4444)]/40 bg-[color-mix(in_oklab,#ef4444_10%,transparent)] text-[11px]">
@@ -9388,41 +9378,33 @@ const QUANT_GROUP: Record<string, string> = {
 function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => void }) {
   const { t } = useTranslation();
   const setStage = useStore((s) => s.setStage);
-  const [status, setStatus] = useState<SetupStatus | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
-  const [prog, setProg] = useState<{ pct: Record<string, number>; overall: number; msg: string } | null>(null); // pct[componentId] -> % (параллельные бары)
   const [err, setErr] = useState<string | null>(null);
 
-  const refresh = async () => {
-    const s = await api.setupStatus();
-    setStatus(s);
-    // preselect every missing downloadable component (кроме опциональных квантов — их качают вручную)
-    setSel(new Set(s.components.filter((c) => c.delivery === "download" && !c.installed && c.requirement !== "optional").map((c) => c.id)));
-    return s;
+  const onSettled = (job: DownloadJob, s: SetupStatus) => {
+    if (job.status === "completed" && s.ready) {
+      if (!embedded) setStage("empty");
+      playSfx("success");
+    }
   };
-  useEffect(() => { refresh().catch((e) => setErr(String(e))); }, []);
+
+  const { status, refresh, downloading: busy } = useSetupStatus(onSettled);
+
+  useEffect(() => {
+    if (status && sel.size === 0) {
+      setSel(new Set(status.components.filter((c) => c.delivery === "download" && !c.installed && c.requirement !== "optional").map((c) => c.id)));
+    }
+  }, [status]);
 
   async function download(ids: string[]) {
-    if (ids.length === 0 || busy) return;
-    setBusy(true); setErr(null); setProg({ pct: {}, overall: 0, msg: "" });
+    if (ids.length === 0) return;
+    setErr(null);
     try {
-      const { job_id } = await api.setupDownload(ids);
-      await api.watchJob(job_id, (e) => {
-        if (e.type === "progress") {
-          const m: Record<string, number> = {};
-          (e.parts || []).forEach((p) => { m[p.component] = p.pct; });   // бар на каждый компонент
-          setProg({ pct: m, overall: e.pct ?? 0, msg: e.msg || "" });
-          useStore.getState().pushActivity(e.msg || "", "work");         // в общий журнал шапки
-        }
-      });
-      const s = await refresh();
-      if (s.ready) { if (!embedded) setStage("empty"); playSfx("success"); }
+      await api.setupDownload(ids);
+      await refresh();
     } catch (e) {
-      try { const s = await refresh(); if (s.ready) { if (!embedded) setStage("empty"); playSfx("success"); return; } } catch { /* refresh тоже упал */ }
-      setErr(String(e)); useStore.getState().pushActivity(String(e), "error");
-    } finally {
-      setBusy(false); setProg(null);
+      setErr(String(e));
+      useStore.getState().pushActivity(String(e), "error");
     }
   }
 
@@ -9498,7 +9480,6 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
                     {members.map((c) => {
                       const isDefault = c.requirement !== "optional";
                       const checked = sel.has(c.id);
-                      const active = !!prog && prog.pct[c.id] != null;
                       return (
                         <label key={c.id} className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors ${c.installed ? "" : "cursor-pointer hover:bg-white/[0.04]"} ${checked && !c.installed ? "bg-[var(--color-accent)]/10" : ""}`}>
                           {c.installed
@@ -9512,7 +9493,6 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
                                 : <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/[0.06] text-[var(--color-muted)] uppercase tracking-wide shrink-0">{t("setup.alt")}</span>}
                               {c.installed && <span className="text-[10px] text-[var(--color-accent)] shrink-0">{t("setup.installed")}</span>}
                             </div>
-                            {active && <div className="mt-1 h-1 rounded-full bg-white/[0.08] overflow-hidden"><div className="h-full bg-[var(--color-accent)]" style={{ width: `${prog!.pct[c.id] ?? 0}%` }} /></div>}
                           </div>
                           <span className="mono text-[11px] text-[var(--color-muted)] shrink-0">{fmtBytes(c.size)}{c.vram ? ` · ${fmtBytes(c.vram)} VRAM` : ""}</span>
                         </label>
@@ -9524,7 +9504,7 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
               );
             }
             const c = row.c;
-            const active = !!prog && prog.pct[c.id] != null;
+            const isDownloadingThis = busy && (status?.active?.ids.includes(c.id) ?? false);
             const canPick = c.delivery === "download" && !c.installed;
             return (
               <div key={c.id} className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-3.5 py-3">
@@ -9543,11 +9523,6 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
                       <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide ${c.requirement === "required" ? "bg-[var(--color-accent)]/15 text-[var(--color-accent)]" : "bg-white/[0.06] text-[var(--color-muted)]"}`}>{reqLabel(c.requirement)}</span>
                     </div>
                     <div className="text-[12px] text-[var(--color-muted)] truncate">{c.purpose}</div>
-                    {active && (
-                      <div className="mt-1.5 h-1.5 rounded-full bg-white/[0.08] overflow-hidden">
-                        <div className="h-full bg-[var(--color-accent)] transition-[width] duration-200" style={{ width: `${prog!.pct[c.id] ?? 0}%` }} />
-                      </div>
-                    )}
                   </div>
                   <div className="text-right shrink-0">
                     {c.delivery === "external" ? (
@@ -9563,7 +9538,8 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
                         <span className="mono text-[11px] text-[var(--color-muted)]">{fmtBytes(c.size)}</span>
                         <button onClick={() => download([c.id])} disabled={busy}
                           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/[0.04] border border-white/[0.1] text-[11px] text-[var(--color-accent-2)] hover:border-[var(--color-accent)] hover:text-white transition-colors disabled:opacity-40">
-                          <Download size={12} />{t("setup.downloadOne")}</button>
+                          {isDownloadingThis ? <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" /> : <Download size={12} />}
+                          {isDownloadingThis ? t("setup.downloading", "Скачиваю…") : t("setup.downloadOne")}</button>
                       </div>
                     )}
                   </div>
@@ -9573,21 +9549,27 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
           })}
         </div>
 
+        {status?.active && status.active.status !== "completed" && (
+          <div className="mt-4 p-3 rounded-xl border border-white/10 bg-white/[0.02]">
+            <DownloadFooterProgress
+              job={status.active}
+              onPause={() => api.setupCancel().then(() => refresh())}
+              onResume={(ids) => api.setupDownload(ids).then(() => refresh())}
+              onDiscard={() => api.setupDiscard().then(() => refresh())}
+            />
+          </div>
+        )}
+
         <div className="mt-6 flex items-center gap-3">
-          {status && !status.ready && (
+          {status && !status.ready && !busy && (
             <button onClick={() => download([...sel])} disabled={busy || sel.size === 0}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[var(--color-accent)] text-black text-sm font-semibold disabled:opacity-40 hover:brightness-110 transition shadow">
-              {busy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+              <Download size={16} />
               {t("setup.download")} {selectedBytes > 0 && <span className="opacity-80">· {fmtBytes(selectedBytes)}</span>}
             </button>
           )}
-          {busy && (
-            <button onClick={() => api.setupCancel().catch(() => {})}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-white/[0.1] bg-white/[0.02] text-sm text-[var(--color-muted)] hover:text-white transition-colors">
-              <Square size={14} />{t("setup.cancel")}</button>
-          )}
           {!busy && (
-            <button onClick={async () => { try { const r = await api.setupBrowse(); if (r.picked) { setStatus(r.status); setSel(new Set(r.status.components.filter((c) => c.delivery === "download" && !c.installed && c.requirement !== "optional").map((c) => c.id))); } } catch { /* ignore */ } }}
+            <button onClick={async () => { try { const r = await api.setupBrowse(); if (r.picked) { refresh(); } } catch { /* ignore */ } }}
               className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-dashed border-white/[0.12] bg-white/[0.015] text-sm text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-white transition-colors">
               <FolderDown size={14} />{t("settings.browseFolder")}</button>
           )}
@@ -9596,7 +9578,6 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[var(--color-accent)] text-black text-sm font-semibold hover:brightness-110 transition shadow">
               <Check size={16} />{t("setup.continue")}</button>
           )}
-          {busy && prog && <span className="mono text-[11px] text-[var(--color-muted)] truncate">{prog.msg} · {prog.overall.toFixed(0)}%</span>}
         </div>
       </motion.div>
     </div>
