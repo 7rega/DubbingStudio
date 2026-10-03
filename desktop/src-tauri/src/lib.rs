@@ -3,48 +3,16 @@
 //! окно на этот URL. Сервер сам раздаёт SPA (frontend/dist) и API на одном origin — фронт работает
 //! с относительными путями без правок.
 //!
-//! Портативность взята из эталона Higgs-Ultimate (desktop/src-tauri/src/lib.rs):
-//! app_root_dir = каталог рядом с exe; WEBVIEW2_USER_DATA_FOLDER и рантайм-модели держим там же.
+//! Раскладка каталогов, портативность, перенаправление temp и профиля WebView2
+//! определяются модулем `layout`.
+
+mod layout;
 
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use tauri::{WebviewUrl, WebviewWindowBuilder};
-
-/// Каталог рядом с exe (портативная установка). Дев-режим: корень репозитория.
-fn app_root_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-/// Найти корень репо в dev (…/desktop/src-tauri/target/<profile>/exe -> вверх до dub-studio).
-/// В портативной сборке возвращаем каталог рядом с exe (там лежат frontend/, models/, fonts/).
-fn resolve_repo_root() -> PathBuf {
-    // Явное переопределение (dev / тесты).
-    if let Ok(r) = std::env::var("DUB_STUDIO_ROOT") {
-        return PathBuf::from(r);
-    }
-    let exe_dir = app_root_dir();
-    // Портативная раскладка: ресурсы (frontend/models) лежат рядом с оболочкой (dub-server встроен в exe).
-    if exe_dir.join("frontend").is_dir() && exe_dir.join("models").is_dir() {
-        return exe_dir;
-    }
-    // Dev: exe в …/desktop/src-tauri/target/<profile>/. Поднимаемся до каталога с crates/.
-    let mut d = exe_dir.as_path();
-    for _ in 0..6 {
-        if d.join("crates").is_dir() && d.join("frontend").is_dir() {
-            return d.to_path_buf();
-        }
-        match d.parent() {
-            Some(p) => d = p,
-            None => break,
-        }
-    }
-    exe_dir
-}
 
 /// Занять свободный TCP-порт на 127.0.0.1 (пробуем 8765, при занятости — динамический).
 fn pick_free_port() -> std::io::Result<u16> {
@@ -78,7 +46,7 @@ fn setup_server_env(repo_root: &PathBuf) {
             rt.join("onnxruntime-win-x64-gpu_cuda13-1.28.2").join("lib").join("onnxruntime.dll"),
             rt.join("onnxruntime-win-x64-gpu-1.28.2").join("lib").join("onnxruntime.dll"),
             rt.join("onnxruntime-win-x64-1.28.2").join("lib").join("onnxruntime.dll"),
-            app_root_dir().join("onnxruntime.dll"),
+            layout::executable_directory().join("onnxruntime.dll"),
             rt.join("onnxruntime.dll"),
         ] {
             if cand.is_file() {
@@ -89,10 +57,9 @@ fn setup_server_env(repo_root: &PathBuf) {
     }
 }
 
-/// Портативная раскладка (ресурсы рядом с exe)? Тот же маркер, что в resolve_repo_root.
+/// Портативная раскладка (ресурсы рядом с exe)?
 fn is_portable() -> bool {
-    let d = app_root_dir();
-    d.join("frontend").is_dir() && d.join("models").is_dir()
+    layout::is_portable()
 }
 
 /// Проверка обновления на GitHub-релизе и (по согласию юзера) установка. Драйвится из Rust: фронт
@@ -206,15 +173,16 @@ fn fast_shutdown() {
 pub fn run() {
     #[cfg(windows)]
     hide_console_window();
-    // Портатив: состояние WebView2 (localStorage) держим рядом с exe, а не в профиле пользователя.
-    if std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").is_none() {
-        std::env::set_var(
-            "WEBVIEW2_USER_DATA_FOLDER",
-            app_root_dir().join("webview-data"),
-        );
+
+    let placed = match layout::resolve().and_then(|l| layout::apply_environment(&l).map(|_| l)) {
+        Ok(l) => l,
+        Err(e) => layout::fatal(&e),
+    };
+    if placed.redirect_temp {
+        layout::clean_stale_temp_in_background(placed.state_root.join("temp"));
     }
 
-    let repo_root = resolve_repo_root();
+    let repo_root = placed.server_root;
     let port = pick_free_port().unwrap_or(8765);
     let _ = std::fs::create_dir_all(repo_root.join("workspace"));
     let _ = std::fs::write(repo_root.join("workspace").join(".port"), port.to_string());
