@@ -121,6 +121,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "roformer" => vec![("sep", "Q8_0".into())],
         "roformer-q5" => vec![("sep", "Q5_0".into())],
         "roformer-q4" => vec![("sep", "Q4_0".into())],
+        "qwen3-asr" => vec![("asr_engine", "qwen3".into())],
         _ => vec![],
     }
 }
@@ -632,6 +633,12 @@ pub enum AsrChoice {
         device: String,
         xxl_args: Option<String>,
     },
+    Qwen3 {
+        cli: PathBuf,
+        asr_model: PathBuf,
+        aligner_model: PathBuf,
+        backend: String,
+    },
 }
 
 impl AsrChoice {
@@ -648,6 +655,9 @@ impl AsrChoice {
             AsrChoice::Whisper { model, compute, device, xxl_args, .. } => {
                 let args_part = xxl_args.as_deref().unwrap_or("");
                 format!("Whisper {model} (compute={compute}, device={device}, xxl_args={args_part})")
+            }
+            AsrChoice::Qwen3 { backend, .. } => {
+                format!("Qwen3 ASR 1.7B + Aligner 0.6B (backend={backend})")
             }
         }
     }
@@ -745,6 +755,39 @@ pub fn resolve_asr_choice(repo_root: &Path, mroot: &Path, sel: &Value) -> AsrCho
             };
         }
     }
+    if pick(sel, "asr_engine") == Some("qwen3") {
+        let cli = {
+            let p = audiocpp::resolve_audiocpp_cli(repo_root);
+            if p.is_file() {
+                p
+            } else {
+                audiocpp::resolve_audiocpp_cli(mroot)
+            }
+        };
+        let asr_candidates = [
+            mroot.join("qwen3").join("qwen3-asr-1.7b-q8_0.gguf"),
+            mroot.join("models").join("qwen3").join("qwen3-asr-1.7b-q8_0.gguf"),
+            repo_root.join("models").join("qwen3").join("qwen3-asr-1.7b-q8_0.gguf"),
+            repo_root.join("TESTS").join("qwen3-asr-1.7b-q8_0.gguf"),
+        ];
+        let aligner_candidates = [
+            mroot.join("qwen3").join("qwen3-forced-aligner-0.6b-q8_0.gguf"),
+            mroot.join("models").join("qwen3").join("qwen3-forced-aligner-0.6b-q8_0.gguf"),
+            repo_root.join("models").join("qwen3").join("qwen3-forced-aligner-0.6b-q8_0.gguf"),
+            repo_root.join("TESTS").join("qwen3-forced-aligner-0.6b-q8_0.gguf"),
+        ];
+        let asr_model = asr_candidates.into_iter().find(|p| p.is_file());
+        let aligner_model = aligner_candidates.into_iter().find(|p| p.is_file());
+        if let (true, Some(asr), Some(aligner)) = (cli.is_file(), asr_model, aligner_model) {
+            let backend = stage_backend(mroot, "asr_backend").to_string();
+            return AsrChoice::Qwen3 {
+                cli,
+                asr_model: asr,
+                aligner_model: aligner,
+                backend,
+            };
+        }
+    }
     AsrChoice::Parakeet(resolve_asr(mroot, sel))
 }
 
@@ -779,6 +822,9 @@ pub fn build_engine(choice: &AsrChoice) -> Box<dyn dub_asr::AsrEngine> {
         AsrChoice::Parakeet(dir) => Box::new(dub_asr::Asr::new(dir)),
         AsrChoice::Whisper { bin, model_dir, model, compute, device, xxl_args } => {
             Box::new(dub_asr::WhisperAsr::new(bin, model_dir, model, compute, device, xxl_args.clone()))
+        }
+        AsrChoice::Qwen3 { cli, asr_model, aligner_model, backend } => {
+            Box::new(dub_asr::Qwen3Asr::new(cli, asr_model, aligner_model, backend.clone()))
         }
     }
 }

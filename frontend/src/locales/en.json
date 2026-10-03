@@ -573,6 +573,7 @@
     "grpRoformer": "Vocal separation · Mel-Band Roformer",
     "grpWhisperEngine": "Whisper ASR Engine",
     "grpNemotron": "Nemotron-3 Diarization (up to 8 speakers)",
+    "grpQwen3": "Speech recognition · Qwen3 ASR & Aligner (audio.cpp)",
     "pickOneQuant": "pick one",
     "default": "default",
     "alt": "or",
