@@ -21,12 +21,15 @@ pub fn load_selection(mroot: &Path) -> Value {
         .unwrap_or_else(|| Value::Object(Default::default()))
 }
 
-/// Записать/обновить один слот выбора (engine -> variant) атомарно.
+/// Записать/обновить один слот выбора (engine -> variant) атомарно. Пустое значение -> удаление слота.
 pub fn set_selection(mroot: &Path, engine: &str, variant: &str) -> std::io::Result<()> {
     let mut v = load_selection(mroot);
-    v.as_object_mut()
-        .expect("load_selection returns object")
-        .insert(engine.to_string(), Value::String(variant.to_string()));
+    let obj = v.as_object_mut().expect("load_selection returns object");
+    if variant.trim().is_empty() {
+        obj.remove(engine);
+    } else {
+        obj.insert(engine.to_string(), Value::String(variant.to_string()));
+    }
     let _ = std::fs::create_dir_all(mroot);
     let tmp = mroot.join("active.json.tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(&v).unwrap_or_default())?;

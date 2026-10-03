@@ -1,14 +1,14 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, Wand2, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Copy, Star, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones, Bot } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Video, Flame, Headphones, Bot } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character } from "./lib/api";
 import { LANGS, DUB_LANGS, setLang, type Lang } from "./lib/i18n";
 import { useStore } from "./store";
 import PreviewCanvas from "./components/PreviewCanvas";
-import { playSfx, sfxEnabled, setSfxEnabled } from "./lib/sfx";
+import { playSfx } from "./lib/sfx";
 import ResourceMonitor from "./components/ResourceMonitor";
 import { AgentPanel } from "./components/AgentPanel";
 import BridgeHost from "./components/BridgeHost";
@@ -17,6 +17,10 @@ import { HiggsContextMenu, type HiggsContextMenuState, stripHiggsTags } from "./
 import { useVideoLifecycle, type SeekRequest } from "./hooks/useVideoLifecycle";
 import { decimatePeaks, clampTime, computeFallbackPeaks } from "./lib/timelineUtils";
 import { longestMergeChain, mergeKey, releaseBoundaryAudio } from "./lib/regroup";
+import SettingsModal from "./components/settings/SettingsModal";
+import ModelsFolder from "./components/ModelsFolder";
+import type { SettingsTabId } from "./lib/settingsNav";
+import { useHotkeysStore, formatKeyCombo } from "./lib/hotkeys";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -84,14 +88,14 @@ const PARAKEET_LANGS = new Set([
 ]);
 
 const Group = ({ label, children }: { label: string; children: React.ReactNode }) => (
-  <div className="mb-3">
-    <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--color-muted)] mb-1.5">{label}</div>
-    <div className="space-y-1.5">{children}</div>
+  <div className="mb-4">
+    <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--color-muted)] mb-2 font-semibold">{label}</div>
+    <div className="space-y-2">{children}</div>
   </div>
 );
 
 // Модели и компоненты в настройках: список из /setup/status с кнопками скачки/докачки и прогрессом.
-function ModelsSection() {
+function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [prog, setProg] = useState<{ id: string; pct: number } | null>(null);
@@ -149,7 +153,7 @@ function ModelsSection() {
   };
   const BrowseBtn = ({ id }: { id: string }) => (
     <button onClick={() => browseId(id)} disabled={!!prog} title={t("settings.browseFolder")}
-      className="shrink-0 inline-flex items-center px-1.5 py-1 rounded-md border border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] disabled:opacity-40">
+      className="shrink-0 inline-flex items-center px-2 py-1 rounded-lg border border-white/[0.1] bg-white/[0.02] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] disabled:opacity-40 transition-colors">
       <FolderDown size={12} />
     </button>
   );
@@ -161,7 +165,7 @@ function ModelsSection() {
   const Row = (c: SetupComponent) => {
     const active = prog?.id === c.id;
     return (
-      <div key={c.id} className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+      <div key={c.id} className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-white/[0.035] border border-white/[0.08]">
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.installed ? "bg-[var(--color-accent)]" : "bg-[var(--color-muted)]"}`} />
         <div className="min-w-0 flex-1">
           <div className="text-[12px] font-medium truncate">{c.name}</div>
@@ -176,7 +180,7 @@ function ModelsSection() {
           <div className="flex items-center gap-1.5 shrink-0">
             <BrowseBtn id={c.id} />
             <button onClick={() => dl(c.id)} disabled={!!prog}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] border border-[var(--color-border)] text-[var(--color-accent-2)] hover:border-[var(--color-accent)] disabled:opacity-40">
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] border border-white/[0.1] bg-white/[0.02] text-[var(--color-accent-2)] hover:border-[var(--color-accent)] hover:text-white transition-colors disabled:opacity-40">
               {c.installed ? <RefreshCw size={12} /> : <Download size={12} />}{c.installed ? t("settings.redownload") : t("setup.downloadOne")}
             </button>
           </div>
@@ -202,7 +206,7 @@ function ModelsSection() {
     const active = prog?.id === c.id;
     const title = c.id === "parakeet-ultra" ? "Parakeet Ultra 0.6B" : base;
     return (
-      <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+      <div className="px-3 py-2 rounded-xl bg-white/[0.035] border border-white/[0.08]">
         <div className="flex items-center gap-2.5">
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${variants.some((v) => v.installed) ? "bg-[var(--color-accent)]" : "bg-[var(--color-muted)]"}`} />
           <div className="min-w-0 flex-1">
@@ -216,7 +220,7 @@ function ModelsSection() {
               // установлен -> активируем сразу; не установлен -> активируется автоматически после скачки
               if (sv?.installed) api.selectModel(id).then(loadCap).catch((er) => setErr(er instanceof Error ? er.message : String(er)));
             }}
-            className="shrink-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
+            className="shrink-0 bg-[#12141a] border border-white/[0.12] rounded-lg px-2.5 py-1 text-[11px] mono text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none">
             {variants.map((v) => <option key={v.id} value={v.id}>{quant(v)}{v.installed ? " ✓" : ""} · {fmtBytes(v.size)}{v.vram ? ` / ${fmtBytes(v.vram)} VRAM` : ""}</option>)}
           </select>
           {active ? (
@@ -225,7 +229,7 @@ function ModelsSection() {
             <>
               <BrowseBtn id={c.id} />
               <button onClick={() => dl(c.id)} disabled={!!prog} title={c.installed ? t("settings.redownload") : t("setup.downloadOne")}
-                className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] border border-[var(--color-border)] text-[var(--color-accent-2)] hover:border-[var(--color-accent)] disabled:opacity-40">
+                className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[12px] border border-white/[0.1] bg-white/[0.02] text-[var(--color-accent-2)] hover:border-[var(--color-accent)] disabled:opacity-40 transition-colors">
                 {c.installed ? <RefreshCw size={12} /> : <Download size={12} />}
               </button>
             </>
@@ -238,12 +242,12 @@ function ModelsSection() {
   const rowOf = (id: string) => { const c = get(id); return c ? <Row key={id} {...c} /> : null; };
 
   // Тумблер движка «локально | OpenRouter» — тот же вид, что переключатель Parakeet|Whisper в группе ASR.
-  const orRowCls = "px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]";
+  const orRowCls = "px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]";
   const EngineTabs = ({ cloud, onLocal, onCloud, localLabel }: { cloud: boolean; onLocal: () => void; onCloud: () => void; localLabel: string }) => (
-    <div className="flex gap-1 mb-1.5">
-      <button onClick={onLocal} className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${!cloud ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>{localLabel}</button>
+    <div className="flex gap-1.5 mb-2">
+      <button onClick={onLocal} className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] font-medium border transition-colors ${!cloud ? "border-[var(--color-accent)] bg-[var(--color-accent)]/12 text-white" : "border-white/[0.08] bg-white/[0.02] text-[var(--color-muted)] hover:text-white hover:bg-white/[0.04]"}`}>{localLabel}</button>
       <button onClick={onCloud} disabled={!hasOrKey} title={hasOrKey ? "" : "Введите ключ OpenRouter ниже (Облачные настройки)"}
-        className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${cloud ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"} disabled:opacity-40`}>OpenRouter</button>
+        className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] font-medium border transition-colors ${cloud ? "border-[var(--color-accent)] bg-[var(--color-accent)]/12 text-white" : "border-white/[0.08] bg-white/[0.02] text-[var(--color-muted)] hover:text-white hover:bg-white/[0.04]"} disabled:opacity-40`}>OpenRouter</button>
     </div>
   );
   // На чём считать стадию (устройство): Авто / GPU (CUDA) / CPU — свои табы в каждом разделе, по
@@ -251,15 +255,15 @@ function ModelsSection() {
   const BackendTabs = ({ k }: { k: string }) => {
     const cur = selv(k) || "auto";
     return (
-      <div className="flex gap-1 mb-1.5">
+      <div className="flex gap-1.5 mb-2">
         {([["auto", "Авто"], ["gpu", "GPU (CUDA)"], ["cpu", "CPU"]] as const).map(([id, label]) => (
           <button key={id} onClick={() => setSel(k, id)}
-            className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${cur === id ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>{label}</button>
+            className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] font-medium border transition-colors ${cur === id ? "border-[var(--color-accent)] bg-[var(--color-accent)]/12 text-white" : "border-white/[0.08] bg-white/[0.02] text-[var(--color-muted)] hover:text-white hover:bg-white/[0.04]"}`}>{label}</button>
         ))}
       </div>
     );
   };
-  const orSelectCls = "w-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none";
+  const orSelectCls = "w-full bg-[#12141a] border border-white/[0.12] rounded-lg px-2.5 py-1.5 text-[11px] mono text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none";
   const OrModelSelect = ({ kind, k, empty }: { kind: "llm" | "vision" | "tts" | "asr"; k: string; empty: string }) => (
     <select value={selv(k)} onChange={(e) => setSel(k, e.target.value)} className={orSelectCls}>
       <option value="">{empty}</option>
@@ -272,12 +276,137 @@ function ModelsSection() {
     try { const r = await api.setupBrowse(); if (r.picked) setStatus(r.status); } catch { /* ignore */ }
   };
 
+  if (part === "cloud") {
+    return (
+      <div className="space-y-4">
+        {err && (
+          <div className="flex items-start gap-2 px-2.5 py-2 rounded-lg border border-[var(--color-danger,#ef4444)]/40 bg-[color-mix(in_oklab,#ef4444_10%,transparent)] text-[11px]">
+            <span className="mono text-[var(--color-danger,#ef4444)] break-words flex-1">{err}</span>
+            <button onClick={() => setErr(null)} className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-text)]"><X size={12} /></button>
+          </div>
+        )}
+        <div className="space-y-2">
+          <OpenRouterKey onSaved={loadCap} />
+          {hasOrKey && (
+            <div className={orRowCls}>
+              <div className="flex items-center gap-2.5">
+                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-accent)]" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-medium truncate">Параллельные потоки генерации</div>
+                  <div className="mono text-[10px] text-[var(--color-muted)] truncate">чанки в N коннектов — ускоряет облачные ASR/TTS/перевод (1 = без многопоточности)</div>
+                </div>
+                <select value={selv("or_concurrency") || "6"} onChange={(e) => setSel("or_concurrency", e.target.value)}
+                  className="shrink-0 bg-[#12141a] border border-white/[0.12] rounded-lg px-2.5 py-1 text-[11px] mono text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none">
+                  {["1", "2", "4", "6", "8", "12", "16"].map((o) => <option key={o} value={o}>{o} {o === "6" ? "(рекомендуется)" : "потоков"}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {hasOrKey ? (
+          <div className="space-y-3 pt-2 border-t border-white/[0.08]">
+            <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--color-muted)] mb-1.5 font-semibold">Каталоги облачных моделей OpenRouter</div>
+            <div className={`${orRowCls} space-y-2`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[12px] font-medium text-[var(--color-text)]">Модель перевода (LLM)</div>
+                  <div className="mono text-[10px] text-[var(--color-muted)]">Контекстный перевод субтитров и реплик</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSel("or_llm_on", selv("or_llm_on") === "1" ? "0" : "1")}
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selv("or_llm_on") === "1" ? "bg-[var(--color-accent)]" : "bg-white/[0.08] border border-white/[0.12]"}`}
+                  title="Включить облачный перевод через OpenRouter"
+                >
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${selv("or_llm_on") === "1" ? "left-[18px]" : "left-0.5"}`} />
+                </button>
+              </div>
+              <OrModelSelect kind="llm" k="or_llm" empty="— выбрать модель перевода —" />
+              <div className="flex items-center gap-2 pt-1 border-t border-white/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setSel("or_vision_on", selv("or_vision_on") === "1" ? "0" : "1")}
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selv("or_vision_on") === "1" ? "bg-[var(--color-accent)]" : "bg-white/[0.08] border border-white/[0.12]"}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${selv("or_vision_on") === "1" ? "left-[18px]" : "left-0.5"}`} />
+                </button>
+                <div className="min-w-0 flex-1">
+                  <span className="text-[12px] font-medium text-[var(--color-text)]">Vision-анализ кадров через облако</span>
+                  <span className="block mono text-[10px] text-[var(--color-muted)]">анализ визуального контекста сцены для точности перевода</span>
+                </div>
+              </div>
+              {selv("or_vision_on") === "1" && <OrModelSelect kind="vision" k="or_vision" empty="как модель перевода" />}
+            </div>
+
+            <div className={`${orRowCls} space-y-2`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[12px] font-medium text-[var(--color-text)]">Модель озвучки (TTS)</div>
+                  <div className="mono text-[10px] text-[var(--color-muted)]">Облачный синтез речи</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSel("or_tts_on", selv("or_tts_on") === "1" ? "0" : "1")}
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selv("or_tts_on") === "1" ? "bg-[var(--color-accent)]" : "bg-white/[0.08] border border-white/[0.12]"}`}
+                  title="Включить облачную озвучку через OpenRouter"
+                >
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${selv("or_tts_on") === "1" ? "left-[18px]" : "left-0.5"}`} />
+                </button>
+              </div>
+              <OrModelSelect kind="tts" k="or_tts_model" empty="— выбрать TTS-модель —" />
+              {ttsRu === false && <div className="text-[11px] text-[var(--color-warn)]">⚠ Модель не поддерживает русский — выберите другую для русского дубляжа.</div>}
+              <div className="flex items-center gap-2 pt-1 border-t border-white/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => setSel("or_tts_autocast", (selv("or_tts_autocast") || "1") !== "0" ? "0" : "1")}
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${(selv("or_tts_autocast") || "1") !== "0" ? "bg-[var(--color-accent)]" : "bg-white/[0.08] border border-white/[0.12]"}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${(selv("or_tts_autocast") || "1") !== "0" ? "left-[18px]" : "left-0.5"}`} />
+                </button>
+                <span className="text-[12px] font-medium text-[var(--color-text)]">Автокастинг голосов</span>
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-accent)]/20 text-[var(--color-accent)] uppercase tracking-wider">бета</span>
+              </div>
+              {(selv("or_tts_autocast") || "1") !== "0" ? (
+                <div className="text-[11px] text-[var(--color-muted)]">Голос по полу спикера автоматически, разным спикерам — разные.</div>
+              ) : (
+                <select value={selv("or_tts_voice")} onChange={(e) => setSel("or_tts_voice", e.target.value)} className={orSelectCls}>
+                  <option value="">— один голос на всех —</option>
+                  {orVoices.map((v) => <option key={v.name} value={v.name}>{v.gender === "male" ? "♂" : v.gender === "female" ? "♀" : "•"} {v.name}{v.age === "teen" || v.age === "child" ? ` · ${v.age}` : ""}</option>)}
+                </select>
+              )}
+            </div>
+
+            <div className={`${orRowCls} space-y-2`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[12px] font-medium text-[var(--color-text)]">Модель распознавания (ASR)</div>
+                  <div className="mono text-[10px] text-[var(--color-muted)]">Транскрипция аудио через облако</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSel("or_asr_on", selv("or_asr_on") === "1" ? "0" : "1")}
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selv("or_asr_on") === "1" ? "bg-[var(--color-accent)]" : "bg-white/[0.08] border border-white/[0.12]"}`}
+                  title="Включить облачный ASR через OpenRouter"
+                >
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${selv("or_asr_on") === "1" ? "left-[18px]" : "left-0.5"}`} />
+                </button>
+              </div>
+              <OrModelSelect kind="asr" k="or_asr" empty="— выбрать STT-модель —" />
+            </div>
+          </div>
+        ) : (
+          <div className="p-4 rounded-xl bg-white/[0.035] border border-white/[0.08] text-center text-xs text-[var(--color-muted)]">
+            Введите и проверьте ключ OpenRouter выше, чтобы разблокировать выбор облачных моделей.
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div>
-      <button onClick={browse} disabled={!!prog}
-        className="mb-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors disabled:opacity-40">
-        <FolderDown size={14} />{t("settings.browseFolder")}
-      </button>
+      <div className="mb-3">
+        <ModelsFolder status={status} onBrowse={browse} disabled={!!prog} />
+      </div>
       {err && (
         <div className="mb-3 flex items-start gap-2 px-2.5 py-2 rounded-lg border border-[var(--color-danger,#ef4444)]/40 bg-[color-mix(in_oklab,#ef4444_10%,transparent)] text-[11px]">
           <span className="mono text-[var(--color-danger,#ef4444)] break-words flex-1">{err}</span>
@@ -308,7 +437,7 @@ function ModelsSection() {
                     setSel("tts_engine", e.id);
                   }
                 }}
-                className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${active ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"} disabled:opacity-40`}
+                className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] font-medium border transition-colors ${active ? "border-[var(--color-accent)] bg-[var(--color-accent)]/12 text-white" : "border-white/[0.08] bg-white/[0.02] text-[var(--color-muted)] hover:text-white hover:bg-white/[0.04]"} disabled:opacity-40`}
               >
                 {e.label}
               </button>
@@ -321,10 +450,10 @@ function ModelsSection() {
             {ttsRu === false && <div className="text-[11px] text-[var(--color-warn)]">⚠ Модель не поддерживает русский — выберите другую для русского дубляжа.</div>}
             <div className="flex items-center gap-2">
               <button onClick={() => setSel("or_tts_autocast", (selv("or_tts_autocast") || "1") !== "0" ? "0" : "1")}
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${(selv("or_tts_autocast") || "1") !== "0" ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface)] border border-[var(--color-border)]"}`}>
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${(selv("or_tts_autocast") || "1") !== "0" ? "bg-[var(--color-accent)]" : "bg-white/[0.08] border border-white/[0.12]"}`}>
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${(selv("or_tts_autocast") || "1") !== "0" ? "left-[18px]" : "left-0.5"}`} />
               </button>
-              <span className="text-[12px]">Автокастинг голосов</span>
+              <span className="text-[12px] font-medium text-[var(--color-text)]">Автокастинг голосов</span>
               <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-accent)]/20 text-[var(--color-accent)] uppercase tracking-wider">бета</span>
             </div>
             {(selv("or_tts_autocast") || "1") !== "0" ? (
@@ -350,11 +479,11 @@ function ModelsSection() {
               const curExec = isLegacyQuant ? "dll" : (cap?.selection?.higgs_execution ?? "server");
               return (
                 <>
-                  <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+                  <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]">
                     <div className="flex items-center gap-2.5">
                       <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-muted)]" />
                       <div className="min-w-0 flex-1">
-                        <div className="text-[12px] font-medium truncate">{t("settings.higgsExecution")}</div>
+                        <div className="text-[12px] font-medium truncate text-[var(--color-text)]">{t("settings.higgsExecution")}</div>
                         <div className="mono text-[10px] text-[var(--color-muted)] truncate">
                           {isLegacyQuant ? t("settings.higgsExecutionLegacyHint") : t("settings.higgsExecutionHint")}
                         </div>
@@ -367,7 +496,7 @@ function ModelsSection() {
                             .then(loadCap)
                             .catch((er) => setErr(er instanceof Error ? er.message : String(er)));
                         }}
-                        className="shrink-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50">
+                        className="shrink-0 bg-[#12141a] border border-white/[0.12] text-[var(--color-text)] rounded-lg px-2.5 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50">
                         {isLegacyQuant ? (
                           <option value="dll">{t("settings.higgsBackendDll")}</option>
                         ) : (
@@ -389,7 +518,7 @@ function ModelsSection() {
       </Group>
       <Group label={t("settings.roleAsr")}>
         {/* Движок ASR: Parakeet-TDT (GPU, дефолт) / Whisper (локально, CPU) / OpenRouter (облако). */}
-        <div className="flex gap-1 mb-1.5">
+        <div className="flex gap-1.5 mb-2">
           {[{ id: "parakeet", label: "Parakeet-TDT", cloud: false }, { id: "whisper", label: "Whisper", cloud: false }, { id: "openrouter", label: "OpenRouter", cloud: true }].map((e) => {
             const asrCloud = selv("or_asr_on") === "1";
             const active = e.cloud ? asrCloud : (!asrCloud && asrEngine === e.id);
@@ -397,7 +526,7 @@ function ModelsSection() {
             return (
               <button key={e.id} disabled={dis} title={dis ? "Введите ключ OpenRouter ниже (Облачные настройки)" : ""}
                 onClick={() => { if (e.cloud) { setSel("or_asr_on", "1"); } else { setSel("or_asr_on", "0"); setAsrEngine(e.id); api.setSelection("asr_engine", e.id).catch(() => {}); } }}
-                className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${active ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"} disabled:opacity-40`}>
+                className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] font-medium border transition-colors ${active ? "border-[var(--color-accent)] bg-[var(--color-accent)]/12 text-white" : "border-white/[0.08] bg-white/[0.02] text-[var(--color-muted)] hover:text-white hover:bg-white/[0.04]"} disabled:opacity-40`}>
                 {e.label}
               </button>
             );
@@ -414,15 +543,15 @@ function ModelsSection() {
           <VariantPicker base="Parakeet-TDT 0.6B v3" ids={["parakeet", "parakeet-fp32", "parakeet-ultra"]} />
         ) : (
           <>
-            <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+            <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]">
               <div className="flex items-center gap-2.5">
                 <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-accent)]" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-medium truncate">{t("settings.whisperExecutable")}</div>
+                  <div className="text-[12px] font-medium truncate text-[var(--color-text)]">{t("settings.whisperExecutable")}</div>
                   <div className="mono text-[10px] text-[var(--color-muted)] truncate">{t("settings.whisperExecutableHint")}</div>
                 </div>
                 <select value={whisperExecutable} onChange={(e) => { setWhisperExecutable(e.target.value); api.setSelection("whisper_executable", e.target.value).then(refresh).catch(() => {}); }}
-                  className="shrink-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
+                  className="shrink-0 bg-[#12141a] border border-white/[0.12] text-[var(--color-text)] rounded-lg px-2.5 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
                   <option value="standard">{t("settings.whisperExecStandard")}</option>
                   <option value="xxl">{t("settings.whisperExecXxl")}</option>
                 </select>
@@ -431,15 +560,15 @@ function ModelsSection() {
             {whisperExecutable === "xxl" ? rowOf("whisper-xxl") : rowOf("whisper-engine")}
             <VariantPicker base={t("settings.whisperModel")} ids={["whisper-tiny", "whisper-base", "whisper-small", "whisper-medium", "whisper-large-v3", "whisper-large-v3-turbo"]} />
             {whisperExecutable === "xxl" && (
-              <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] space-y-2">
+              <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08] space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="min-w-0 flex-1">
-                    <div className="text-[12px] font-medium">Дополнительные флаги WhisperXXL</div>
+                    <div className="text-[12px] font-medium text-[var(--color-text)]">Дополнительные флаги WhisperXXL</div>
                     <div className="mono text-[10px] text-[var(--color-muted)]">настройки CLI аргументов для основного ASR</div>
                   </div>
                 </div>
                 <textarea rows={3} value={xxlArgs} onChange={(e) => setXxlArgs(e.target.value)} onBlur={() => setSel("whisper_xxl_args", xxlArgs)} placeholder="Например:&#10;--standard&#10;--batched"
-                  className="w-full px-2 py-1 rounded-md bg-[var(--color-surface)] border border-[var(--color-border)] text-[12px] mono focus:border-[var(--color-accent)] outline-none resize-none" />
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-[#12141a] border border-white/[0.12] text-[12px] mono text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none resize-none" />
                 <div className="flex flex-wrap gap-1">
                   {[
                     { label: "Дефолт", val: "" },
@@ -448,7 +577,7 @@ function ModelsSection() {
                     { label: "Анти-галлюцинации", val: "--vad_filter True --vad_method silero_v5_fw --condition_on_previous_text False --beam_size 1 --temperature 0 --hallucination_silence_threshold 2 --batched" }
                   ].map((p) => (
                     <button key={p.label} type="button" onClick={() => { setXxlArgs(p.val); setSel("whisper_xxl_args", p.val); }}
-                      className="px-1.5 py-0.5 rounded text-[10px] bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors">
+                      className="px-2 py-1 rounded-md text-[10px] bg-white/[0.04] border border-white/[0.08] text-[var(--color-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors">
                       {p.label}
                     </button>
                   ))}
@@ -456,15 +585,15 @@ function ModelsSection() {
               </div>
             )}
             {/* Квант Whisper (compute_type) — точность/скорость вычислений, без отдельной скачки. */}
-            <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+            <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]">
               <div className="flex items-center gap-2.5">
                 <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-accent)]" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-medium truncate">{t("settings.whisperCompute")}</div>
+                  <div className="text-[12px] font-medium truncate text-[var(--color-text)]">{t("settings.whisperCompute")}</div>
                   <div className="mono text-[10px] text-[var(--color-muted)] truncate">{t("settings.whisperComputeHint")}</div>
                 </div>
                 <select value={whisperCompute} onChange={(e) => { setWhisperCompute(e.target.value); api.setSelection("whisper_compute", e.target.value).catch(() => {}); }}
-                  className="shrink-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
+                  className="shrink-0 bg-[#12141a] border border-white/[0.12] text-[var(--color-text)] rounded-lg px-2.5 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
                   {(cap?.whisper_computes ?? ["int8", "int8_float16", "float16", "int8_float32", "float32"]).map((q) => <option key={q} value={q}>{q}</option>)}
                 </select>
               </div>
@@ -479,10 +608,10 @@ function ModelsSection() {
             <OrModelSelect kind="llm" k="or_llm" empty="— выбрать модель перевода —" />
             <div className="flex items-center gap-2 pt-0.5">
               <button onClick={() => setSel("or_vision_on", selv("or_vision_on") === "1" ? "0" : "1")}
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selv("or_vision_on") === "1" ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface)] border border-[var(--color-border)]"}`}>
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selv("or_vision_on") === "1" ? "bg-[var(--color-accent)]" : "bg-white/[0.08] border border-white/[0.12]"}`}>
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${selv("or_vision_on") === "1" ? "left-[18px]" : "left-0.5"}`} />
               </button>
-              <span className="text-[12px]">Vision-анализ кадров через облако</span>
+              <span className="text-[12px] font-medium text-[var(--color-text)]">Vision-анализ кадров через облако</span>
             </div>
             {selv("or_vision_on") === "1" && <OrModelSelect kind="vision" k="or_vision" empty="как модель перевода" />}
           </div>
@@ -490,7 +619,7 @@ function ModelsSection() {
           <>
             <VariantPicker base="Gemma-4 12B QAT + vision" ids={["gemma", "gemma-q5_0", "gemma-q6_k", "gemma-q8_0"]} />
             {rowOf("llama")}
-            <div className="mt-2 pt-2 border-t border-[var(--color-border)] flex items-center justify-between gap-3" title={t("settings.visionHint")}>
+            <div className="mt-2 pt-2 border-t border-white/[0.08] flex items-center justify-between gap-3" title={t("settings.visionHint")}>
               <div className="min-w-0 flex-1">
                 <span className="text-[12px] font-medium text-[var(--color-text)] inline-flex items-center gap-2">
                   <Video size={13} className="text-[var(--color-accent-2)]" />
@@ -499,7 +628,7 @@ function ModelsSection() {
                 <span className="block text-[10px] text-[var(--color-muted)]">{t("settings.visionDesc")}</span>
               </div>
               <button onClick={() => { const v = selv("vision_on") === "0"; setSel("vision_on", v ? "1" : "0"); useStore.getState().setVisionOn(v); }} title={t("settings.visionHint")}
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selv("vision_on") !== "0" ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selv("vision_on") !== "0" ? "bg-[var(--color-accent)]" : "bg-white/[0.08] border border-white/[0.12]"}`}>
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${selv("vision_on") !== "0" ? "left-[18px]" : "left-0.5"}`} />
               </button>
             </div>
@@ -511,17 +640,17 @@ function ModelsSection() {
         <BackendTabs k="sep_backend" />
         <VariantPicker base="Mel-Band Roformer voc_fv6" ids={["roformer", "roformer-q5", "roformer-q4"]} />
         {selv("sep_backend") === "cpu" ? rowOf("bsroformer-engine-cpu") : rowOf("bsroformer-engine")}
-        <div className="mt-2 pt-2 border-t border-[var(--color-border)]">
+        <div className="mt-2 pt-2 border-t border-white/[0.08]">
           <div className="mb-1.5">
-            <div className="text-[12px] font-medium">{t("settings.sepMode")}</div>
+            <div className="text-[12px] font-medium text-[var(--color-text)]">{t("settings.sepMode")}</div>
             <div className="text-[10px] text-[var(--color-muted)]">{t("settings.sepModeHint")}</div>
           </div>
-          <div className="flex gap-1">
+          <div className="flex gap-1.5">
             {([["spectral_mask", t("settings.sepModeSpectral")], ["legacy", t("settings.sepModeLegacy")]] as const).map(([id, label]) => {
               const cur = selv("sep_mode") || "spectral_mask";
               return (
                 <button key={id} onClick={() => setSel("sep_mode", id)}
-                  className={`flex-1 px-2 py-1.5 rounded-md text-[11px] font-medium border transition-colors ${cur === id ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"}`}>{label}</button>
+                  className={`flex-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-colors ${cur === id ? "border-[var(--color-accent)] bg-[var(--color-accent)]/12 text-white" : "border-white/[0.08] bg-white/[0.02] text-[var(--color-muted)] hover:text-white hover:bg-white/[0.04]"}`}>{label}</button>
               );
             })}
           </div>
@@ -532,12 +661,12 @@ function ModelsSection() {
         <BackendTabs k="diar_backend" />
 
         {/* 2. Выбор активной модели диаризации */}
-        <div className="mt-2 pt-2 border-t border-[var(--color-border)]">
+        <div className="mt-2 pt-2 border-t border-white/[0.08]">
           <div className="mb-1.5">
-            <div className="text-[12px] font-medium">{t("settings.diarModelTitle")}</div>
+            <div className="text-[12px] font-medium text-[var(--color-text)]">{t("settings.diarModelTitle")}</div>
             <div className="text-[10px] text-[var(--color-muted)]">{t("settings.diarModelHint")}</div>
           </div>
-          <div className="flex gap-1">
+          <div className="flex gap-1.5">
             {([
               ["sortformer", "Sortformer v2 (4spk ONNX)"],
               ["nemotron-bf16", "Nemotron-3 BF16 (8spk)"],
@@ -548,10 +677,10 @@ function ModelsSection() {
                 <button
                   key={id}
                   onClick={() => setSel("diar_model", id)}
-                  className={`flex-1 px-2 py-1.5 rounded-md text-[11px] font-medium border transition-colors ${
+                  className={`flex-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-colors ${
                     cur === id
-                      ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]"
-                      : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/12 text-white"
+                      : "border-white/[0.08] bg-white/[0.02] text-[var(--color-muted)] hover:text-white hover:bg-white/[0.04]"
                   }`}
                 >
                   {label}
@@ -577,47 +706,21 @@ function ModelsSection() {
         ].map((row) => {
           const cur = cap?.selection?.[row.key] ?? row.def;
           return (
-            <div key={row.key} className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+            <div key={row.key} className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]">
               <div className="flex items-center gap-2.5">
                 <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-muted)]" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-medium truncate">{row.label}</div>
+                  <div className="text-[12px] font-medium truncate text-[var(--color-text)]">{row.label}</div>
                   <div className="mono text-[10px] text-[var(--color-muted)] truncate">{row.hint}</div>
                 </div>
                 <select value={cur} onChange={(e) => { api.setSelection(row.key, e.target.value).then(loadCap).catch((er) => setErr(er instanceof Error ? er.message : String(er))); }}
-                  className="shrink-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
+                  className="shrink-0 bg-[#12141a] border border-white/[0.12] text-[var(--color-text)] rounded-lg px-2.5 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
                   {row.opts.map((o) => <option key={o} value={o}>{row.fmt(o)}</option>)}
                 </select>
               </div>
             </div>
           );
         })}
-        {(() => {
-          const smartRefTrimOn = (cap?.selection?.smart_ref_trim ?? "1") !== "0";
-          return (
-            <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
-              <div className="flex items-center justify-between gap-2.5">
-                <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                  <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-muted)]" />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[12px] font-medium truncate">{t("settings.smartRefTrim")}</div>
-                    <div className="mono text-[10px] text-[var(--color-muted)] truncate">{t("settings.smartRefTrimHint")}</div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextVal = smartRefTrimOn ? "0" : "1";
-                    api.setSelection("smart_ref_trim", nextVal).then(loadCap).catch((er) => setErr(er instanceof Error ? er.message : String(er)));
-                  }}
-                  title={t("settings.smartRefTrim")}
-                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${smartRefTrimOn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface)] border border-[var(--color-border)]"}`}>
-                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${smartRefTrimOn ? "left-[18px]" : "left-0.5"}`} />
-                </button>
-              </div>
-            </div>
-          );
-        })()}
         {[
           {
             key: "higgs_max_tokens",
@@ -634,15 +737,15 @@ function ModelsSection() {
         ].map((row) => {
           const cur = cap?.selection?.[row.key] ?? row.def;
           return (
-            <div key={row.key} className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+            <div key={row.key} className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]">
               <div className="flex items-center gap-2.5">
                 <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-muted)]" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-medium truncate">{row.label}</div>
+                  <div className="text-[12px] font-medium truncate text-[var(--color-text)]">{row.label}</div>
                   <div className="mono text-[10px] text-[var(--color-muted)] truncate">{row.hint}</div>
                 </div>
                 <select value={cur} onChange={(e) => { api.setSelection(row.key, e.target.value).then(loadCap).catch((er) => setErr(er instanceof Error ? er.message : String(er))); }}
-                  className="shrink-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
+                  className="shrink-0 bg-[#12141a] border border-white/[0.12] text-[var(--color-text)] rounded-lg px-2.5 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
                   {row.opts.map((o) => <option key={o} value={o}>{row.fmt(o)}</option>)}
                 </select>
               </div>
@@ -650,36 +753,6 @@ function ModelsSection() {
           );
         })}
       </Group>
-      {/* Облачные настройки OpenRouter — В КОНЦЕ: фишка приложения локальная/портативная, облако вторично
-          (опция для слабых ПК/скорости). Ключ + число параллельных потоков; сам выбор облачного движка —
-          в группах выше рядом с локальным (Higgs|OpenRouter и т.д.). */}
-      <div className="mt-2 pt-3 border-t border-[var(--color-border)]">
-        <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--color-muted)] mb-1.5">Облачные настройки · OpenRouter</div>
-        <div className="space-y-2">
-          <OpenRouterKey onSaved={loadCap} />
-          {hasOrKey && (
-            <div className={orRowCls}>
-              <div className="flex items-center gap-2.5">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-muted)]" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-medium truncate">Параллельные потоки</div>
-                  <div className="mono text-[10px] text-[var(--color-muted)] truncate">чанки в N коннектов — быстрее облачные ASR/TTS/перевод (1 = без многопоточности)</div>
-                </div>
-                <select value={selv("or_concurrency") || "6"} onChange={(e) => setSel("or_concurrency", e.target.value)}
-                  className="shrink-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
-                  {["1", "2", "4", "6", "8", "12", "16"].map((o) => <option key={o} value={o}>{o}</option>)}
-                </select>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-      {/* Прокси — В САМОМ КОНЦЕ: нужен только тем, у кого закрыт прямой доступ к HF/OpenRouter. Весь исходящий
-          трафик приложения (закачка моделей + облако) через свой прокси. */}
-      <div className="mt-2 pt-3 border-t border-[var(--color-border)]">
-        <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--color-muted)] mb-1.5">Прокси</div>
-        <ProxySection />
-      </div>
     </div>
   );
 }
@@ -720,21 +793,21 @@ function ProxySection() {
     setTesting(false);
   };
   return (
-    <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] space-y-2">
+    <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08] space-y-2.5">
       <label className="flex items-center gap-2.5 cursor-pointer select-none">
         <input type="checkbox" checked={on} onChange={(e) => save(e.target.checked)}
           className="accent-[var(--color-accent)] w-3.5 h-3.5 shrink-0" />
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${on ? "bg-[var(--color-accent)]" : "bg-[var(--color-muted)]"}`} />
         <span className="min-w-0 flex-1">
-          <span className="block text-[12px] font-medium">Проксировать весь трафик</span>
+          <span className="block text-[12px] font-medium text-[var(--color-text)]">Проксировать весь трафик</span>
           <span className="block mono text-[10px] text-[var(--color-muted)]">включите, если прямая закачка моделей или OpenRouter не работает</span>
         </span>
       </label>
       <div className="flex gap-2">
         <input type={show ? "text" : "password"} value={url} onChange={(e) => setUrl(e.target.value)} onBlur={() => { if (on && url.trim()) save(true); }} placeholder="http://user:pass@host:8080  ·  socks5://host:1080"
-          className="flex-1 px-2 py-1 rounded-md bg-[var(--color-surface)] border border-[var(--color-border)] text-[12px] mono focus:border-[var(--color-accent)] outline-none" />
-        <button onClick={() => setShow((s) => !s)} className="px-2 rounded-md border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]">{show ? <EyeOff size={13} /> : <Eye size={13} />}</button>
-        <button onClick={test} disabled={testing || !url.trim()} className="px-3 py-1 rounded-md bg-[var(--color-surface)] border border-[var(--color-border)] text-[12px] hover:border-[var(--color-accent)] disabled:opacity-40">{testing ? "…" : "Проверить"}</button>
+          className="flex-1 px-2.5 py-1.5 rounded-lg bg-[#12141a] border border-white/[0.12] text-[12px] mono text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none" />
+        <button onClick={() => setShow((s) => !s)} className="px-2.5 rounded-lg border border-white/[0.1] bg-white/[0.02] text-[var(--color-muted)] hover:text-white transition-colors">{show ? <EyeOff size={13} /> : <Eye size={13} />}</button>
+        <button onClick={test} disabled={testing || !url.trim()} className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.12] text-[12px] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:bg-white/[0.07] disabled:opacity-40 transition-colors">{testing ? "…" : "Проверить"}</button>
       </div>
       {msg && <div className={`text-[11px] ${msg.ok ? "text-[var(--color-accent)]" : "text-[var(--color-warn)]"}`}>{msg.text}</div>}
       <div className="mono text-[10px] text-[var(--color-muted)] leading-snug">Поддержка HTTP/HTTPS/SOCKS5. Действует сразу для закачки моделей и облака.</div>
@@ -744,37 +817,131 @@ function ProxySection() {
 
 // Пресет под железо: автоопределение GPU/VRAM -> рекомендованные кванты, но юзер применяет любой сам.
 // Облачный пресет включает OpenRouter на все стадии — работает даже на слабом ПК без своей GPU.
-// Переиспользуемая строка ключа OpenRouter (настройки И первый запуск). onSaved — после успешной проверки.
+// Переиспользуемая строка ключа OpenRouter (настройки И первый запуск). onSaved — после успешной проверки / удаления.
 function OpenRouterKey({ onSaved }: { onSaved?: () => void }) {
   const [key, setKey] = useState("");
   const [show, setShow] = useState(false);
-  const [verifying, setVerifying] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [has, setHas] = useState(false);
-  useEffect(() => { api.capabilities().then((c) => { const k = c.selection?.or_key ?? ""; setKey(k); setHas(k.trim().length > 0); }).catch(() => {}); }, []);
+
+  useEffect(() => {
+    api.capabilities().then((c) => {
+      const k = c.selection?.or_key ?? "";
+      setKey(k);
+      setHas(k.trim().length > 0);
+    }).catch(() => {});
+  }, []);
+
   const verify = async () => {
-    setVerifying(true); setMsg(null);
+    if (!key.trim()) return;
+    setBusy(true);
+    setMsg(null);
     try {
       const r = await api.openrouterVerify(key.trim());
-      if (r.ok) { await api.setSelection("or_key", key.trim()); setHas(true); setMsg({ ok: true, text: "Ключ рабочий — сохранён" }); onSaved?.(); }
-      else setMsg({ ok: false, text: "Ключ не принят OpenRouter" });
-    } catch { setMsg({ ok: false, text: "OpenRouter недоступен" }); }
-    setVerifying(false);
+      if (r.ok) {
+        await api.setSelection("or_key", key.trim());
+        setHas(true);
+        setMsg({ ok: true, text: "Ключ рабочий — сохранён" });
+        onSaved?.();
+      } else {
+        setMsg({ ok: false, text: "Ключ не принят OpenRouter" });
+      }
+    } catch {
+      setMsg({ ok: false, text: "OpenRouter недоступен" });
+    }
+    setBusy(false);
   };
+
+  const remove = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await api.setSelection("or_key", "");
+      await api.setSelection("or_llm_on", "0").catch(() => {});
+      await api.setSelection("or_tts_on", "0").catch(() => {});
+      await api.setSelection("or_asr_on", "0").catch(() => {});
+      setKey("");
+      setHas(false);
+      setMsg({ ok: true, text: "Ключ удалён" });
+      onSaved?.();
+    } catch {
+      setMsg({ ok: false, text: "Не удалось удалить ключ" });
+    }
+    setBusy(false);
+  };
+
+  const isBlank = !key.trim();
+
   return (
-    <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
-      <div className="flex items-center gap-2 mb-1">
+    <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]">
+      <div className="flex items-center gap-2 mb-1.5">
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${has ? "bg-[var(--color-accent)]" : "bg-[var(--color-muted)]"}`} />
-        <span className="text-[12px] font-medium">Ключ OpenRouter</span>
+        <span className="text-[12px] font-medium text-[var(--color-text)]">Ключ OpenRouter</span>
         <span className="mono text-[10px] text-[var(--color-muted)]">для облачных движков (перевод / TTS)</span>
+        {has && <span className="ml-auto text-[10px] mono text-[var(--color-accent)]">сохранён</span>}
       </div>
       <div className="flex gap-2">
-        <input type={show ? "text" : "password"} value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-or-v1-…"
-          className="flex-1 px-2 py-1 rounded-md bg-[var(--color-surface)] border border-[var(--color-border)] text-[12px] mono focus:border-[var(--color-accent)] outline-none" />
-        <button onClick={() => setShow((s) => !s)} className="px-2 rounded-md border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]">{show ? <EyeOff size={13} /> : <Eye size={13} />}</button>
-        <button onClick={verify} disabled={verifying || !key.trim()} className="px-3 py-1 rounded-md bg-[var(--color-surface)] border border-[var(--color-border)] text-[12px] hover:border-[var(--color-accent)] disabled:opacity-40">{verifying ? "…" : "Проверить"}</button>
+        <input
+          type={show ? "text" : "password"}
+          value={key}
+          onChange={(e) => {
+            setKey(e.target.value);
+            if (msg) setMsg(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              if (isBlank && has) remove();
+              else if (!isBlank) verify();
+            }
+          }}
+          placeholder="sk-or-v1-…"
+          className="flex-1 px-2.5 py-1.5 rounded-lg bg-[#12141a] border border-white/[0.12] text-[12px] mono text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none"
+        />
+        <button
+          type="button"
+          onClick={() => setShow((s) => !s)}
+          title={show ? "Скрыть ключ" : "Показать ключ"}
+          className="px-2.5 rounded-lg border border-white/[0.1] bg-white/[0.02] text-[var(--color-muted)] hover:text-white transition-colors"
+        >
+          {show ? <EyeOff size={13} /> : <Eye size={13} />}
+        </button>
+        {has && (
+          <button
+            type="button"
+            onClick={remove}
+            disabled={busy}
+            title="Очистить и удалить ключ из системы"
+            className="px-2.5 rounded-lg border border-white/[0.1] bg-white/[0.02] text-[var(--color-muted)] hover:text-red-400 hover:border-red-500/40 transition-colors disabled:opacity-40"
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
+        {isBlank && has ? (
+          <button
+            type="button"
+            onClick={remove}
+            disabled={busy}
+            className="px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/30 text-[12px] text-red-400 hover:bg-red-500/20 hover:border-red-500/50 disabled:opacity-40 transition-colors"
+          >
+            {busy ? "…" : "Удалить"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={verify}
+            disabled={busy || isBlank}
+            className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.12] text-[12px] text-[var(--color-text)] hover:border-[var(--color-accent)] hover:bg-white/[0.07] disabled:opacity-40 transition-colors"
+          >
+            {busy ? "…" : "Проверить"}
+          </button>
+        )}
       </div>
-      {msg && <div className={`text-[11px] mt-1 ${msg.ok ? "text-[var(--color-accent)]" : "text-[var(--color-warn)]"}`}>{msg.text}</div>}
+      {msg && (
+        <div className={`text-[11px] mt-1.5 ${msg.ok ? "text-[var(--color-accent)]" : "text-[var(--color-warn,#f59e0b)]"}`}>
+          {msg.text}
+        </div>
+      )}
     </div>
   );
 }
@@ -797,17 +964,17 @@ function PresetsSection({ onApplied }: { onApplied?: () => void }) {
   const cur = applied ?? capPreset ?? hw?.recommended ?? "";
   const curP = data?.presets.find((p) => p.id === cur);
   return (
-    <div className="mb-4 pb-3 border-b border-[var(--color-border)]">
-      <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--color-muted)] mb-1.5">Пресет под железо</div>
-      <div className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+    <div className="mb-4 pb-3 border-b border-white/[0.08]">
+      <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--color-muted)] mb-1.5 font-semibold">Пресет под железо</div>
+      <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]">
         <div className="flex items-center gap-2.5">
           <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-accent)]" />
           <div className="min-w-0 flex-1">
-            <div className="text-[12px] font-medium truncate">{hw ? (hw.hasGpu ? `${hw.gpuName} · ${hw.totalVramGb.toFixed(0)} ГБ VRAM` : "NVIDIA GPU не найдена") : "…"}</div>
+            <div className="text-[12px] font-medium truncate text-[var(--color-text)]">{hw ? (hw.hasGpu ? `${hw.gpuName} · ${hw.totalVramGb.toFixed(0)} ГБ VRAM` : "NVIDIA GPU не найдена") : "…"}</div>
             <div className="mono text-[10px] text-[var(--color-muted)] truncate">{curP?.subtitle ?? `ОЗУ ${hw?.totalRamGb.toFixed(0) ?? "?"} ГБ`}</div>
           </div>
           <select value={cur} onChange={(e) => apply(e.target.value)} disabled={busy}
-            className="shrink-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50">
+            className="shrink-0 bg-[#12141a] border border-white/[0.12] text-[var(--color-text)] rounded-lg px-2.5 py-1.5 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50">
             {(data?.presets ?? []).map((p) => <option key={p.id} value={p.id}>{p.title}{p.id === hw?.recommended ? " ★" : ""}</option>)}
           </select>
         </div>
@@ -816,269 +983,7 @@ function PresetsSection({ onApplied }: { onApplied?: () => void }) {
   );
 }
 
-function SettingsModal({ onClose, initialTab = "models" }: { onClose: () => void; initialTab?: "models" | "components" | "mcp" }) {
-  const { t } = useTranslation();
-  const [tab, setTab] = useState<"models" | "components" | "mcp">(initialTab);
-  const [sfx, setSfx] = useState(sfxEnabled());
-  // Пер-стадийный бенчмарк (bench.json + ⏱ в журнале) — ВЫКЛ по умолчанию, состояние на бэке (active.json).
-  const [bench, setBench] = useState(false);
-  const [qcAsr, setQcAsr] = useState(false);
-  const [qcDur, setQcDur] = useState(true);
-  const [multitake, setMultitake] = useState(false);
-  const [pauseSqueezeOn, setPauseSqueezeOn] = useState(true);
-  const [speechRateOn, setSpeechRateOn] = useState(true);
-  const [emoRefOn, setEmoRefOn] = useState(true);
-  const [emoRefClean, setEmoRefClean] = useState(false);
-  const [voLeadIn, setVoLeadIn] = useState(true);
-  const [dubReverbMatch, setDubReverbMatch] = useState(true);
-  const autoCastOn = useStore((s) => s.autoCastOn);
-  const setAutoCastOn = useStore((s) => s.setAutoCastOn);
-  useEffect(() => {
-    api.capabilities().then((c) => {
-      setBench(c.selection?.bench === "1");
-      setQcAsr(c.selection?.qc_asr === "1");
-      setQcDur(c.selection?.qc_duration !== "0");
-      setMultitake(c.selection?.multitake === "1");
-      setPauseSqueezeOn(c.selection?.pause_squeeze_on !== "0");
-      setSpeechRateOn(c.selection?.speech_rate_on !== "0");
-      setEmoRefOn(c.selection?.emo_ref_on !== "0");
-      setEmoRefClean(c.selection?.emo_ref_clean === "1");
-      setVoLeadIn(c.selection?.vo_lead_in !== "0");
-      setDubReverbMatch(c.selection?.dub_reverb_match !== "0");
-      if (c.selection?.auto_cast_on !== undefined) setAutoCastOn(c.selection.auto_cast_on !== "0");
-    }).catch(() => {});
-  }, [setAutoCastOn]);
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center glass-scrim anim-fade" onClick={onClose}>
-      <div className="w-[min(92vw,720px)] max-h-[88vh] flex flex-col rounded-xl glass-panel anim-pop p-5" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-3 border-b border-[var(--color-border)] pb-2.5">
-          <div className="flex items-center gap-3">
-            <span className="font-semibold text-[15px]">{t("settings.title")}</span>
-            <div className="flex items-center p-0.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] text-xs">
-              <button
-                onClick={() => setTab("models")}
-                className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                  tab === "models"
-                    ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm"
-                    : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                }`}
-              >
-                {t("settings.modelsTab")}
-              </button>
-              <button
-                onClick={() => setTab("components")}
-                className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                  tab === "components"
-                    ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm"
-                    : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                }`}
-              >
-                {t("settings.componentsTab")}
-              </button>
-              <button
-                onClick={() => setTab("mcp")}
-                className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                  tab === "mcp"
-                    ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm"
-                    : "text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                }`}
-              >
-                {t("settings.mcpTab", "MCP / Агенты")}
-              </button>
-            </div>
-          </div>
-          <button onClick={onClose} className="text-[var(--color-muted)] hover:text-[var(--color-text)]"><X size={16} /></button>
-        </div>
-        <div className="overflow-y-auto flex-1 -mr-2 pr-2 space-y-1">
-          <div className={tab === "models" ? "block space-y-1" : "hidden"}>
-            <label className="flex items-center justify-between gap-3 mb-2.5">
-              <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2"><Music size={14} className="text-[var(--color-muted)]" />{t("settings.sounds")}</span>
-              <button onClick={() => { const v = !sfx; setSfx(v); setSfxEnabled(v); if (v) playSfx("notify"); }} title={t("settings.sounds")}
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${sfx ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${sfx ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            {/* Проверка текста ASR */}
-            <label className="flex items-center justify-between gap-3 mb-2.5" title="Авто-проверка услышанного текста через Whisper ASR для отсечения тишины и дефектов">
-              <div className="min-w-0 flex-1">
-                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
-                  <Captions size={14} className="text-[var(--color-accent-2)]" />
-                  Проверка текста через ASR (QC)
-                </span>
-                <span className="block text-[10px] text-[var(--color-muted)]">авто-сверка озвучки через ASR (отключение ускоряет синтез)</span>
-              </div>
-              <button onClick={() => { const v = !qcAsr; setQcAsr(v); api.setSelection("qc_asr", v ? "1" : "0").catch(() => {}); }} title="Проверка текста через ASR"
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${qcAsr ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${qcAsr ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            {/* Контроль длительности фраз */}
-            <label className="flex items-center justify-between gap-3 mb-2.5" title="Подгонка скорости и контроль хронометража аудио под рамки субтитра">
-              <div className="min-w-0 flex-1">
-                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
-                  <Clock size={14} className="text-[var(--color-accent-2)]" />
-                  Контроль длительности фраз (Stretch QC)
-                </span>
-                <span className="block text-[10px] text-[var(--color-muted)]">подгонка хронометража и максимального растяжения</span>
-              </div>
-              <button onClick={() => { const v = !qcDur; setQcDur(v); api.setSelection("qc_duration", v ? "1" : "0").catch(() => {}); }} title="Контроль длительности фраз"
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${qcDur ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${qcDur ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            {/* Автоподбор голосов (Auto-Cast) */}
-            <label className="flex items-center justify-between gap-3 mb-2.5" title="Автоматический подбор и распределение голосов из voices/ по тембру и полу персонажей">
-              <div className="min-w-0 flex-1">
-                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
-                  <Wand2 size={14} className="text-[var(--color-accent-2)]" />
-                  Автоподбор голосов (Auto-Cast)
-                </span>
-                <span className="block text-[10px] text-[var(--color-muted)]">автоматический подбор голосов из voices/ по тембру и полу персонажей</span>
-              </div>
-              <button onClick={() => { const v = !autoCastOn; setAutoCastOn(v); api.setSelection("auto_cast_on", v ? "1" : "0").catch(() => {}); }} title="Автоподбор голосов"
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${autoCastOn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${autoCastOn ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            {/* Multi-take отбор (3 дубля) */}
-            <label className="flex items-center justify-between gap-3 mb-2.5" title="Генерировать 3 варианта озвучки каждой фразы и автоматически выбирать лучший по таймингу">
-              <div className="min-w-0 flex-1">
-                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
-                  <Star size={14} className="text-[var(--color-accent-2)]" />
-                  Multi-take отбор (3 дубля)
-                </span>
-                <span className="block text-[10px] text-[var(--color-muted)]">3 варианта озвучки — выбирается лучший по таймингу (медленнее, но качественнее)</span>
-              </div>
-              <button onClick={() => { const v = !multitake; setMultitake(v); api.setSelection("multitake", v ? "1" : "0").catch(() => {}); }} title="Multi-take отбор"
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${multitake ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${multitake ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            {/* Динамический темп речи TTS */}
-            <label className="flex items-center justify-between gap-3 mb-2.5" title="Динамическая адаптация темпа генерации нейросети под длину текста и доступный временной слот">
-              <div className="min-w-0 flex-1">
-                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
-                  <Sparkles size={14} className="text-[var(--color-accent-2)]" />
-                  Динамический темп речи (Speech Rate TTS)
-                </span>
-                <span className="block text-[10px] text-[var(--color-muted)]">адаптация скорости выговора нейросети под длину текста в окне</span>
-              </div>
-              <button onClick={() => { const v = !speechRateOn; setSpeechRateOn(v); api.setSelection("speech_rate_on", v ? "1" : "0").catch(() => {}); }} title="Динамический темп речи"
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${speechRateOn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${speechRateOn ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            {/* Эмоциональный референс сцены (Emo-Ref) */}
-            <label className="flex items-center justify-between gap-3 mb-2.5" title="Перенос эмоций, интонации и подачи прямо из оригинального звука сцены">
-              <div className="min-w-0 flex-1">
-                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
-                  <Mic2 size={14} className="text-[var(--color-accent-2)]" />
-                  Эмоциональный референс сцены (Emo-Ref)
-                </span>
-                <span className="block text-[10px] text-[var(--color-muted)]">копирование интонации, эмоции и подачи оригинала сцены</span>
-              </div>
-              <button onClick={() => { const v = !emoRefOn; setEmoRefOn(v); api.setSelection("emo_ref_on", v ? "1" : "0").catch(() => {}); }} title="Эмоциональный референс сцены"
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${emoRefOn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${emoRefOn ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            {/* Зависимый тумблер: Умный Emo-Ref (Smart Word-Trim & Context) */}
-            {emoRefOn && (
-              <label className="flex items-center justify-between gap-3 mb-2.5 pl-6 border-l-2 border-[var(--color-accent-2)] ml-2 py-0.5"
-                     title="Отсекать предвдохи и фоновый шум по словам Whisper, синхронизировать текст референса при обрезке и сохранять экспрессию коротких восклицаний">
-                <div className="min-w-0 flex-1">
-                  <span className="text-[12px] text-[var(--color-text)] inline-flex items-center gap-1.5 font-medium">
-                    Умный Emo-Ref (Smart Word-Trim)
-                  </span>
-                  <span className="block text-[10px] text-[var(--color-muted)]">
-                    чистый срез без вздохов, синхронизация текста при капе и охват восклицаний
-                  </span>
-                </div>
-                <button 
-                  onClick={() => { 
-                    const v = !emoRefClean; 
-                    setEmoRefClean(v); 
-                    api.setSelection("emo_ref_clean", v ? "1" : "0").catch(() => {}); 
-                  }}
-                  title="Умная пословная зачистка Emo-Ref"
-                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${emoRefClean ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${emoRefClean ? "left-[18px]" : "left-0.5"}`} />
-                </button>
-              </label>
-            )}
-            {/* Сжатие пауз речи */}
-            <label className="flex items-center justify-between gap-3 mb-2.5" title={t("settings.pauseSqueezeHint")}>
-              <div className="min-w-0 flex-1">
-                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
-                  <AudioLines size={14} className="text-[var(--color-accent-2)]" />
-                  {t("settings.pauseSqueeze")}
-                </span>
-                <span className="block text-[10px] text-[var(--color-muted)]">{t("settings.pauseSqueezeDesc")}</span>
-              </div>
-              <button onClick={() => { const v = !pauseSqueezeOn; setPauseSqueezeOn(v); api.setSelection("pause_squeeze_on", v ? "1" : "0").catch(() => {}); }} title={t("settings.pauseSqueeze")}
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${pauseSqueezeOn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${pauseSqueezeOn ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            {/* UN-Закадр: Золотая секунда */}
-            <label className="flex items-center justify-between gap-3 mb-2.5" title={t("settings.voLeadInHint")}>
-              <div className="min-w-0 flex-1">
-                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
-                  <Volume2 size={14} className="text-[var(--color-accent-2)]" />
-                  {t("settings.voLeadIn")}
-                </span>
-                <span className="block text-[10px] text-[var(--color-muted)]">{t("settings.voLeadInDesc")}</span>
-              </div>
-              <button onClick={() => { const v = !voLeadIn; setVoLeadIn(v); api.setSelection("vo_lead_in", v ? "1" : "0").catch(() => {}); }} title={t("settings.voLeadIn")}
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${voLeadIn ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${voLeadIn ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            {/* Пространственная акустика */}
-            <label className="flex items-center justify-between gap-3 mb-2.5" title={t("settings.dubReverbHint")}>
-              <div className="min-w-0 flex-1">
-                <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2 font-medium">
-                  <Sparkles size={14} className="text-[var(--color-accent-2)]" />
-                  {t("settings.dubReverb")}
-                </span>
-                <span className="block text-[10px] text-[var(--color-muted)]">{t("settings.dubReverbDesc")}</span>
-              </div>
-              <button onClick={() => { const v = !dubReverbMatch; setDubReverbMatch(v); api.setSelection("dub_reverb_match", v ? "1" : "0").catch(() => {}); }} title={t("settings.dubReverb")}
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${dubReverbMatch ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${dubReverbMatch ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            <label className="flex items-center justify-between gap-3 mb-3 pb-3 border-b border-[var(--color-border)]" title={t("settings.benchHint")}>
-              <span className="text-[13px] text-[var(--color-text)] inline-flex items-center gap-2"><Clock size={14} className="text-[var(--color-muted)]" />{t("settings.bench")}</span>
-              <button onClick={() => { const v = !bench; setBench(v); api.setSelection("bench", v ? "1" : "0").catch(() => {}); }} title={t("settings.benchHint")}
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${bench ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface-2)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${bench ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-            </label>
-            <PresetsSection />
-            <ModelsSection />
-          </div>
-          <div className={tab === "components" ? "block space-y-1" : "hidden"}>
-            <FirstRun embedded onClose={onClose} />
-          </div>
-          <div className={tab === "mcp" ? "block space-y-3" : "hidden"}>
-            <AgentPanel />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
-const DONATE = {
-  boosty: "https://boosty.to/neuro_art",
-  dalink: "https://dalink.to/nerual_dreming",
-  github: "https://github.com/timoncool/dub-studio",
-  telegram: "https://t.me/nerual_dreming",
-  crypto: [["BTC", "1E7dHL22RpyhJGVpcvKdbyZgksSYkYeEBC"],
-           ["ETH · ERC20", "0xb5db65adf478983186d4897ba92fe2c25c594a0c"],
-           ["USDT · TRC20", "TQST9Lp2TjK6FiVkn4fwfGUee7NmkxEE7C"]] as const,
-};
 
 function HelpSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -1089,33 +994,17 @@ function HelpSection({ title, children }: { title: string; children: React.React
   );
 }
 
-function CryptoRow({ coin, addr }: { coin: string; addr: string }) {
-  const { t } = useTranslation();
-  const [done, setDone] = useState(false);
-  return (
-    <button title={t("help.copy")}
-      onClick={async () => { try { await navigator.clipboard.writeText(addr); setDone(true); setTimeout(() => setDone(false), 1200); } catch { /* clipboard blocked */ } }}
-      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] transition-colors text-left">
-      <span className="text-[11px] uppercase tracking-[0.1em] text-[var(--color-muted)] w-[92px] shrink-0">{coin}</span>
-      <span className="mono text-[11px] truncate flex-1">{addr}</span>
-      {done ? <Check size={13} className="text-[var(--color-accent)] shrink-0" /> : <Copy size={13} className="text-[var(--color-muted)] shrink-0" />}
-    </button>
-  );
-}
-
 function HelpModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   const how = t("help.how", { returnObjects: true }) as unknown as string[];
   const features = t("help.features", { returnObjects: true }) as unknown as string[];
   const sections = t("help.sections", { returnObjects: true }) as unknown as string[];
-  const pay = "flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[13px] font-medium text-[var(--color-text)] hover:border-[var(--color-accent)] transition-colors";
-  const chip = "inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[11px] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors";
   return (
     <div className="fixed inset-0 z-50 grid place-items-center glass-scrim anim-fade" onClick={onClose}>
-      <div className="w-[min(92vw,640px)] max-h-[86vh] overflow-y-auto rounded-xl glass-panel anim-pop p-5" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-2">
-          <span className="flex items-center gap-2 font-semibold"><HelpCircle size={17} className="text-[var(--color-accent)]" />{t("help.title")}</span>
-          <button onClick={onClose} className="text-[var(--color-muted)] hover:text-[var(--color-text)]"><X size={16} /></button>
+      <div className="w-[min(92vw,640px)] max-h-[86vh] overflow-y-auto rounded-2xl glass-panel anim-pop p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="flex items-center gap-2 font-bold text-base text-[var(--color-text)]"><HelpCircle size={18} className="text-[var(--color-accent)]" />{t("help.title")}</span>
+          <button onClick={onClose} className="p-1 rounded-lg text-[var(--color-muted)] hover:text-white hover:bg-white/[0.06] transition-colors"><X size={16} /></button>
         </div>
         <p className="text-[13px] leading-relaxed text-[var(--color-muted)]">{t("help.intro")}</p>
 
@@ -1123,8 +1012,8 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           <ol className="space-y-1.5">
             {how.map((s, i) => (
               <li key={i} className="flex gap-2.5 text-[13px]">
-                <span className="grid place-items-center w-5 h-5 shrink-0 rounded-full bg-[var(--color-surface-2)] text-[var(--color-accent)] text-[11px] font-semibold">{i + 1}</span>
-                <span className="leading-relaxed">{s}</span>
+                <span className="grid place-items-center w-5 h-5 shrink-0 rounded-full bg-white/[0.08] text-[var(--color-accent)] text-[11px] font-semibold">{i + 1}</span>
+                <span className="leading-relaxed text-[var(--color-text)]">{s}</span>
               </li>
             ))}
           </ol>
@@ -1133,7 +1022,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         <HelpSection title={t("help.featuresTitle")}>
           <ul className="grid sm:grid-cols-2 gap-x-4 gap-y-1.5">
             {features.map((f, i) => (
-              <li key={i} className="flex gap-2 text-[13px] leading-relaxed"><Check size={14} className="text-[var(--color-accent)] shrink-0 mt-[3px]" /><span>{f}</span></li>
+              <li key={i} className="flex gap-2 text-[13px] leading-relaxed text-[var(--color-text)]"><Check size={14} className="text-[var(--color-accent)] shrink-0 mt-[3px]" /><span>{f}</span></li>
             ))}
           </ul>
         </HelpSection>
@@ -1142,25 +1031,6 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           <ul className="space-y-1">
             {sections.map((s, i) => <li key={i} className="text-[13px] leading-relaxed text-[var(--color-muted)]">· {s}</li>)}
           </ul>
-        </HelpSection>
-
-        <HelpSection title={t("help.donateTitle")}>
-          <p className="text-[13px] leading-relaxed text-[var(--color-muted)] mb-3">{t("help.donateIntro")}</p>
-          <div className="grid sm:grid-cols-2 gap-2 mb-2.5">
-            <a href={DONATE.dalink} target="_blank" rel="noreferrer" className={pay}>💳 {t("help.card")}</a>
-            <a href={DONATE.boosty} target="_blank" rel="noreferrer" className={pay}>🚀 {t("help.boostySub")}</a>
-          </div>
-          <div className="space-y-1.5">
-            {DONATE.crypto.map(([c, a]) => <CryptoRow key={c} coin={c} addr={a} />)}
-          </div>
-          <div className="mt-4 pt-3 border-t border-[var(--color-border)] text-[12px] leading-relaxed text-[var(--color-muted)]">
-            {t("help.madeBy")} <a className="text-[var(--color-text)] hover:text-[var(--color-accent)] transition-colors" href={DONATE.telegram} target="_blank" rel="noreferrer">Nerual Dreming</a> — {t("help.founder")} <a className="text-[var(--color-text)] hover:text-[var(--color-accent)] transition-colors" href="https://artgeneration.me" target="_blank" rel="noreferrer">ArtGeneration.me</a>
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              <a href="https://t.me/neuroport" target="_blank" rel="noreferrer" className={chip}>Нейро-Софт</a>
-              <a href={DONATE.github} target="_blank" rel="noreferrer" className={chip}><Star size={11} />GitHub</a>
-              <a href={DONATE.telegram} target="_blank" rel="noreferrer" className={chip}>Telegram</a>
-            </div>
-          </div>
         </HelpSection>
       </div>
     </div>
@@ -1248,13 +1118,13 @@ function StatusBar() {
 function TopBar() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"models" | "components" | "mcp">("models");
+  const [settingsTab, setSettingsTab] = useState<SettingsTabId>("models");
   const mcpEnabled = useStore((s) => s.mcpEnabled);
   const setMcpEnabled = useStore((s) => s.setMcpEnabled);
 
   useEffect(() => {
     const openComp = () => { setSettingsTab("components"); setSettings(true); };
-    const openMcp = () => { setSettingsTab("mcp"); setSettings(true); };
+    const openMcp = () => { setSettingsTab("agent"); setSettings(true); };
     window.addEventListener("dub-open-components", openComp);
     window.addEventListener("dub-open-mcp", openMcp);
     return () => {
@@ -1328,7 +1198,7 @@ function TopBar() {
           onClick={() => setMcpEnabled(!mcpEnabled)}
           onContextMenu={(e) => {
             e.preventDefault();
-            setSettingsTab("mcp");
+            setSettingsTab("agent");
             setSettings(true);
           }}
           title={
@@ -1336,23 +1206,18 @@ function TopBar() {
               ? "ЛКМ: Выключить MCP | ПКМ: Настройки агента (Сейчас: Включен)"
               : "ЛКМ: Включить MCP | ПКМ: Настройки агента (Сейчас: Выключен)"
           }
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors select-none shadow-sm ${
+          className={`relative p-1.5 rounded-md border transition-colors select-none flex items-center justify-center ${
             !mcpEnabled
               ? "bg-red-500/10 border-red-500/35 text-red-400 hover:bg-red-500/20"
               : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
           }`}
         >
-          {!mcpEnabled ? (
-            <div className="relative inline-flex items-center justify-center">
-              <Bot size={15} />
-              <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <span className="w-[18px] h-[2px] bg-red-400 rotate-45 rounded-full shadow-[0_0_2px_rgba(0,0,0,0.8)]" />
-              </span>
-            </div>
-          ) : (
-            <Bot size={15} />
+          <Bot size={18} />
+          {!mcpEnabled && (
+            <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <span className="w-[18px] h-[2px] bg-red-400 rotate-45 rounded-full shadow-[0_0_2px_rgba(0,0,0,0.8)]" />
+            </span>
           )}
-          <span className={`text-[11px] ${!mcpEnabled ? "line-through decoration-red-400/80" : ""}`}>MCP</span>
         </button>
         <button onClick={() => setHelp(true)} title={t("help.title")}
           className="p-1.5 rounded-md text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"><HelpCircle size={18} /></button>
@@ -1361,7 +1226,27 @@ function TopBar() {
         <LanguageSwitcher />
       </div>
       {help && <HelpModal onClose={() => setHelp(false)} />}
-      {settings && <SettingsModal initialTab={settingsTab} onClose={() => { setSettings(false); setSettingsTab("models"); }} />}
+      {settings && (
+        <SettingsModal
+          initialTab={settingsTab}
+          onClose={() => {
+            setSettings(false);
+            setSettingsTab("models");
+          }}
+          panes={{
+            models: (
+              <>
+                <PresetsSection />
+                <ModelsSection part="models" />
+              </>
+            ),
+            components: <FirstRun embedded onClose={() => setSettings(false)} />,
+            cloud: <ModelsSection part="cloud" />,
+            network: <ProxySection />,
+            agent: <AgentPanel />,
+          }}
+        />
+      )}
     </header>
   );
 }
@@ -2839,8 +2724,11 @@ function CommandPalette({ commands }: { commands: { label: string; run: () => vo
   const [q, setQ] = useState("");
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setOpen((o) => !o); setQ(""); }
-      else if (e.key === "Escape") setOpen(false);
+      if (useHotkeysStore.getState().matchesAction(e, "project.commandPalette")) {
+        e.preventDefault();
+        setOpen((o) => !o);
+        setQ("");
+      } else if (e.key === "Escape") setOpen(false);
     };
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
   }, []);
@@ -2849,7 +2737,7 @@ function CommandPalette({ commands }: { commands: { label: string; run: () => vo
   return (
     <div className="fixed inset-0 z-50 grid place-items-start justify-center pt-[14vh] glass-scrim anim-fade" onClick={() => setOpen(false)}>
       <div className="w-[min(92vw,520px)] rounded-xl glass-panel anim-pop overflow-hidden" onClick={(e) => e.stopPropagation()}>
-        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="⌘K  —  команды…"
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ctrl+Shift+P  —  команды…"
           className="w-full bg-transparent px-4 py-3 text-[15px] border-b border-[var(--color-border)] focus:outline-none" />
         <div className="max-h-[50vh] overflow-y-auto p-1.5">
           {filtered.map((c, i) => (
@@ -2895,56 +2783,166 @@ function useMediaHotkeys(opts: {
   blocked?: React.MutableRefObject<() => boolean>;   // напр. открыт CommandPalette/модалка -> не перехватывать
   vol?: number;
   setVol?: (v: number) => void;
+  onNextSeg?: () => void;
+  onPrevSeg?: () => void;
+  onLoopSeg?: () => void;
 }) {
-  const { enabled, duration, scrubRef, seek, togglePlay, previewRef, setHelp, blocked, vol, setVol } = opts;
+  const { enabled, duration, scrubRef, seek, togglePlay, previewRef, setHelp, blocked, vol, setVol, onNextSeg, onPrevSeg, onLoopSeg } = opts;
+  const lastNonZeroVolRef = useRef(1);
+
   useEffect(() => {
     if (!enabled) return;
     const clamp = (t: number) => Math.max(0, Math.min(duration || 0, t));
     const onKey = (e: KeyboardEvent) => {
-      if (inTextField(e) || e.altKey || e.metaKey) return;
-      // Ctrl пропускаем ТОЛЬКО для ←/→ (перемотка ±10с). Иначе Ctrl+K/Ctrl+Z (палитра/undo) остаются за своими хендлерами.
-      if (e.ctrlKey && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (inTextField(e)) return;
       if (blocked?.current()) return;
       const cur = scrubRef.current;
-      // Space на сфокусированной кнопке/ссылке — это её нативная активация, свой хоткей тут не навешиваем
-      // (иначе двойной тогл). K работает всегда.
-      const onButton = (() => { const a = document.activeElement as HTMLElement | null; return !!a && (a.tagName === "BUTTON" || a.tagName === "A" || a.getAttribute("role") === "button"); })();
-      switch (e.key) {
-        case " ":
-          if (onButton) return;
-          e.preventDefault(); togglePlay(); break;
-        case "k": case "K": case "л": case "Л":
-          e.preventDefault(); togglePlay(); break;
-        case "ArrowRight":
-          e.preventDefault(); seek(clamp(cur + (e.shiftKey ? 0.04 : e.ctrlKey ? 5 : 1))); break;
-        case "ArrowLeft":
-          e.preventDefault(); seek(clamp(cur - (e.shiftKey ? 0.04 : e.ctrlKey ? 5 : 1))); break;
-        case "Home":
-          e.preventDefault(); seek(0); break;
-        case "End":
-          e.preventDefault(); seek(clamp(duration)); break;
-        case "ArrowUp":
-        case "ArrowDown": {
-          // ↑/↓ = громкость, но НЕ когда фокус в скроллируемом списке — там стрелки должны прокручивать.
-          const el = e.target as HTMLElement;
-          if (el.closest("[data-kb-scroll]")) return;
-          if (setVol) { e.preventDefault(); setVol(Math.max(0, Math.min(1, (vol ?? 1) + (e.key === "ArrowUp" ? 0.05 : -0.05)))); }
-          break;
-        }
-        case "f": case "F": case "а": case "А":
-          e.preventDefault(); toggleElemFullscreen(previewRef.current); break;
-        case "F10":
+      const hk = useHotkeysStore.getState();
+
+      const onButton = (() => {
+        const a = document.activeElement as HTMLElement | null;
+        return !!a && (a.tagName === "BUTTON" || a.tagName === "A" || a.getAttribute("role") === "button");
+      })();
+
+      if (hk.matchesAction(e, "player.togglePlay")) {
+        if (onButton) return;
+        e.preventDefault();
+        togglePlay();
+        return;
+      }
+
+      if (hk.matchesAction(e, "player.fullscreen")) {
+        e.preventDefault();
+        toggleElemFullscreen(previewRef.current);
+        return;
+      }
+
+      if (hk.matchesAction(e, "timeline.nextSegmentPlay")) {
+        e.preventDefault();
+        onNextSeg?.();
+        return;
+      }
+
+      if (hk.matchesAction(e, "timeline.prevSegmentPlay")) {
+        e.preventDefault();
+        onPrevSeg?.();
+        return;
+      }
+
+      if (hk.matchesAction(e, "player.frameForward")) {
+        e.preventDefault();
+        seek(clamp(cur + 0.04));
+        return;
+      }
+
+      if (hk.matchesAction(e, "player.frameBackward")) {
+        e.preventDefault();
+        seek(clamp(cur - 0.04));
+        return;
+      }
+
+      if (hk.matchesAction(e, "player.seekForward5")) {
+        e.preventDefault();
+        seek(clamp(cur + 5));
+        return;
+      }
+
+      if (hk.matchesAction(e, "player.seekBackward5")) {
+        e.preventDefault();
+        seek(clamp(cur - 5));
+        return;
+      }
+
+      if (hk.matchesAction(e, "player.seekForward")) {
+        e.preventDefault();
+        seek(clamp(cur + 1));
+        return;
+      }
+
+      if (hk.matchesAction(e, "player.seekBackward")) {
+        e.preventDefault();
+        seek(clamp(cur - 1));
+        return;
+      }
+
+      if (hk.matchesAction(e, "player.volumeUp")) {
+        const el = e.target as HTMLElement;
+        if (el?.closest?.("[data-kb-scroll]")) return;
+        if (setVol) {
           e.preventDefault();
-          if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-          else document.documentElement.requestFullscreen?.().catch(() => {});
-          break;
-        case "?":
-          e.preventDefault(); setHelp(true); break;
+          setVol(Math.max(0, Math.min(1, Math.round(((vol ?? 1) + 0.1) * 100) / 100)));
+        }
+        return;
+      }
+
+      if (hk.matchesAction(e, "player.volumeDown")) {
+        const el = e.target as HTMLElement;
+        if (el?.closest?.("[data-kb-scroll]")) return;
+        if (setVol) {
+          e.preventDefault();
+          setVol(Math.max(0, Math.min(1, Math.round(((vol ?? 1) - 0.1) * 100) / 100)));
+        }
+        return;
+      }
+
+      if (hk.matchesAction(e, "player.mute")) {
+        if (setVol) {
+          e.preventDefault();
+          if ((vol ?? 1) > 0) {
+            lastNonZeroVolRef.current = vol ?? 1;
+            setVol(0);
+          } else {
+            setVol(lastNonZeroVolRef.current || 1);
+          }
+        }
+        return;
+      }
+
+      if (hk.matchesAction(e, "timeline.loopSegment")) {
+        e.preventDefault();
+        onLoopSeg?.();
+        return;
+      }
+
+      if (hk.matchesAction(e, "timeline.zoomIn")) {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("dub:timeline-zoom", { detail: { delta: 15 } }));
+        return;
+      }
+
+      if (hk.matchesAction(e, "timeline.zoomOut")) {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("dub:timeline-zoom", { detail: { delta: -15 } }));
+        return;
+      }
+
+      if (hk.matchesAction(e, "project.shortcutsHelp")) {
+        e.preventDefault();
+        setHelp(true);
+        return;
+      }
+
+      // Дополнительные навигационные клавиши
+      if (e.key === "Home") {
+        e.preventDefault();
+        seek(0);
+        return;
+      }
+      if (e.key === "End") {
+        e.preventDefault();
+        seek(clamp(duration));
+        return;
+      }
+      if (e.key === "F10") {
+        e.preventDefault();
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        else document.documentElement.requestFullscreen?.().catch(() => {});
+        return;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [enabled, duration, seek, togglePlay, previewRef, setHelp, blocked, vol, setVol, scrubRef]);
+  }, [enabled, duration, seek, togglePlay, previewRef, setHelp, blocked, vol, setVol, scrubRef, onNextSeg, onPrevSeg, onLoopSeg]);
 
   // Ctrl+колесо над контейнером превью -> перемотка (шаг ~1с/тик). passive:false обязателен для preventDefault.
   useEffect(() => {
@@ -2961,42 +2959,41 @@ function useMediaHotkeys(opts: {
   }, [enabled, duration, seek, previewRef, scrubRef]);
 }
 
-// Оверлей-шпаргалка горячих клавиш (стиль CommandPalette: glass-scrim/glass-panel). Таблица «клавиша —
-// действие» из i18n. Esc/клик мимо закрывает. Открывается по ? и из палитры команд.
+// Оверлей-шпаргалка горячих клавиш (динамически отображает актуальные пользовательские настройки)
 function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
+  const { definitions, getCombo } = useHotkeysStore();
+
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
   }, [onClose]);
-  const rows: [string, string][] = [
-    ["Space · K", t("hotkeys.playPause")],
-    ["← / →", t("hotkeys.seek5")],
-    ["Shift + ← / →", t("hotkeys.seek1")],
-    ["Ctrl + ← / →", t("hotkeys.seek10")],
-    ["Home · End", t("hotkeys.homeEnd")],
-    ["↑ / ↓", t("hotkeys.volume")],
-    ["F", t("hotkeys.fsPreview")],
-    ["F10", t("hotkeys.fsWindow")],
-    ["Ctrl + " + "\u{1F5B1}", t("hotkeys.wheelSeek")],
-    ["?", t("hotkeys.help")],
-    ["Esc", t("hotkeys.esc")],
-  ];
+
   return (
     <div className="fixed inset-0 z-[60] grid place-items-center glass-scrim anim-fade" onClick={onClose}>
-      <div className="w-[min(92vw,480px)] rounded-xl glass-panel anim-pop overflow-hidden" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)]">
+      <div className="w-[min(92vw,560px)] max-h-[82vh] flex flex-col rounded-xl glass-panel anim-pop overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
           <Keyboard size={16} className="text-[var(--color-accent)]" />
-          <span className="text-[14px] font-semibold">{t("hotkeys.title")}</span>
+          <span className="text-[14px] font-semibold">{t("hotkeys.title", "Горячие клавиши")}</span>
           <button onClick={onClose} className="ml-auto text-[var(--color-muted)] hover:text-[var(--color-text)]"><X size={16} /></button>
         </div>
-        <div className="p-2">
-          {rows.map(([key, act]) => (
-            <div key={key} className="flex items-center justify-between px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] transition-colors">
-              <span className="text-[13px] text-[var(--color-text)]">{act}</span>
-              <kbd className="mono text-[11px] px-2 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)] shrink-0 ml-4">{key}</kbd>
-            </div>
-          ))}
+        <div className="p-2 overflow-y-auto flex-1 divide-y divide-white/[0.04]">
+          {definitions.map((def) => {
+            const badges = formatKeyCombo(getCombo(def.id));
+            return (
+              <div key={def.id} className="flex items-center justify-between px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface-2)] transition-colors">
+                <span className="text-[13px] text-[var(--color-text)]">{def.name}</span>
+                <div className="flex items-center gap-1 shrink-0 ml-4">
+                  {badges.map((b, idx) => (
+                    <span key={idx} className="flex items-center gap-1">
+                      <kbd className="mono text-[11px] px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]">{b}</kbd>
+                      {idx < badges.length - 1 && <span className="text-[10px] text-gray-500">+</span>}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -3336,6 +3333,15 @@ function MultiTrackTimeline({
     []
   );
   const [zoom, setZoom] = useState(60); // pixels per second
+
+  useEffect(() => {
+    const handleZoom = (e: Event) => {
+      const delta = (e as CustomEvent<{ delta: number }>).detail?.delta ?? 0;
+      setZoom((z) => Math.max(20, Math.min(300, z + delta)));
+    };
+    window.addEventListener("dub:timeline-zoom", handleZoom);
+    return () => window.removeEventListener("dub:timeline-zoom", handleZoom);
+  }, []);
   const [draggingSeg, setDraggingSeg] = useState<{
     id: string;
     type: "move" | "resize-left" | "resize-right";
@@ -4813,14 +4819,17 @@ const SubtitleCard = memo(function SubtitleCard({
         onChange={(e) => onPatchText(e.target.value)}
         onSplit={(textarea) => onSplitAtTextCursor(textarea)}
         onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+          if (useHotkeysStore.getState().matchesAction(e, "timeline.splitSegment")) {
             e.preventDefault();
             onSplitAtTextCursor(e.currentTarget);
+          } else if (useHotkeysStore.getState().matchesAction(e, "project.export")) {
+            e.preventDefault();
+            window.dispatchEvent(new CustomEvent("dub:trigger-export"));
           }
         }}
         onClick={(e) => e.stopPropagation()}
         onBlur={(e) => onPersistText(e.target.value)}
-        title="ПКМ — теги эмоций и эффектов, Ctrl+Enter — разрезать фразу"
+        title="ПКМ — теги эмоций и эффектов, Ctrl+K — разрезать фразу"
         className="w-full mt-1.5 bg-[var(--color-bg)]/60 border border-[var(--color-border)] rounded-lg p-1.5 text-[13px] leading-snug resize-none overflow-hidden focus:border-[var(--color-accent)] focus:outline-none transition-colors"
       />
       {on && (
@@ -4966,6 +4975,11 @@ function Editor() {
   const [voiceMenuSeg, setVoiceMenuSeg] = useState<{ id: string; x: number; y: number } | null>(null); // всплывающее меню голоса/спикера фразы
   const [donorInput, setDonorInput] = useState<string>("");           // ввод номера фразы-донора для чистого клона
   const [showExportModal, setShowExportModal] = useState(false);
+  useEffect(() => {
+    const onTriggerExport = () => setShowExportModal(true);
+    window.addEventListener("dub:trigger-export", onTriggerExport);
+    return () => window.removeEventListener("dub:trigger-export", onTriggerExport);
+  }, []);
   const [showCastModal, setShowCastModal] = useState(false);
   const [showHiggsModal, setShowHiggsModal] = useState(false);
   const [showVoxModal, setShowVoxModal] = useState(false);
@@ -5245,7 +5259,7 @@ function Editor() {
   // Global Ctrl+K hotkey for splitting active segment at playhead
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      if (useHotkeysStore.getState().matchesAction(e, "timeline.splitSegment")) {
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
         e.preventDefault();
@@ -5900,10 +5914,41 @@ function Editor() {
   const setVolK = (v: number) => { setVol(v); if (audioRef.current) audioRef.current.volume = v; localStorage.setItem("dub-vol", String(v)); };
   const blockedRef = useRef(() => document.querySelector(".glass-scrim") != null);
   blockedRef.current = () => document.querySelector(".glass-scrim") != null;
+
+  const jumpNextSegment = useCallback(() => {
+    const cur = scrubRef.current;
+    const sorted = [...p.segments].sort((a, b) => a.start - b.start);
+    const next = sorted.find((s) => s.start > cur + 0.05);
+    if (next) {
+      playSeg(next);
+    }
+  }, [p.segments]);
+
+  const jumpPrevSegment = useCallback(() => {
+    const cur = scrubRef.current;
+    const sorted = [...p.segments].sort((a, b) => a.start - b.start);
+    const prevList = sorted.filter((s) => s.start < cur - 0.2);
+    const prev = prevList.at(-1) || sorted[0];
+    if (prev) {
+      playSeg(prev);
+    }
+  }, [p.segments]);
+
+  const toggleLoopSegment = useCallback(() => {
+    const cur = scrubRef.current;
+    const active = p.segments.find((s) => cur >= s.start && cur <= s.end);
+    if (active) {
+      playSeg(active);
+    }
+  }, [p.segments]);
+
   useMediaHotkeys({
     enabled: true, duration: p.meta.duration || 0, scrubRef, seek: onSeek,
     togglePlay: playFull, previewRef, setHelp: setShowHelp, vol, setVol: setVolK,
     blocked: blockedRef,   // стабильная ссылка — не пересоздаёт listeners каждый рендер
+    onNextSeg: jumpNextSegment,
+    onPrevSeg: jumpPrevSegment,
+    onLoopSeg: toggleLoopSegment,
   });
   async function restoreHistory(direction: "undo" | "redo") {
     if (projectOperation.current || useStore.getState().rendering || document.querySelector(".glass-scrim")) return;
@@ -5922,18 +5967,76 @@ function Editor() {
   }
   async function doUndo() { await restoreHistory("undo"); }
   async function doRedo() { await restoreHistory("redo"); }
-  useEffect(() => {                                                  // Cmd/Ctrl+Z / Shift+Z / Y (not while typing in a field)
+  useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      const k = e.key.toLowerCase();
-      if (k === "z" && !e.shiftKey) { e.preventDefault(); doUndo(); }
-      else if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); doRedo(); }
+
+      const hk = useHotkeysStore.getState();
+
+      if (hk.matchesAction(e, "project.undo")) {
+        e.preventDefault();
+        doUndo();
+        return;
+      }
+      if (hk.matchesAction(e, "project.redo")) {
+        e.preventDefault();
+        doRedo();
+        return;
+      }
+      if (hk.matchesAction(e, "project.export")) {
+        e.preventDefault();
+        setShowExportModal(true);
+        return;
+      }
+      if (hk.matchesAction(e, "project.mixAudio")) {
+        e.preventDefault();
+        doMixAudio();
+        return;
+      }
+      if (hk.matchesAction(e, "project.new")) {
+        e.preventDefault();
+        useStore.getState().setActiveName(null);
+        useStore.getState().setProject(null);
+        useStore.getState().setPid(null);
+        useStore.getState().setStage("empty");
+        try { history.replaceState(null, "", location.pathname); } catch {}
+        return;
+      }
+      if (hk.matchesAction(e, "project.importSubs")) {
+        e.preventDefault();
+        document.getElementById("subtitles-file-input")?.click();
+        return;
+      }
+      if (hk.matchesAction(e, "mode.subtitles")) {
+        e.preventDefault();
+        branch("mode", { value: "subtitles" });
+        return;
+      }
+      if (hk.matchesAction(e, "mode.dub")) {
+        e.preventDefault();
+        branch("mode", { value: "dub" });
+        return;
+      }
+      if (hk.matchesAction(e, "mode.voiceover")) {
+        e.preventDefault();
+        branch("mode", { value: "voiceover" });
+        return;
+      }
+      if (hk.matchesAction(e, "mode.funny")) {
+        e.preventDefault();
+        branch("mode", { value: "funny" });
+        return;
+      }
+      if (hk.matchesAction(e, "mode.transcribe")) {
+        e.preventDefault();
+        branch("mode", { value: "transcribe" });
+        return;
+      }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [pid]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pid, p, scrub]);
   async function doExport() {
     const exId = `export-${pid}`;   // одна запись на проект (повторный экспорт заменяет её, а не плодит дубли)
     
@@ -7025,7 +7128,7 @@ function Editor() {
                 <label title="Загрузить готовые субтитры из файла (.srt, .ass)"
                   className="w-full mt-1.5 inline-flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-[var(--color-border)] text-[12px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] cursor-pointer transition-colors">
                   <Upload size={14} /> Импортировать субтитры (.srt, .ass)
-                  <input type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
+                  <input id="subtitles-file-input" type="file" accept=".srt,.ass,.vtt,.sub,.txt" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportSubtitles(f); e.target.value = ""; }} className="hidden" />
                 </label>
               </div>
               <div className={lane === "blur" ? "space-y-2" : "hidden"}>
@@ -9691,27 +9794,29 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
           </div>
         )}
 
-        <div className="mt-4 rounded-lg border border-[var(--color-accent)]/30 bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)] px-3.5 py-2.5 text-[12.5px] leading-snug text-[var(--color-text)]">
+        <div className="mt-4 rounded-xl border border-[var(--color-accent)]/20 bg-[var(--color-accent)]/8 px-3.5 py-2.5 text-[12.5px] leading-snug text-[var(--color-text)]">
           <span className="font-semibold text-[var(--color-accent)]">{t("setup.pickNoteTitle")}</span> {t("setup.pickNote")}
         </div>
 
         {/* Пресет под железо + ключ OpenRouter: выбрал «Облако» → облачные движки, локальные модели ниже
             становятся необязательными (не тянешь лишние гигабайты). Refresh обновляет чеклист под выбор. */}
-        <div className="mt-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-3.5 py-3 space-y-2">
-          <PresetsSection onApplied={() => { refresh().catch(() => {}); }} />
-          <OpenRouterKey onSaved={() => { refresh().catch(() => {}); }} />
-          <div className="text-[11px] text-[var(--color-muted)] leading-snug">Выбрал <span className="text-[var(--color-text)]">Облако</span> и ввёл ключ? Тяжёлые локальные модели ниже можно не качать — перевод и озвучка пойдут через OpenRouter.</div>
-        </div>
+        {!embedded && (
+          <div className="mt-4 rounded-xl border border-white/[0.08] bg-white/[0.035] px-3.5 py-3 space-y-2">
+            <PresetsSection onApplied={() => { refresh().catch(() => {}); }} />
+            <OpenRouterKey onSaved={() => { refresh().catch(() => {}); }} />
+            <div className="text-[11px] text-[var(--color-muted)] leading-snug">Выбрал <span className="text-[var(--color-text)]">Облако</span> и ввёл ключ? Тяжёлые локальные модели ниже можно не качать — перевод и озвучка пойдут через OpenRouter.</div>
+          </div>
+        )}
 
         <div className="mt-4 space-y-2">
           {rows.map((row) => {
             if (row.kind === "group") {
               const { group, members } = row;
               return (
-                <div key={group} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-3.5 py-3">
+                <div key={group} className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-3.5 py-3">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[13px] font-semibold">{GROUP_LABEL[group]}</span>
-                    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]">{t("setup.pickOneQuant")}</span>
+                    <span className="text-[13px] font-semibold text-[var(--color-text)]">{GROUP_LABEL[group]}</span>
+                    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--color-accent)]/15 text-[var(--color-accent)]">{t("setup.pickOneQuant")}</span>
                   </div>
                   <div className="space-y-0.5">
                     {members.map((c) => {
@@ -9719,19 +9824,19 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
                       const checked = sel.has(c.id);
                       const active = !!prog && prog.pct[c.id] != null;
                       return (
-                        <label key={c.id} className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 ${c.installed ? "" : "cursor-pointer hover:bg-[var(--color-surface-2)]"} ${checked && !c.installed ? "bg-[color-mix(in_oklab,var(--color-accent)_8%,transparent)]" : ""}`}>
+                        <label key={c.id} className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors ${c.installed ? "" : "cursor-pointer hover:bg-white/[0.04]"} ${checked && !c.installed ? "bg-[var(--color-accent)]/10" : ""}`}>
                           {c.installed
                             ? <span className="w-4 h-4 shrink-0 grid place-items-center text-[var(--color-accent)]"><Check size={15} strokeWidth={3} /></span>
                             : <input type="radio" name={`grp-${group}`} checked={checked} onChange={() => pickOne(c.id, group)} disabled={busy} className="w-4 h-4 accent-[var(--color-accent)] shrink-0" />}
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <span className="text-[13px] truncate">{c.name}</span>
+                              <span className="text-[13px] truncate text-[var(--color-text)]">{c.name}</span>
                               {isDefault
-                                ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)] uppercase tracking-wide shrink-0">{t("setup.default")}</span>
-                                : <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-muted)] uppercase tracking-wide shrink-0">{t("setup.alt")}</span>}
+                                ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-accent)]/15 text-[var(--color-accent)] uppercase tracking-wide shrink-0">{t("setup.default")}</span>
+                                : <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/[0.06] text-[var(--color-muted)] uppercase tracking-wide shrink-0">{t("setup.alt")}</span>}
                               {c.installed && <span className="text-[10px] text-[var(--color-accent)] shrink-0">{t("setup.installed")}</span>}
                             </div>
-                            {active && <div className="mt-1 h-1 rounded-full bg-[var(--color-surface-2)] overflow-hidden"><div className="h-full bg-[var(--color-accent)]" style={{ width: `${prog!.pct[c.id] ?? 0}%` }} /></div>}
+                            {active && <div className="mt-1 h-1 rounded-full bg-white/[0.08] overflow-hidden"><div className="h-full bg-[var(--color-accent)]" style={{ width: `${prog!.pct[c.id] ?? 0}%` }} /></div>}
                           </div>
                           <span className="mono text-[11px] text-[var(--color-muted)] shrink-0">{fmtBytes(c.size)}{c.vram ? ` · ${fmtBytes(c.vram)} VRAM` : ""}</span>
                         </label>
@@ -9746,7 +9851,7 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
             const active = !!prog && prog.pct[c.id] != null;
             const canPick = c.delivery === "download" && !c.installed;
             return (
-              <div key={c.id} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-3.5 py-3">
+              <div key={c.id} className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-3.5 py-3">
                 <div className="flex items-center gap-3">
                   {canPick ? (
                     <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} disabled={busy}
@@ -9758,12 +9863,12 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-[14px] truncate">{c.name}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide ${c.requirement === "required" ? "bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]" : "bg-[var(--color-surface-2)] text-[var(--color-muted)]"}`}>{reqLabel(c.requirement)}</span>
+                      <span className="font-semibold text-[14px] truncate text-[var(--color-text)]">{c.name}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide ${c.requirement === "required" ? "bg-[var(--color-accent)]/15 text-[var(--color-accent)]" : "bg-white/[0.06] text-[var(--color-muted)]"}`}>{reqLabel(c.requirement)}</span>
                     </div>
                     <div className="text-[12px] text-[var(--color-muted)] truncate">{c.purpose}</div>
                     {active && (
-                      <div className="mt-1.5 h-1.5 rounded-full bg-[var(--color-surface-2)] overflow-hidden">
+                      <div className="mt-1.5 h-1.5 rounded-full bg-white/[0.08] overflow-hidden">
                         <div className="h-full bg-[var(--color-accent)] transition-[width] duration-200" style={{ width: `${prog!.pct[c.id] ?? 0}%` }} />
                       </div>
                     )}
@@ -9781,7 +9886,7 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
                       <div className="flex flex-col items-end gap-1">
                         <span className="mono text-[11px] text-[var(--color-muted)]">{fmtBytes(c.size)}</span>
                         <button onClick={() => download([c.id])} disabled={busy}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[11px] hover:border-[var(--color-accent)] disabled:opacity-40">
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/[0.04] border border-white/[0.1] text-[11px] text-[var(--color-accent-2)] hover:border-[var(--color-accent)] hover:text-white transition-colors disabled:opacity-40">
                           <Download size={12} />{t("setup.downloadOne")}</button>
                       </div>
                     )}
@@ -9795,24 +9900,24 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
         <div className="mt-6 flex items-center gap-3">
           {status && !status.ready && (
             <button onClick={() => download([...sel])} disabled={busy || sel.size === 0}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-40 hover:brightness-105">
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[var(--color-accent)] text-black text-sm font-semibold disabled:opacity-40 hover:brightness-110 transition shadow">
               {busy ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
               {t("setup.download")} {selectedBytes > 0 && <span className="opacity-80">· {fmtBytes(selectedBytes)}</span>}
             </button>
           )}
           {busy && (
             <button onClick={() => api.setupCancel().catch(() => {})}
-              className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg border border-[var(--color-border)] text-sm text-[var(--color-muted)] hover:text-[var(--color-text)]">
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-white/[0.1] bg-white/[0.02] text-sm text-[var(--color-muted)] hover:text-white transition-colors">
               <Square size={14} />{t("setup.cancel")}</button>
           )}
           {!busy && (
             <button onClick={async () => { try { const r = await api.setupBrowse(); if (r.picked) { setStatus(r.status); setSel(new Set(r.status.components.filter((c) => c.delivery === "download" && !c.installed && c.requirement !== "optional").map((c) => c.id))); } } catch { /* ignore */ } }}
-              className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg border border-dashed border-[var(--color-border)] text-sm text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] transition-colors">
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-dashed border-white/[0.12] bg-white/[0.015] text-sm text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-white transition-colors">
               <FolderDown size={14} />{t("settings.browseFolder")}</button>
           )}
           {status?.ready && !busy && (
             <button onClick={() => { if (embedded) { onClose?.(); } else { setStage("empty"); } }}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold hover:brightness-105">
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[var(--color-accent)] text-black text-sm font-semibold hover:brightness-110 transition shadow">
               <Check size={16} />{t("setup.continue")}</button>
           )}
           {busy && prog && <span className="mono text-[11px] text-[var(--color-muted)] truncate">{prog.msg} · {prog.overall.toFixed(0)}%</span>}
@@ -10440,11 +10545,81 @@ function TranscriptView() {
     onError: () => setPlay(false),
   });
   useEffect(() => { scrubRef.current = scrub; }, [scrub]);          // свежий scrub для хоткеев
+
+  const jumpNextSegment = useCallback(() => {
+    const cur = scrubRef.current;
+    const sorted = [...p.segments].sort((a, b) => a.start - b.start);
+    const next = sorted.find((s) => s.start > cur + 0.05);
+    if (next) {
+      seek(next.start);
+      setPlay(true);
+    }
+  }, [p.segments]);
+
+  const jumpPrevSegment = useCallback(() => {
+    const cur = scrubRef.current;
+    const sorted = [...p.segments].sort((a, b) => a.start - b.start);
+    const prevList = sorted.filter((s) => s.start < cur - 0.2);
+    const prev = prevList.at(-1) || sorted[0];
+    if (prev) {
+      seek(prev.start);
+      setPlay(true);
+    }
+  }, [p.segments]);
+
   useMediaHotkeys({                                                 // громкости нет -> ↑/↓ пропущены (setVol не задан)
     enabled: true, duration: p.meta.duration || 0, scrubRef, seek,
     togglePlay: () => setPlay((x) => !x), previewRef, setHelp: setShowHelp,
     blocked: { current: () => document.querySelector(".glass-scrim") != null },
+    onNextSeg: jumpNextSegment,
+    onPrevSeg: jumpPrevSegment,
   });
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      const hk = useHotkeysStore.getState();
+
+      if (hk.matchesAction(e, "mode.subtitles")) {
+        e.preventDefault();
+        switchMode("subtitles");
+        return;
+      }
+      if (hk.matchesAction(e, "mode.dub")) {
+        e.preventDefault();
+        switchMode("dub");
+        return;
+      }
+      if (hk.matchesAction(e, "mode.voiceover")) {
+        e.preventDefault();
+        switchMode("voiceover");
+        return;
+      }
+      if (hk.matchesAction(e, "mode.funny")) {
+        e.preventDefault();
+        switchMode("funny");
+        return;
+      }
+      if (hk.matchesAction(e, "mode.transcribe")) {
+        e.preventDefault();
+        switchMode("transcribe");
+        return;
+      }
+      if (hk.matchesAction(e, "project.new")) {
+        e.preventDefault();
+        useStore.getState().setActiveName(null);
+        useStore.getState().setProject(null);
+        useStore.getState().setPid(null);
+        useStore.getState().setStage("empty");
+        try { history.replaceState(null, "", location.pathname); } catch {}
+        return;
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [p, pid, reanalyzing]);
   // пословные тайминги ASR (лежат в extra.words) — для караоке внутри активной фразы
   const wordsOf = (s: Project["segments"][number]) =>
     s.words ?? ((s.extra?.words as Array<{ word: string; start: number; end: number }> | undefined) ?? []);

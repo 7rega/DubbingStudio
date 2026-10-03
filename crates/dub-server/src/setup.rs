@@ -1210,6 +1210,27 @@ pub fn import_from_dir(repo_root: &Path, src_dir: &Path, only: Option<&str>) -> 
     imported
 }
 
+/// Свободное место на томе пути (для пользователя, с учётом квот), байт.
+#[cfg(windows)]
+pub fn free_bytes(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let dir = path.ancestors().find(|p| p.is_dir())?;
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut avail = 0u64;
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut avail, std::ptr::null_mut(), std::ptr::null_mut()) };
+    (ok != 0).then_some(avail)
+}
+
+#[cfg(windows)]
+extern "system" {
+    fn GetDiskFreeSpaceExW(dir: *const u16, free_to_caller: *mut u64, total: *mut u64, total_free: *mut u64) -> i32;
+}
+
+#[cfg(not(windows))]
+pub fn free_bytes(_path: &Path) -> Option<u64> {
+    None
+}
+
 // ── Полный статус (для GET /setup/status) ────────────────────────────────────
 
 #[derive(Clone, Debug, Serialize)]
@@ -1224,6 +1245,10 @@ pub struct SetupStatus {
     pub driver_ok: bool,
     /// build-строки для диагностики (llama-билд и т.п.).
     pub llama_build: String,
+    /// Абсолютный путь к каталогу моделей.
+    pub models_dir: String,
+    /// Свободное место на диске с моделями (байт).
+    pub free_bytes: Option<u64>,
 }
 
 pub fn setup_status(repo_root: &Path) -> SetupStatus {
@@ -1285,6 +1310,8 @@ pub fn setup_status(repo_root: &Path) -> SetupStatus {
         download_pending,
         driver_ok,
         llama_build: GH_LLAMA_BUILD.to_string(),
+        models_dir: mroot.to_string_lossy().to_string(),
+        free_bytes: free_bytes(&mroot),
     }
 }
 

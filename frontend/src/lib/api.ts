@@ -128,6 +128,8 @@ export type SetupComponent = {
 export type SetupStatus = {
   components: SetupComponent[]; ready: boolean;
   downloadPending: number; driverOk: boolean; llamaBuild: string;
+  modelsDir?: string;
+  freeBytes?: number | null;
 };
 
 export type HwSnapshot = {
@@ -166,6 +168,7 @@ export const api = {
   setupCancel: () => fetch(`${BASE}/setup/cancel`, { method: "POST" }).then(j<{ cancelled: boolean }>),
   hwSnapshot: () => getJson<HwSnapshot>("/hw/snapshot"),
   setupBrowse: (id?: string) => postJson<{ picked: boolean; imported: string[]; status: SetupStatus }>("/setup/browse", id ? { id } : {}),
+  setupOpenModels: () => postJson<{ path: string }>("/setup/open-models", {}),
   fonts: () => getJson<{ fonts: Record<string, string> }>("/fonts"),
   setOpts: (edit: Partial<ModelStack>) =>
     fetch(`${BASE}/engine/opts`, { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify(edit) }).then(j<{ models: ModelStack }>),

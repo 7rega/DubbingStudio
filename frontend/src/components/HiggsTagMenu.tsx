@@ -341,7 +341,7 @@ export function HiggsContextMenu({
                 <Scissors size={14} className="text-cyan-400" />
                 <span className="font-medium">Разрезать фразу</span>
               </div>
-              <span className="mono text-[10px] opacity-75">Ctrl+Enter</span>
+              <span className="mono text-[10px] opacity-75">Ctrl+K</span>
             </button>
           )}
         </div>

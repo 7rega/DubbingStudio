@@ -438,6 +438,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/setup/status", get(setup_status))
         .route("/setup/download", post(setup_download))
         .route("/setup/cancel", post(setup_cancel))
+        .route("/setup/open-models", post(setup_open_models))
         .route("/setup/browse", post(setup_browse))
         .route("/pick-folder", post(pick_folder))
         .route("/pick-file-save", post(pick_file_save))
@@ -1435,6 +1436,27 @@ async fn voices_download_pack(State(st): State<AppState>) -> Response {
     });
     let job_id = st.jobs.enqueue_with_meta("voices_pack", "", job).await;
     Json(json!({ "job_id": job_id })).into_response()
+}
+
+fn open_folder(dir: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    let cmd = "explorer.exe";
+    #[cfg(not(windows))]
+    let cmd = "xdg-open";
+    std::process::Command::new(cmd).arg(dir).spawn().map(|_| ())
+}
+
+/// POST /setup/open-models — открыть папку моделей в проводнике ОС.
+async fn setup_open_models(State(st): State<AppState>) -> Response {
+    let dir = st.repo_root.join("models");
+    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| open_folder(&dir)) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "code": "open_failed", "detail": format!("{}: {e}", dir.display()) })),
+        )
+            .into_response();
+    }
+    Json(json!({ "path": dir.display().to_string() })).into_response()
 }
 
 /// POST /setup/browse — открыть нативный диалог выбора папки, импортировать оттуда готовые модели по
