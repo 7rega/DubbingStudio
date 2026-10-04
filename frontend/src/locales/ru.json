@@ -573,7 +573,6 @@
     "grpRoformer": "Отделение вокала · Mel-Band Roformer",
     "grpWhisperEngine": "Движок Whisper ASR",
     "grpNemotron": "Диаризация Nemotron-3 (до 8 спикеров)",
-    "grpQwen3": "Распознавание речи · Qwen3 ASR & Aligner (audio.cpp)",
     "pickOneQuant": "выбери один",
     "default": "по умолчанию",
     "alt": "или",

@@ -27,8 +27,6 @@ pub use speaker_global::{
     SpeakerEmbedder,
 };
 pub use whisper::WhisperAsr;
-pub mod qwen3;
-pub use qwen3::Qwen3Asr;
 pub use window::{
     detect_active_spans, merge_windows, plan_windows, speech_envelope, Window, WindowConfig,
 };
@@ -156,8 +154,6 @@ pub enum AsrError {
     Io(String),
     #[error("диаризация: {0}")]
     Diarize(String),
-    #[error("transcribe: {0}")]
-    Transcribe(String),
 }
 
 /// Одна реплика диаризации: [start, end] в секундах, speaker — контиг. id (0..k-1).

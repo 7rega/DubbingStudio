@@ -82,7 +82,6 @@ const VARIANT_SLOT: Record<string, [string, string]> = {
   "whisper-small": ["whisper_model", "small"], "whisper-medium": ["whisper_model", "medium"],
   "whisper-large-v3": ["whisper_model", "large-v3"], "whisper-large-v3-turbo": ["whisper_model", "large-v3-turbo"],
   "whisper-engine": ["whisper_executable", "standard"], "whisper-xxl": ["whisper_executable", "xxl"],
-  "qwen3-asr": ["asr_engine", "qwen3"],
   sortformer: ["diar_model", "sortformer"],
   "nemotron-bf16": ["diar_model", "nemotron-bf16"],
   "nemotron-q8_0": ["diar_model", "nemotron-q8_0"],
@@ -406,7 +405,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
       <Group label={t("settings.roleAsr")}>
         {/* Движок ASR: Parakeet-TDT (GPU, дефолт) / Whisper (локально, CPU) / OpenRouter (облако). */}
         <div className="flex gap-1.5 mb-2">
-          {[{ id: "parakeet", label: "Parakeet-TDT", cloud: false }, { id: "whisper", label: "Whisper", cloud: false }, { id: "qwen3", label: "Qwen3 ASR", cloud: false }, { id: "openrouter", label: "OpenRouter", cloud: true }].map((e) => {
+          {[{ id: "parakeet", label: "Parakeet-TDT", cloud: false }, { id: "whisper", label: "Whisper", cloud: false }, { id: "openrouter", label: "OpenRouter", cloud: true }].map((e) => {
             const asrCloud = selv("or_asr_on") === "1";
             const active = e.cloud ? asrCloud : (!asrCloud && asrEngine === e.id);
             const dis = e.cloud && !hasOrKey;
@@ -433,7 +432,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
             );
           })}
         </div>
-        {/* Локальный ASR (Parakeet/Whisper/Qwen3) — на чём считать: свои табы устройства. */}
+        {/* Локальный ASR (Parakeet/Whisper) — на чём считать: свои табы устройства. */}
         {selv("or_asr_on") !== "1" && <BackendTabs k="asr_backend" />}
         {selv("or_asr_on") === "1" ? (
           <div className={`${orRowCls} space-y-2`}>
@@ -442,13 +441,6 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
           </div>
         ) : asrEngine === "parakeet" ? (
           <VariantPicker base="Parakeet-TDT 0.6B v3" ids={["parakeet", "parakeet-fp32", "parakeet-ultra"]} />
-        ) : asrEngine === "qwen3" ? (
-          <div className="space-y-1.5">
-            {rowOf("qwen3-asr")}
-            {rowOf("qwen3-aligner")}
-            {rowOf("silero-vad")}
-            {rowOf("audiocpp-engine")}
-          </div>
         ) : (
           <>
             <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]">
@@ -9448,7 +9440,7 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
   const reqLabel = (r: string) => (r === "required" ? t("setup.required") : t("setup.recommended"));
   const deliveryNote = (c: SetupComponent) =>
     c.delivery === "bundled" ? t("setup.reinstallHint") : c.delivery === "external" ? t("setup.external") : "";
-  const GROUP_LABEL: Record<string, string> = { higgs: t("setup.grpHiggs"), gemma: t("setup.grpGemma"), parakeet: t("setup.grpParakeet"), roformer: t("setup.grpRoformer"), whisper_engine: t("setup.grpWhisperEngine"), nemotron: t("setup.grpNemotron"), qwen3: t("setup.grpQwen3") };
+  const GROUP_LABEL: Record<string, string> = { higgs: t("setup.grpHiggs"), gemma: t("setup.grpGemma"), parakeet: t("setup.grpParakeet"), roformer: t("setup.grpRoformer"), whisper_engine: t("setup.grpWhisperEngine"), nemotron: t("setup.grpNemotron") };
   const pickOne = (id: string, group: string) => setSel((prev) => {   // radio внутри семейства: выбрать этот квант, снять остальные того же семейства
     const n = new Set(prev);
     Object.entries(QUANT_GROUP).forEach(([cid, g]) => { if (g === group) n.delete(cid); });
