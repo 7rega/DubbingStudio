@@ -287,6 +287,9 @@ pub async fn select_model(State(st): State<AppState>, Json(body): Json<Value>) -
         if let Err(e) = crate::models::set_selection(&st.models_root, key, val) {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("write selection: {e}")).into_response();
         }
+        if key == "mcp_on" {
+            crate::mcp::sync_disabled_file(val == "0");
+        }
         return Json(crate::models::public_selection(&st.models_root)).into_response();
     }
     // Форма 2: {"id":"whisper-small"} — id компонента манифеста -> набор слотов (активация при скачивании

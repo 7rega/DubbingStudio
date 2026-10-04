@@ -101,22 +101,11 @@ export const useStore = create<State>((set, get) => ({
     }
     set({ mcpEnabled });
     setBridgeEnabled(mcpEnabled);
-    const s = get();
-    const curPid = s.pid || s.recent[0]?.pid;
-    if (curPid) {
-      api.saveText(curPid, ".mcp_disabled", mcpEnabled ? "0" : "1", undefined, false, "..").catch(() => {});
-      if (s.pid) {
-        api.saveText(s.pid, ".mcp_disabled", mcpEnabled ? "0" : "1", undefined, false).catch(() => {});
-      }
-    }
+    api.setSelection("mcp_on", mcpEnabled ? "1" : "0").catch(() => {});
   },
   setStage: (stage) => set({ stage }),
   setPid: (pid) => {
     set({ pid });
-    if (pid && !get().mcpEnabled) {
-      api.saveText(pid, ".mcp_disabled", "1", undefined, false).catch(() => {});
-      api.saveText(pid, ".mcp_disabled", "1", undefined, false, "..").catch(() => {});
-    }
   },
   setProject: (project) => set({ project }),
   setProgress: (stage, msg, pct = null) => set((s) => {   // keep the last message on a stage-only tick; pct only during a download

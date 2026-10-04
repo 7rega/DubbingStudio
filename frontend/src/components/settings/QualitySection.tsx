@@ -205,11 +205,7 @@ export default function QualitySection() {
             tip="Автоматический подбор и распределение голосов из voices/ по тембру и полу персонажей"
             on={autoCastOn}
             busy={busyKey === "auto_cast_on"}
-            onToggle={() => {
-              const v = !autoCastOn;
-              setAutoCastOn(v);
-              api.setSelection("auto_cast_on", v ? "1" : "0").catch(() => {});
-            }}
+            onToggle={() => toggle("auto_cast_on", autoCastOn, setAutoCastOn)}
           />
         </div>
       </section>

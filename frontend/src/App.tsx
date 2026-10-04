@@ -73,7 +73,7 @@ function LanguageSwitcher() {
 // показать в дропдауне РЕАЛЬНО активный вариант (а не «первый установленный»), совпадая с тем, что
 // резолвится при генерации.
 const VARIANT_SLOT: Record<string, [string, string]> = {
-  higgs: ["tts", "q8_0"], "higgs-q6_k": ["tts", "q6_k"], "higgs-q4_k_m": ["tts", "q4_k_m"],
+  higgs: ["tts", "q8_0"], "higgs-bf16": ["tts", "bf16"], "higgs-q6_k": ["tts", "q6_k"], "higgs-q4_k_m": ["tts", "q4_k_m"],
   voxcpm2: ["tts", "q8_0"], "voxcpm2-bf16": ["tts", "bf16"],
   parakeet: ["asr", "int8"], "parakeet-fp32": ["asr", "fp32"], "parakeet-ultra": ["asr", "ultra"],
   gemma: ["mt", "q4_0"], "gemma-q5_0": ["mt", "q5_0"], "gemma-q6_k": ["mt", "q6_k"], "gemma-q8_0": ["mt", "q8_0"],
@@ -83,6 +83,9 @@ const VARIANT_SLOT: Record<string, [string, string]> = {
   "whisper-large-v3": ["whisper_model", "large-v3"], "whisper-large-v3-turbo": ["whisper_model", "large-v3-turbo"],
   "whisper-engine": ["whisper_executable", "standard"], "whisper-xxl": ["whisper_executable", "xxl"],
   "qwen3-asr": ["asr_engine", "qwen3"],
+  sortformer: ["diar_model", "sortformer"],
+  "nemotron-bf16": ["diar_model", "nemotron-bf16"],
+  "nemotron-q8_0": ["diar_model", "nemotron-q8_0"],
 };
 // Какой из ids сейчас активен по выбору (active.json из capabilities.selection).
 const activeVariantId = (ids: string[], sel: Selection): string | undefined =>
@@ -132,8 +135,10 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
   useEffect(() => { refresh(); }, []);
   const selv = (k: string) => slot(cap?.selection, k) ?? "";
   const hasOrKey = cap?.selection?.or_key_set === true;
-  const setSel = (k: string, v: string) => api.setSelection(k, v).then(loadCap).catch(() => {});
-  // Голоса выбранной облачной TTS-модели (пол/возраст/русский) для дропдауна + предупреждения о русском.
+  const setSel = (k: string, v: string) =>
+    api.setSelection(k, v)
+      .then(loadCap)
+      .catch((er) => setErr(er instanceof Error ? er.message : String(er)));
   const orTtsModel = slot(cap?.selection, "or_tts_model") ?? "";
   useEffect(() => {
     if (!orTtsModel) { setOrVoices([]); setTtsRu(null); return; }
@@ -305,12 +310,18 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
                 key={e.id}
                 disabled={dis}
                 title={dis ? "Введите ключ OpenRouter ниже (Облачные настройки)" : ""}
-                onClick={() => {
+                onClick={async () => {
+                  setErr(null);
                   if (e.cloud) {
-                    setSel("or_tts_on", "1");
+                    await setSel("or_tts_on", "1");
                   } else {
-                    setSel("or_tts_on", "0");
-                    setSel("tts_engine", e.id);
+                    try {
+                      await api.setSelection("or_tts_on", "0");
+                      await api.setSelection("tts_engine", e.id);
+                      loadCap();
+                    } catch (er) {
+                      setErr(er instanceof Error ? er.message : String(er));
+                    }
                   }
                 }}
                 className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] font-medium border transition-colors ${active ? "border-[var(--color-accent)] bg-[var(--color-accent)]/12 text-white" : "border-white/[0.08] bg-white/[0.02] text-[var(--color-muted)] hover:text-white hover:bg-white/[0.04]"} disabled:opacity-40`}
@@ -401,7 +412,21 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
             const dis = e.cloud && !hasOrKey;
             return (
               <button key={e.id} disabled={dis} title={dis ? "Введите ключ OpenRouter ниже (Облачные настройки)" : ""}
-                onClick={() => { if (e.cloud) { setSel("or_asr_on", "1"); } else { setSel("or_asr_on", "0"); setAsrEngine(e.id); api.setSelection("asr_engine", e.id).catch(() => {}); } }}
+                onClick={async () => {
+                  setErr(null);
+                  if (e.cloud) {
+                    await setSel("or_asr_on", "1");
+                  } else {
+                    try {
+                      setAsrEngine(e.id);
+                      await api.setSelection("or_asr_on", "0");
+                      await api.setSelection("asr_engine", e.id);
+                      loadCap();
+                    } catch (er) {
+                      setErr(er instanceof Error ? er.message : String(er));
+                    }
+                  }
+                }}
                 className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] font-medium border transition-colors ${active ? "border-[var(--color-accent)] bg-[var(--color-accent)]/12 text-white" : "border-white/[0.08] bg-white/[0.02] text-[var(--color-muted)] hover:text-white hover:bg-white/[0.04]"} disabled:opacity-40`}>
                 {e.label}
               </button>
@@ -789,6 +814,7 @@ function TopBar() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTabId>("models");
+  const [presetRev, setPresetRev] = useState(0);
   const mcpEnabled = useStore((s) => s.mcpEnabled);
   const setMcpEnabled = useStore((s) => s.setMcpEnabled);
 
@@ -906,8 +932,8 @@ function TopBar() {
           panes={{
             models: (
               <>
-                <PresetsSection />
-                <ModelsSection part="models" />
+                <PresetsSection onApplied={() => setPresetRev((r) => r + 1)} />
+                <ModelsSection key={presetRev} part="models" />
               </>
             ),
             components: <FirstRun embedded onClose={() => setSettings(false)} />,
@@ -9557,7 +9583,7 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
           })}
         </div>
 
-        {status?.active && status.active.status !== "completed" && (
+        {!embedded && status?.active && status.active.status !== "completed" && (
           <div className="mt-4 p-3 rounded-xl border border-white/10 bg-white/[0.02]">
             <DownloadFooterProgress
               job={status.active}
@@ -10544,6 +10570,9 @@ export default function App() {
     }
     if (sel.auto_cast_on !== undefined) {
       useStore.getState().setAutoCastOn(sel.auto_cast_on !== "0");
+    }
+    if (sel.mcp_on !== undefined) {
+      useStore.getState().setMcpEnabled(sel.mcp_on !== "0");
     }
     const asrLabel = sel.asr_engine === "whisper" ? `whisper ${sel.whisper_model || "auto"}` : (sel.asr === "ultra" ? "Parakeet Ultra" : c.asr_model);
     const parts = [c.device, `ASR ${asrLabel}`];

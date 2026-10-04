@@ -543,6 +543,17 @@ fn agent_present() -> bool {
     agent().last_call.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().is_some_and(|(at, _)| at.elapsed() < AGENT_PRESENT)
 }
 
+pub fn sync_disabled_file(disabled: bool) {
+    let flag_val = if disabled { "1" } else { "0" };
+    let temp = std::env::var("TEMP").unwrap_or_else(|_| ".".into());
+    let temp_flag = std::path::Path::new(&temp).join("dubstudio.mcp_disabled");
+    let _ = std::fs::write(temp_flag, flag_val);
+    if std::path::Path::new("workspace").is_dir() {
+        let _ = std::fs::write("workspace/.mcp_disabled", flag_val);
+    }
+    let _ = std::fs::write(".mcp_disabled", flag_val);
+}
+
 pub fn is_disabled() -> bool {
     let temp = std::env::var("TEMP").unwrap_or_else(|_| ".".into());
     let temp_flag = std::path::Path::new(&temp).join("dubstudio.mcp_disabled");
@@ -558,6 +569,19 @@ pub fn is_disabled() -> bool {
             if let Ok(s) = std::fs::read_to_string(p) {
                 if s.trim() == "1" { return true; }
                 if s.trim() == "0" { return false; }
+            }
+        }
+    }
+    for cand in &["models/active.json", "../models/active.json"] {
+        let p = std::path::Path::new(cand);
+        if p.is_file() {
+            if let Ok(s) = std::fs::read_to_string(p) {
+                if let Ok(val) = serde_json::from_str::<Value>(&s) {
+                    if let Some(v) = val.get("mcp_on").and_then(|v| v.as_str()) {
+                        if v == "0" { return true; }
+                        if v == "1" { return false; }
+                    }
+                }
             }
         }
     }

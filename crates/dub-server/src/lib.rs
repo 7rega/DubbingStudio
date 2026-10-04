@@ -322,6 +322,12 @@ impl AppState {
         let _ = std::fs::create_dir_all(&workspace);
         let web_root = spa::find_web_root(&repo_root);
         let mroot = models_root(&repo_root);
+        let startup_sel = models::load_selection(&mroot);
+        if startup_sel.get("mcp_on").and_then(|v| v.as_str()) == Some("0") {
+            mcp::sync_disabled_file(true);
+        } else if startup_sel.get("mcp_on").and_then(|v| v.as_str()) == Some("1") {
+            mcp::sync_disabled_file(false);
+        }
         match credentials::migrate_legacy_selection(&mroot) {
             Ok(moved) if moved.openrouter_key || moved.proxy_password => {
                 tracing::info!("секреты перенесены из active.json в хранилище секретов: {moved:?}")

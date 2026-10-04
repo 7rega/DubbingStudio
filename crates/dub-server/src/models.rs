@@ -100,9 +100,12 @@ pub fn pick<'a>(sel: &'a Value, engine: &str) -> Option<&'a str> {
 /// чтобы скачивание Whisper-модели сразу делало Whisper активным движком (и наоборот для Parakeet).
 pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
     match id {
-        "higgs" => vec![("tts", "q8_0".into())],
-        "higgs-q6_k" => vec![("tts", "q6_k".into())],
-        "higgs-q4_k_m" => vec![("tts", "q4_k_m".into())],
+        "higgs" => vec![("tts_engine", "higgs".into()), ("tts", "q8_0".into())],
+        "higgs-bf16" => vec![("tts_engine", "higgs".into()), ("tts", "bf16".into())],
+        "higgs-q6_k" => vec![("tts_engine", "higgs".into()), ("tts", "q6_k".into())],
+        "higgs-q4_k_m" => vec![("tts_engine", "higgs".into()), ("tts", "q4_k_m".into())],
+        "voxcpm2" => vec![("tts_engine", "voxcpm2".into()), ("tts", "q8_0".into())],
+        "voxcpm2-bf16" => vec![("tts_engine", "voxcpm2".into()), ("tts", "bf16".into())],
         "parakeet" => vec![("asr_engine", "parakeet".into()), ("asr", "int8".into())],
         "parakeet-fp32" => vec![("asr_engine", "parakeet".into()), ("asr", "fp32".into())],
         "parakeet-ultra" => vec![("asr_engine", "parakeet".into()), ("asr", "ultra".into())],
@@ -122,6 +125,9 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "roformer-q5" => vec![("sep", "Q5_0".into())],
         "roformer-q4" => vec![("sep", "Q4_0".into())],
         "qwen3-asr" => vec![("asr_engine", "qwen3".into())],
+        "sortformer" => vec![("diar_model", "sortformer".into())],
+        "nemotron-bf16" => vec![("diar_model", "nemotron-bf16".into())],
+        "nemotron-q8_0" => vec![("diar_model", "nemotron-q8_0".into())],
         _ => vec![],
     }
 }
@@ -169,10 +175,32 @@ pub fn is_selection_key(key: &str) -> bool {
             | "or_asr_on"       // "1" -> транскрипция (ASR) через OpenRouter вместо локального Parakeet/Whisper
             | "or_asr"          // id STT-модели OpenRouter (напр. "openai/whisper-large-v3")
             | "or_concurrency"  // число параллельных облачных запросов (чанки в N потоков; OpenRouter ~50 конкур.)
+            // TTS & Audio
+            | "tts_engine"
+            | "higgs_execution"
+            | "higgs_max_tokens"
+            // Separation
+            | "sep_mode"
+            // Diarization
+            | "diar_model"
+            | "diar_nemotron_threshold"
+            // Whisper extra
+            | "whisper_executable"
+            | "whisper_xxl_args"
+            // Quality & switches
+            | "auto_cast_on"
+            | "vision_on"
+            | "pause_squeeze_on"
+            | "vo_lead_in"
+            | "dub_reverb_match"
+            | "emo_ref_clean"
+            | "smart_ref_trim"
+            | "mcp_on"          // "1" -> MCP включен (дефолт); "0" -> выключен
             // Прокси (режим, тип, адрес) меняется только через /engine/proxy/settings: там пароль уходит в хранилище
             // секретов, а маршрут запросов перестраивается сразу.
     )
 }
+
 
 /// Допустимое значение слота, у которого значения — перечень. Для прочих слотов — любое непустое.
 pub fn is_selection_value(key: &str, value: &str) -> bool {
@@ -962,6 +990,16 @@ mod asr_variant_tests {
         }
     }
 
+    #[test]
+    fn tts_and_diar_components_map_to_their_slots() {
+        assert_eq!(component_selection("voxcpm2"), vec![("tts_engine", "voxcpm2".to_string()), ("tts", "q8_0".to_string())]);
+        assert_eq!(component_selection("voxcpm2-bf16"), vec![("tts_engine", "voxcpm2".to_string()), ("tts", "bf16".to_string())]);
+        assert_eq!(component_selection("higgs-bf16"), vec![("tts_engine", "higgs".to_string()), ("tts", "bf16".to_string())]);
+        assert_eq!(component_selection("sortformer"), vec![("diar_model", "sortformer".to_string())]);
+        assert_eq!(component_selection("nemotron-bf16"), vec![("diar_model", "nemotron-bf16".to_string())]);
+        assert_eq!(component_selection("nemotron-q8_0"), vec![("diar_model", "nemotron-q8_0".to_string())]);
+    }
+
     struct TmpModels(PathBuf);
     impl TmpModels {
         fn new(tag: &str, dirs: &[(&str, &str)]) -> Self {
@@ -1113,6 +1151,7 @@ mod secret_tests {
     fn secrets_are_not_selection_slots() {
         assert!(!is_selection_key("or_key") && !is_selection_key("proxy_url") && !is_selection_key("srv_key"));
         assert!(is_selection_key("or_llm_on") && is_selection_key("llm_provider") && is_selection_key("srv_url"));
+        assert!(is_selection_key("tts_engine") && is_selection_key("higgs_execution") && is_selection_key("sep_mode") && is_selection_key("diar_model") && is_selection_key("mcp_on"));
         assert!(!is_selection_key("proxy_on") && !is_selection_key("proxy_mode"), "the proxy changes only through its form");
         assert!(is_selection_value("vision_provider", "server") && !is_selection_value("llm_provider", "ollama"));
     }
