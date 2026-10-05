@@ -50,6 +50,7 @@ export type Takes = { id: string; active: number | null; pinned: number | null; 
 export type Segment = {
   id: string; start: number; end: number; speaker?: string | null;
   src_text: string; tgt_text: string; voice?: string | null; dirty: boolean; hidden?: boolean; keep_original?: boolean;
+  ckpt?: string | null;
   lane?: number;
   volume?: number;
   gain_db?: number;
@@ -88,6 +89,7 @@ export type ProjectSummary = {
   pid: string; video: string; tgt_lang: string; mode: string;
   width: number; height: number; duration: number; segments: number;
   audio_only: boolean; mtime: number; done: boolean;
+  voiced?: number; incomplete?: boolean;
 };
 export type ModelStack = { asr: string; llm: string; vision: string; tts: string };
 // Выбор active.json: строковые слоты + флаги секретов. Ключ OpenRouter и пароль прокси сервер не отдаёт.
@@ -342,6 +344,8 @@ export const api = {
   // #122: смена режима из транскрипта — перевод готовых сегментов на lang + смена режима, БЕЗ повторного ASR.
   retranslate: (pid: string, lang: string, mode: string) => fetch(`${BASE}/projects/${pid}/retranslate?lang=${encodeURIComponent(lang)}&mode=${encodeURIComponent(mode)}`, { method: "POST" }).then(j<{ job_id: string; project_id: string }>),
   dubAudio: (pid: string) => fetch(`${BASE}/projects/${pid}/dub-audio`, { method: "POST" }).then(j<{ job_id: string }>),   // сгенерить только озвучку (без сборки видео) — слушать дуб в редакторе
+  resumeDub: (pid: string) => fetch(`${BASE}/projects/${pid}/resume-dub`, { method: "POST" }).then(j<{ job_id: string }>), // продолжить озвучку с места остановки
+  cancelDub: (pid: string) => fetch(`${BASE}/projects/${pid}/cancel-dub`, { method: "POST" }).then(j<{ ok: boolean }>),     // остановить процесс генерации озвучки
   synthSegments: (pid: string) => fetch(`${BASE}/projects/${pid}/synth-segments`, { method: "POST" }).then(j<{ job_id: string }>), // быстрый синтез только изменённых фраз (< 1 сек)
   mixAudio: (pid: string) => fetch(`${BASE}/projects/${pid}/mix-audio`, { method: "POST" }).then(j<{ job_id: string }>), // явное сведение мастер-трека дубляжа
   segmentAudioUrl: (pid: string, segId: string, rev = 0) => `${BASE}/projects/${pid}/segments/${encodeURIComponent(segId)}/audio?rev=${rev}`, // изолированный WAV фразы

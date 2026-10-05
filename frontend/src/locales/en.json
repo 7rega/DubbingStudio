@@ -186,7 +186,10 @@
     "funny": "Funny voice",
     "fixed": "Fixed duration",
     "dynamic": "Natural length",
-    "regenAll": "Regenerate all voiceover",
+    "regenAll": "Resynthesize",
+    "stopVoice": "Stop",
+    "resumeVoice": "Resume",
+    "voicedDone": "Voiced",
     "record": "Record voice",
     "recordStop": "Stop",
     "recordName": "Voice name",
@@ -379,7 +382,8 @@
     "cleanOldDelete": "Permanently delete old",
     "cleanOldDeleteConfirm": "Permanently delete old projects (>30 days) from disk?",
     "cleanConfirm": "Delete old projects?",
-    "noProjects": "No projects found"
+    "noProjects": "No projects found",
+    "incompleteDub": "Dubbing incomplete — voiceover needs to be resumed"
   },
   "multilang": {
     "title": "Multiple languages",
@@ -892,6 +896,10 @@
     "translateHint": "the dub and subtitle text",
     "vision": "Frame analysis (vision)",
     "visionHint": "subtitle style, titles, scene context; without it translation still runs",
+    "visionOff": "disabled · fast text mode (no video frame analysis)",
+    "visionDisabledNotice": "Frame analysis is disabled — translation runs on text only (2-3x faster).",
+    "visionToggleOn": "Disable frame analysis (faster translation)",
+    "visionToggleOff": "Enable frame analysis",
     "localGemma": "Gemma-4 12B",
     "server": "Local server",
     "needKey": "Enter an OpenRouter key below (Cloud settings)",

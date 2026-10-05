@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, Disc, Layers, SkipBack, SkipForward, Magnet, Flame, Headphones, Bot } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, MicOff, Disc, Layers, SkipBack, SkipForward, Magnet, Flame, Headphones, Bot } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character, type Selection } from "./lib/api";
@@ -73,8 +73,8 @@ function LanguageSwitcher() {
 // показать в дропдауне РЕАЛЬНО активный вариант (а не «первый установленный»), совпадая с тем, что
 // резолвится при генерации.
 const VARIANT_SLOT: Record<string, [string, string]> = {
-  higgs: ["tts", "q8_0"], "higgs-bf16": ["tts", "bf16"], "higgs-q6_k": ["tts", "q6_k"], "higgs-q4_k_m": ["tts", "q4_k_m"],
-  voxcpm2: ["tts", "q8_0"], "voxcpm2-bf16": ["tts", "bf16"],
+  higgs: ["higgs_quant", "q8_0"], "higgs-bf16": ["higgs_quant", "bf16"], "higgs-q6_k": ["higgs_quant", "q6_k"], "higgs-q4_k_m": ["higgs_quant", "q4_k_m"],
+  voxcpm2: ["voxcpm2_quant", "q8_0"], "voxcpm2-bf16": ["voxcpm2_quant", "bf16"],
   parakeet: ["asr", "int8"], "parakeet-fp32": ["asr", "fp32"], "parakeet-ultra": ["asr", "ultra"],
   gemma: ["mt", "q4_0"], "gemma-q5_0": ["mt", "q5_0"], "gemma-q6_k": ["mt", "q6_k"], "gemma-q8_0": ["mt", "q8_0"],
   roformer: ["sep", "Q8_0"], "roformer-q5": ["sep", "Q5_0"], "roformer-q4": ["sep", "Q4_0"],
@@ -88,7 +88,13 @@ const VARIANT_SLOT: Record<string, [string, string]> = {
 };
 // Какой из ids сейчас активен по выбору (active.json из capabilities.selection).
 const activeVariantId = (ids: string[], sel: Selection): string | undefined =>
-  ids.find((id) => { const m = VARIANT_SLOT[id]; return !!m && sel[m[0]] === m[1]; });
+  ids.find((id) => {
+    const m = VARIANT_SLOT[id];
+    if (!m) return false;
+    if (sel[m[0]] === m[1]) return true;
+    if ((m[0] === "higgs_quant" || m[0] === "voxcpm2_quant") && !sel[m[0]] && sel["tts"] === m[1]) return true;
+    return false;
+  });
 
 // 25 европейских языков, которые распознаёт дефолтный ASR Parakeet-TDT v3. Источник вне этого набора
 // требует Whisper (99 языков) — переключаем движок автоматически с уведомлением.
@@ -253,7 +259,8 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
   const orModelSelect = (kind: "tts" | "asr", k: string, empty: string) => (
     <OpenRouterModelSelect kind={kind} value={selv(k)} onChange={(id) => { if (id) setSel(k, id); }} placeholder={empty} />
   );
-  const needsGemma = llmProviderOf(cap?.selection, "llm") === "local" || llmProviderOf(cap?.selection, "vision") === "local";
+  const isVisionOn = slot(cap?.selection, "vision_on") !== "0";
+  const needsGemma = llmProviderOf(cap?.selection, "llm") === "local" || (isVisionOn && llmProviderOf(cap?.selection, "vision") === "local");
 
   const browse = async () => {
     if (isDownloading) return;
@@ -360,7 +367,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
           <>
             <VariantPicker base="Higgs Audio v3" ids={["higgs", "higgs-bf16", "higgs-q6_k", "higgs-q4_k_m"]} />
             {(() => {
-              const ttsQuant = selv("tts");
+              const ttsQuant = selv("higgs_quant") || selv("tts");
               const isLegacyQuant = ttsQuant === "q6_k" || ttsQuant === "q4_k_m";
               const curExec = isLegacyQuant ? "dll" : (slot(cap?.selection, "higgs_execution") ?? "server");
               return (
@@ -1445,6 +1452,7 @@ function DropZone() {
                           <span>·</span><span className="truncate">{p.mode}</span>
                           <span>·</span><span className="shrink-0">{fmtAgo(p.mtime)}</span>
                           {p.done && <Check size={12} className="text-[var(--color-accent)] shrink-0" />}
+                          {p.incomplete && <span title={t("recent.incompleteDub")} className="inline-flex items-center text-rose-500 shrink-0"><MicOff size={13} /></span>}
                         </div>
                       </div>
                     </button>
@@ -1996,6 +2004,7 @@ function DropZone() {
                           <span>·</span><span className="truncate">{p.mode}</span>
                           <span>·</span><span className="shrink-0">{fmtAgo(p.mtime)}</span>
                           {p.done && <Check size={12} className="text-[var(--color-accent)] shrink-0" />}
+                          {p.incomplete && <span title={t("recent.incompleteDub")} className="inline-flex items-center text-rose-500 shrink-0"><MicOff size={13} /></span>}
                         </div>
                       </div>
                     </button>
@@ -3890,6 +3899,16 @@ function MultiTrackTimeline({
                           {isCompact ? `S${seg.speaker}` : `SPK ${seg.speaker}`}
                         </span>
                       )}
+                      {(!seg.dirty && Boolean(seg.ckpt)) && (
+                        <span
+                          title="Озвучено"
+                          className={`mono rounded bg-emerald-950/90 text-emerald-300 border border-emerald-500/50 font-bold shrink-0 shadow-sm flex items-center justify-center ${
+                            isCompact ? "p-0.5" : "px-1 py-0.5"
+                          }`}
+                        >
+                          <Check size={8} strokeWidth={3} className="text-emerald-400" />
+                        </span>
+                      )}
                       {isDonor && (
                         <span
                           title={`Донорский голос: #${donorNum ?? ""}`}
@@ -4445,6 +4464,7 @@ const SubtitleCard = memo(function SubtitleCard({
           </span>
         </div>
         <div className="flex items-center gap-0.5 shrink-0 bg-[var(--color-surface)] px-1 py-0.5 rounded-md border border-[var(--color-border)]/60">
+          {(!seg.dirty && Boolean(seg.ckpt)) && <span title="Озвучено" className="inline-flex items-center"><Check size={12} className="text-emerald-400 shrink-0 mx-0.5" strokeWidth={2.5} /></span>}
           {seg.dirty && <span className="text-[var(--color-accent)] text-[10px] mx-0.5" title="edited">●</span>}
           <button
             type="button"
@@ -4700,7 +4720,9 @@ function Editor() {
       if (engine) setActiveTtsEngine(engine);
       const exec = slot(c.selection, "higgs_execution");
       if (exec) setHiggsExecution(exec);
-      const quant = slot(c.selection, "tts");
+      const quant = engine === "voxcpm2"
+        ? (slot(c.selection, "voxcpm2_quant") ?? slot(c.selection, "tts"))
+        : (slot(c.selection, "higgs_quant") ?? slot(c.selection, "tts"));
       if (quant) setTtsQuant(quant);
     }).catch(() => {});
   }, []);
@@ -5144,6 +5166,12 @@ function Editor() {
   // уникальные спикеры проекта (для переброса фразы другому спикеру на плашке; голос спикера — в настройках голосов)
   const speakers = Array.from(new Set(p.segments.map((s) => s.speaker).filter((s): s is string => s != null && s !== "")))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const voicedCount = useMemo(
+    () => p.segments.filter((s) => !s.dirty && Boolean(s.ckpt)).length,
+    [p.segments]
+  );
+  const allVoiced = p.segments.length > 0 && voicedCount === p.segments.length;
+  const hasPartialVoiced = voicedCount > 0 && voicedCount < p.segments.length;
   // one undo snapshot per edit BURST (focus->type->blur), segments AND titles: snapshot on the FIRST change of a
   // field, keyed by field, cleared on blur. Not on focus (that killed redo) nor per-keystroke (that flooded history).
   const burstRef = useRef<string | null>(null);
@@ -5416,8 +5444,41 @@ function Editor() {
       await watchDub(job_id);
       if (useStore.getState().pid !== pid) return;
       setProject(await api.getProject(pid)); setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify");   // покадровое превью; /dub обновлён -> плей играет новый дуб
-    } catch (e) { await surfaceErr(e); }
+    } catch (e) {
+      if (useStore.getState().pid === pid) {
+        try { setProject(await api.getProject(pid)); } catch {}
+      }
+      const msg = String(e instanceof Error ? e.message : e);
+      if (!msg.toLowerCase().includes("cancelled") && !msg.toLowerCase().includes("отменен")) {
+        await surfaceErr(e);
+      }
+    }
     finally { setRegenId(null); }
+  }
+  async function doResumeDub() {                                     // продолжить озвучку с места остановки / сбоя
+    if (regenId) return;
+    setRegenId("__all__"); pushActivity(t("voice.resumeVoice"));
+    try {
+      const { job_id } = await api.resumeDub(pid);
+      await watchDub(job_id);
+      if (useStore.getState().pid !== pid) return;
+      setProject(await api.getProject(pid)); setRendered(false); bump(); setDubRev(Date.now()); playSfx("notify");
+    } catch (e) {
+      if (useStore.getState().pid === pid) {
+        try { setProject(await api.getProject(pid)); } catch {}
+      }
+      const msg = String(e instanceof Error ? e.message : e);
+      if (!msg.toLowerCase().includes("cancelled") && !msg.toLowerCase().includes("отменен")) {
+        await surfaceErr(e);
+      }
+    }
+    finally { setRegenId(null); }
+  }
+  async function doCancelDub() {                                     // остановить текущую генерацию озвучки
+    try {
+      pushActivity(t("voice.stopVoice"));
+      await api.cancelDub(pid);
+    } catch (e) { await surfaceErr(e); }
   }
   async function doMixAudio() {                                       // явное сведение мастер-трека дубляжа с фоном и EBU R128
     if (regenId) return;
@@ -6269,11 +6330,8 @@ function Editor() {
                 {/* Шаг по фразам */}
                 <button
                   type="button"
-                  onClick={() => {
-                    const prev = [...p.segments].reverse().find((s) => s.start < scrub - 0.2);
-                    if (prev) onSeek(prev.start);
-                  }}
-                  title="Предыдущая фраза"
+                  onClick={jumpPrevSegment}
+                  title="Предыдущая фраза (Ctrl+←)"
                   className="p-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] text-[var(--color-muted)] hover:text-white transition-colors shrink-0"
                 >
                   <SkipBack size={13} />
@@ -6281,11 +6339,8 @@ function Editor() {
 
                 <button
                   type="button"
-                  onClick={() => {
-                    const next = p.segments.find((s) => s.start > scrub + 0.1);
-                    if (next) onSeek(next.start);
-                  }}
-                  title="Следующая фраза"
+                  onClick={jumpNextSegment}
+                  title="Следующая фраза (Ctrl+→)"
                   className="p-1.5 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] hover:border-[var(--color-accent)] text-[var(--color-muted)] hover:text-white transition-colors shrink-0"
                 >
                   <SkipForward size={13} />
@@ -6707,6 +6762,7 @@ function Editor() {
                           }`}
                         >
                           <span className="mono text-[10px] w-6 shrink-0 opacity-50 font-bold">#{idx + 1}</span>
+                          {(!seg.dirty && Boolean(seg.ckpt)) && <span title="Озвучено" className="inline-flex items-center"><Check size={11} className="text-emerald-400 shrink-0" strokeWidth={2.5} /></span>}
                           <span className="mono text-[9.5px] shrink-0 opacity-60 w-11 tabnum">{fmtT(seg.start)}</span>
                           <input
                             type="text"
@@ -7598,10 +7654,60 @@ function Editor() {
                 )}
 
 
-                <button onClick={doRegenAll} disabled={regenId !== null} title={t("voice.regenAll")}
-                  className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-sm font-semibold disabled:opacity-50 hover:brightness-105 transition">
-                  {regenId === "__all__" ? <Loader2 size={15} className="animate-spin" /> : <RotateCw size={15} />}{t("voice.regenAll")}
-                </button>
+                <div className="mt-3 flex items-center gap-2">
+                  {regenId !== null ? (
+                    <button
+                      type="button"
+                      onClick={doCancelDub}
+                      title={t("voice.stopVoice")}
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-sm transition animate-pulse"
+                    >
+                      <Square size={13} className="fill-current" />
+                      <span>{t("voice.stopVoice")}</span>
+                    </button>
+                  ) : allVoiced ? (
+                    <button
+                      type="button"
+                      disabled
+                      title={t("voice.voicedDone")}
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] text-emerald-400/80 text-xs font-semibold cursor-not-allowed opacity-75"
+                    >
+                      <Check size={13} strokeWidth={2.5} />
+                      <span>{t("voice.voicedDone")}</span>
+                    </button>
+                  ) : hasPartialVoiced ? (
+                    <button
+                      type="button"
+                      onClick={doResumeDub}
+                      title={t("voice.resumeVoice")}
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-xs font-semibold shadow-sm hover:brightness-105 transition"
+                    >
+                      <Play size={13} fill="currentColor" />
+                      <span>{t("voice.resumeVoice")}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      title={t("voice.resumeVoice")}
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)] text-xs font-semibold cursor-not-allowed opacity-40"
+                    >
+                      <Play size={13} fill="currentColor" />
+                      <span>{t("voice.resumeVoice")}</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={doRegenAll}
+                    disabled={regenId !== null}
+                    title={t("voice.regenAll")}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-on-accent)] text-xs font-semibold shadow-sm disabled:opacity-50 hover:brightness-105 transition"
+                  >
+                    {regenId === "__all__" ? <Loader2 size={13} className="animate-spin" /> : <RotateCw size={13} />}
+                    <span>{t("voice.regenAll")}</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>

@@ -111,12 +111,15 @@ pub fn stage(
     // Провайдеры перевода и vision выбираются независимо (своя Gemma / локальный сервер / OpenRouter): облачный
     // перевод не требует локальных весов. Перевод недоступен — Err с причиной; недоступный vision перевод
     // не останавливает.
-    let pair = match crate::llm_provider::open_pair(&crate::llm_provider::LlmOpen {
-        llama_bin: &paths.llama_bin,
-        mt_model: &paths.mt_model,
-        mmproj: &paths.mmproj,
-        models_root: &paths.models_root,
-    }) {
+    let pair = match crate::llm_provider::open_pair(
+        &crate::llm_provider::LlmOpen {
+            llama_bin: &paths.llama_bin,
+            mt_model: &paths.mt_model,
+            mmproj: &paths.mmproj,
+            models_root: &paths.models_root,
+        },
+        args.vision,
+    ) {
         Ok(pair) => {
             emit(progress, "translate", &pair.describe());
             pair
@@ -170,7 +173,11 @@ pub fn stage(
         glossary: proj.glossary.clone(),
     };
 
-    emit(progress, "vision", "ctx-проход: vision layout/scene + перевод транскрипта");
+    if pair.vision().is_some() {
+        emit(progress, "vision", "ctx-проход: vision layout/scene + перевод транскрипта");
+    } else {
+        emit(progress, "translate", "перевод транскрипта (быстрый текстовый режим, vision выключен)");
+    }
     let contract = dub_translate::Contract::for_client(client);
     let res = ctx_run(client, pair.vision(), &cfg, &contract, &mut segs, rewrite, |m| {
         emit(progress, "vision", m);

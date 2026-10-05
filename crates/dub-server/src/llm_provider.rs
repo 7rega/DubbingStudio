@@ -181,13 +181,16 @@ impl LlmPair {
 
 /// Открыть перевод и vision анализа. Перевод обязателен (Err — перевод невозможен); vision без модели не
 /// роняет перевод — фазы кадров и аудио-контекста пропускаются с причиной.
-pub fn open_pair(o: &LlmOpen) -> Result<LlmPair, String> {
+/// При `enable_vision == false` мультимодальная модель и проектор не загружаются, экономя VRAM и время.
+pub fn open_pair(o: &LlmOpen, enable_vision: bool) -> Result<LlmPair, String> {
     let text_backend = crate::models::llm_backend(o.models_root, "llm");
     let vision_backend = crate::models::llm_backend(o.models_root, "vision");
     if text_backend == LlmBackend::Local && vision_backend == LlmBackend::Local {
-        let with_mmproj = o.mmproj.is_file();
+        let with_mmproj = enable_vision && o.mmproj.is_file();
         let text = start_gemma(o, with_mmproj)?;
-        let vision = if with_mmproj {
+        let vision = if !enable_vision {
+            VisionSlot::Missing("отключено в настройках".to_string())
+        } else if with_mmproj {
             VisionSlot::Shared
         } else {
             VisionSlot::Missing(format!("vision-проектор Gemma (mmproj) не найден ({})", o.mmproj.display()))
@@ -195,9 +198,13 @@ pub fn open_pair(o: &LlmOpen) -> Result<LlmPair, String> {
         return Ok(LlmPair { text, vision });
     }
     let text = open(o, LlmMode::Text)?;
-    let vision = match open(o, LlmMode::Vision) {
-        Ok(provider) => VisionSlot::Own(Box::new(provider)),
-        Err(reason) => VisionSlot::Missing(reason),
+    let vision = if enable_vision {
+        match open(o, LlmMode::Vision) {
+            Ok(provider) => VisionSlot::Own(Box::new(provider)),
+            Err(reason) => VisionSlot::Missing(reason),
+        }
+    } else {
+        VisionSlot::Missing("отключено в настройках".to_string())
     };
     Ok(LlmPair { text, vision })
 }
@@ -224,7 +231,7 @@ mod tests {
 
     fn pair_in(root: &Path) -> Result<LlmPair, String> {
         let missing = root.join("missing.gguf");
-        open_pair(&LlmOpen { llama_bin: &missing, mt_model: &missing, mmproj: &missing, models_root: root })
+        open_pair(&LlmOpen { llama_bin: &missing, mt_model: &missing, mmproj: &missing, models_root: root }, true)
     }
 
     fn error<T>(result: Result<T, String>) -> String {
@@ -279,6 +286,29 @@ mod tests {
         let root = scratch("local");
         assert!(error(pair_in(&root)).contains("llama-server не найден"));
         assert!(error(open_in(&root, LlmMode::Text)).contains("llama-server не найден"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn vision_can_be_disabled_explicitly() {
+        let root = scratch("disabled");
+        crate::models::set_selection(&root, "llm_provider", "server").unwrap();
+        crate::models::set_selection(&root, "srv_llm", "qwen3:8b").unwrap();
+        crate::models::set_selection(&root, "vision_provider", "server").unwrap();
+        crate::models::set_selection(&root, "srv_vision", "qwen2.5vl:7b").unwrap();
+        let missing = root.join("missing.gguf");
+        let pair = open_pair(
+            &LlmOpen {
+                llama_bin: &missing,
+                mt_model: &missing,
+                mmproj: &missing,
+                models_root: &root,
+            },
+            false,
+        )
+        .unwrap();
+        assert!(pair.vision().is_none());
+        assert!(pair.describe().contains("отключено в настройках"), "{}", pair.describe());
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

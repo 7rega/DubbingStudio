@@ -68,7 +68,13 @@ fn vis_json(s: &str) -> Value {
 /// _frame_b64 — square-pad кадр (SigLIP резайзит всё в 896x896; квадрат сохраняет геометрию букв) и base64.
 fn frame_b64(video: &Path, t: f64, tmp: &Path) -> Result<String, TranslateError> {
     let _ = std::fs::remove_file(tmp); // сбросить прошлый кадр, чтобы не прочитать несвежий при сбое
-    let out = Command::new(FFMPEG)
+    let mut cmd = Command::new(FFMPEG);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW: без всплывающих окон консоли
+    }
+    let out = cmd
         .args(["-y", "-ss"])
         .arg(format!("{t:.1}"))
         .arg("-i")

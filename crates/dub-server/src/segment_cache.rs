@@ -23,6 +23,29 @@ pub fn invalidate_audio(segment: &mut Segment) {
     segment.dirty = true;
 }
 
+/// BLAKE3-контрольная сумма параметров фразы для чекпоинтинга и кэширования TTS.
+/// Зависит от: tgt_text, speaker, voice, tts_engine и температуры фразы (если есть).
+pub fn compute_ckpt(segment: &Segment, tts_engine: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(segment.tgt_text.trim().as_bytes());
+    hasher.update(b"|");
+    hasher.update(segment.speaker.as_deref().unwrap_or("0").as_bytes());
+    hasher.update(b"|");
+    hasher.update(segment.voice.as_deref().unwrap_or("").trim().as_bytes());
+    hasher.update(b"|");
+    hasher.update(tts_engine.as_bytes());
+    hasher.update(b"|");
+    if let Some(t) = segment
+        .extra
+        .get("temp")
+        .or_else(|| segment.extra.get("temperature"))
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok())))
+    {
+        hasher.update(format!("{t:.2}").as_bytes());
+    }
+    format!("ck-{}", hasher.finalize().to_hex())
+}
+
 /// A frozen source interval survives regrouping and changes of numeric indexes.
 /// It belongs to the voice override, and is ignored after a voice change.
 pub fn donor(project: &Project, segment: &Segment) -> Option<Segment> {
@@ -97,5 +120,25 @@ mod tests {
         invalidate_audio(&mut original);
         assert!(original.dirty);
         assert_eq!(audio_key(&original), "s0");
+    }
+
+    #[test]
+    fn compute_ckpt_is_stable_and_sensitive_to_text_and_voice() {
+        let mut s = Segment { id: "s0".into(), tgt_text: "Привет мир".into(), ..Default::default() };
+        let k1 = compute_ckpt(&s, "higgs");
+        assert!(k1.starts_with("ck-"));
+        let k1_repeat = compute_ckpt(&s, "higgs");
+        assert_eq!(k1, k1_repeat);
+
+        s.tgt_text = "Привет мир!".into();
+        let k2 = compute_ckpt(&s, "higgs");
+        assert_ne!(k1, k2);
+
+        s.voice = Some("actor.wav".into());
+        let k3 = compute_ckpt(&s, "higgs");
+        assert_ne!(k2, k3);
+
+        let k4 = compute_ckpt(&s, "voxcpm2");
+        assert_ne!(k3, k4);
     }
 }

@@ -61,6 +61,11 @@ impl Drop for ChildGuard {
 /// Аналог `Command::output()` с учётом процесса: stdin закрыт, stdout/stderr читаются целиком.
 pub fn output(cmd: &mut Command) -> std::io::Result<Output> {
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     let mut child = cmd.spawn()?;
     let guard = track(child.id());
     let out_pipe = child.stdout.take();

@@ -205,6 +205,11 @@ impl LlamaServer {
         // ОБА пайпа дренируем в потоки. Если пайп не читать, буфер переполнится и llama-server
         // заблокируется на write -> сервер «висит» и не доходит до готовности (классический дедлок).
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW: скрываем консольное окно
+        }
         // На Windows cudart/ggml DLL лежат рядом с llama-server.exe (tools/llama) — бинарь находит их
         // сам, доп. настройка PATH не нужна.
 

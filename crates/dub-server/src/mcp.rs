@@ -1588,6 +1588,8 @@ mod tests {
         ("POST", "/projects/{pid}/trash", "studio internal: move project to trash"),
         ("POST", "/projects/{pid}/reveal", "studio internal: reveal file in Explorer"),
         ("POST", "/projects/{pid}/save-text", "studio internal: save custom text file"),
+        ("POST", "/projects/{pid}/resume-dub", "studio internal: resume dubbing pipeline step"),
+        ("POST", "/projects/{pid}/cancel-dub", "studio internal: cancel project dubbing step"),
         ("POST", "/projects/{pid}/synth-segments", "studio internal: segment TTS synthesis pipeline step"),
         ("POST", "/projects/{pid}/mix-audio", "studio internal: audio mixing pipeline step"),
         ("GET", "/projects/{pid}/segments/{id}/audio", "studio internal: segment audio stream for player"),

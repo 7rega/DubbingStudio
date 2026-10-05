@@ -1054,7 +1054,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
         // если тип уже определён. Не удалось — честный дефолт "real".
         let eff_ct = if args.content_type == "auto" {
             let mut d = proj.audio.content_type.clone();
-            if d.is_empty() {
+            if d.is_empty() && args.vision {
                 if let Some(ct) = crate::translate::classify_content_type_standalone(paths, meta.duration, progress) {
                     emit(progress, "casting", &format!("тип контента (авто): {ct}"));
                     d = ct;

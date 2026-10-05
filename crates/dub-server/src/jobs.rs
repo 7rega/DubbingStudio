@@ -6,6 +6,7 @@
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, oneshot, Mutex};
@@ -44,6 +45,7 @@ struct Job {
     error: Option<String>,
     abandoned: bool,
     result_sender: Option<oneshot::Sender<Result<Value, String>>>, // разбудить ожидающего preview/original
+    cancel_token: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -164,6 +166,18 @@ impl JobQueue {
 
     /// Поставить джобу с метаданными (тип операции и id проекта); вернуть job_id.
     pub async fn enqueue_with_meta(&self, kind: &str, pid: &str, fn_: JobFn) -> String {
+        let cancel_token = Arc::new(AtomicBool::new(false));
+        self.enqueue_with_cancel(kind, pid, cancel_token, fn_).await
+    }
+
+    /// Поставить джобу с явным CancellationToken.
+    pub async fn enqueue_with_cancel(
+        &self,
+        kind: &str,
+        pid: &str,
+        cancel_token: Arc<AtomicBool>,
+        fn_: JobFn,
+    ) -> String {
         let job_id = new_job_id();
         let (tx, _rx) = broadcast::channel(256);
         let job = Job {
@@ -179,6 +193,7 @@ impl JobQueue {
             error: None,
             abandoned: false,
             result_sender: None,
+            cancel_token,
         };
         self.inner.lock().await.insert(job_id.clone(), job);
         let _ = self.submit_tx.send((job_id.clone(), crate::mcp::carry_job(fn_))).await;
@@ -206,6 +221,7 @@ impl JobQueue {
             error: None,
             abandoned: false,
             result_sender: Some(res_tx),
+            cancel_token: Arc::new(AtomicBool::new(false)),
         };
         self.inner.lock().await.insert(job_id.clone(), job);
         let _ = self.submit_tx.send((job_id.clone(), crate::mcp::carry_job(fn_))).await;
@@ -285,10 +301,30 @@ impl JobQueue {
         let mut map = self.inner.lock().await;
         if let Some(job) = map.get_mut(job_id) {
             job.abandoned = true;
+            job.cancel_token.store(true, Ordering::SeqCst);
             true
         } else {
             false
         }
+    }
+
+    /// Отменить выполнение активной задачи для указанного проекта (pid).
+    pub async fn cancel_by_pid(&self, pid: &str) -> bool {
+        let mut map = self.inner.lock().await;
+        let mut found = false;
+        for job in map.values_mut() {
+            if job.pid == pid && (job.status == JobStatus::Running || job.status == JobStatus::Queued) {
+                job.abandoned = true;
+                job.cancel_token.store(true, Ordering::SeqCst);
+                found = true;
+            }
+        }
+        found
+    }
+
+    /// Получить CancellationToken задачи (если существует).
+    pub async fn cancel_token(&self, job_id: &str) -> Option<Arc<AtomicBool>> {
+        self.inner.lock().await.get(job_id).map(|j| j.cancel_token.clone())
     }
 
     /// Подписаться на SSE-события джобы. Возвращает (receiver, terminal-снапшот если уже завершена).
@@ -313,6 +349,7 @@ impl JobQueue {
     pub async fn mark_abandoned(&self, job_id: &str) {
         if let Some(j) = self.inner.lock().await.get_mut(job_id) {
             j.abandoned = true;
+            j.cancel_token.store(true, Ordering::SeqCst);
         }
     }
 

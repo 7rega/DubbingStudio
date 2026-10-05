@@ -333,7 +333,6 @@ fn op_voice_prompt(p: &mut Project, edit: &Value) -> PatchResult {
     let new_prompt: String = flat.chars().take(500).collect();
     if p.audio.voice_prompt != new_prompt {
         p.audio.voice_prompt = new_prompt;
-        invalidate_all_audio(p);
         p.audio.mix_dirty = true;
     }
     Ok(())
@@ -405,7 +404,6 @@ fn op_tts_settings(p: &mut Project, edit: &Value) -> PatchResult {
     }
 
     if changed {
-        invalidate_all_audio(p);
         p.audio.mix_dirty = true;
     }
     Ok(())
@@ -1530,14 +1528,28 @@ mod tests {
     #[test]
     fn voice_prompt_normalizes_and_marks_dirty() {
         let mut p = Project::default();
+        p.segments.push(dub_core::Segment {
+            id: "s0".into(),
+            dirty: false,
+            ckpt: Some("ck-test".into()),
+            ..Default::default()
+        });
         apply(&mut p, &json!({"op":"voice_prompt","prompt":"  native Russian speaker,\n  clear articulation  "})).unwrap();
         assert_eq!(p.audio.voice_prompt, "native Russian speaker, clear articulation");
         assert!(p.audio.mix_dirty);
+        assert!(!p.segments[0].dirty);
+        assert_eq!(p.segments[0].ckpt.as_deref(), Some("ck-test"));
     }
 
     #[test]
     fn tts_settings_updates_and_marks_dirty() {
         let mut p = Project::default();
+        p.segments.push(dub_core::Segment {
+            id: "s0".into(),
+            dirty: false,
+            ckpt: Some("ck-test".into()),
+            ..Default::default()
+        });
         assert_eq!(p.audio.vox_steps, 20);
         assert_eq!(p.audio.vox_cfg, 1.6);
         assert_eq!(p.audio.vox_seed, None);
@@ -1561,5 +1573,8 @@ mod tests {
         assert_eq!(p.audio.higgs_temp, Some(0.85));
         assert_eq!(p.audio.higgs_seed, Some(777));
         assert!(p.audio.mix_dirty);
+        // Изменение настроек модели не инвалидирует существующие сегменты
+        assert!(!p.segments[0].dirty);
+        assert_eq!(p.segments[0].ckpt.as_deref(), Some("ck-test"));
     }
 }

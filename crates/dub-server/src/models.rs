@@ -100,12 +100,12 @@ pub fn pick<'a>(sel: &'a Value, engine: &str) -> Option<&'a str> {
 /// чтобы скачивание Whisper-модели сразу делало Whisper активным движком (и наоборот для Parakeet).
 pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
     match id {
-        "higgs" => vec![("tts_engine", "higgs".into()), ("tts", "q8_0".into())],
-        "higgs-bf16" => vec![("tts_engine", "higgs".into()), ("tts", "bf16".into())],
-        "higgs-q6_k" => vec![("tts_engine", "higgs".into()), ("tts", "q6_k".into())],
-        "higgs-q4_k_m" => vec![("tts_engine", "higgs".into()), ("tts", "q4_k_m".into())],
-        "voxcpm2" => vec![("tts_engine", "voxcpm2".into()), ("tts", "q8_0".into())],
-        "voxcpm2-bf16" => vec![("tts_engine", "voxcpm2".into()), ("tts", "bf16".into())],
+        "higgs" => vec![("tts_engine", "higgs".into()), ("higgs_quant", "q8_0".into())],
+        "higgs-bf16" => vec![("tts_engine", "higgs".into()), ("higgs_quant", "bf16".into())],
+        "higgs-q6_k" => vec![("tts_engine", "higgs".into()), ("higgs_quant", "q6_k".into())],
+        "higgs-q4_k_m" => vec![("tts_engine", "higgs".into()), ("higgs_quant", "q4_k_m".into())],
+        "voxcpm2" => vec![("tts_engine", "voxcpm2".into()), ("voxcpm2_quant", "q8_0".into())],
+        "voxcpm2-bf16" => vec![("tts_engine", "voxcpm2".into()), ("voxcpm2_quant", "bf16".into())],
         "parakeet" => vec![("asr_engine", "parakeet".into()), ("asr", "int8".into())],
         "parakeet-fp32" => vec![("asr_engine", "parakeet".into()), ("asr", "fp32".into())],
         "parakeet-ultra" => vec![("asr_engine", "parakeet".into()), ("asr", "ultra".into())],
@@ -136,7 +136,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
 pub fn is_selection_key(key: &str) -> bool {
     matches!(
         key,
-        "tts" | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device"
+        "tts" | "higgs_quant" | "voxcpm2_quant" | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device"
             // Backend КАЖДОЙ локальной стадии независимо (auto|gpu|cpu): любой движок на любой инстанс.
             // gpu = CUDA, cpu = без NVIDIA. sep=сепарация(BSRoformer CUDA/CPU-сборка), diar=диаризация
             // (Sortformer onnx CUDA-EP/CPU), asr=локальный ASR (Parakeet onnx / Whisper CTranslate2).
@@ -347,14 +347,14 @@ pub fn resolve_tts_engine(sel: &Value) -> &'static str {
 
 /// VoxCPM2 TTS: models/voxcpm2/voxcpm2-{q8_0,bf16}.gguf. Возврат (путь к .gguf, квант).
 pub fn resolve_voxcpm2(mroot: &Path, sel: &Value) -> Option<(PathBuf, String)> {
-    let quant = pick(sel, "tts").unwrap_or("q8_0");
+    let quant = pick(sel, "voxcpm2_quant").or_else(|| pick(sel, "tts")).unwrap_or("q8_0");
     let model_path = audiocpp::resolve_voxcpm2_path(mroot, quant)?;
     Some((model_path, quant.to_string()))
 }
 
 /// Выбранный режим исполнения Higgs: "server" (по умолчанию, audiocpp_server) или "dll" (audiocpp_engine.dll).
 pub fn resolve_higgs_execution(sel: &Value) -> &'static str {
-    if let Some(q) = pick(sel, "tts") {
+    if let Some(q) = pick(sel, "higgs_quant").or_else(|| pick(sel, "tts")) {
         if q == "q6_k" || q == "q4_k_m" {
             return "dll";
         }
@@ -561,7 +561,7 @@ pub fn openrouter_any_on(mroot: &Path) -> bool {
 /// Нужна ли своя Gemma: перевод или vision идут через неё.
 #[allow(dead_code)]
 pub fn local_gemma_needed(mroot: &Path) -> bool {
-    llm_backend(mroot, "llm") == LlmBackend::Local || llm_backend(mroot, "vision") == LlmBackend::Local
+    llm_backend(mroot, "llm") == LlmBackend::Local || (vision_enabled(mroot) && llm_backend(mroot, "vision") == LlmBackend::Local)
 }
 
 /// Включён ли облачный путь для стадии `stage` ("llm"|"vision"|"tts"|"asr") по флагу or_*_on.
@@ -826,7 +826,7 @@ pub fn resolve_tts(mroot: &Path, sel: &Value) -> (PathBuf, String) {
     }
     let has = |q: &str| mroot.join(format!("higgs-{q}")).join(format!("{q}.gguf")).is_file();
     let ret = |q: &str| (mroot.join(format!("higgs-{q}")), q.to_string());
-    if let Some(q) = pick(sel, "tts") {
+    if let Some(q) = pick(sel, "higgs_quant").or_else(|| pick(sel, "tts")) {
         if has(q) {
             return ret(q);
         }
@@ -946,9 +946,9 @@ mod asr_variant_tests {
 
     #[test]
     fn tts_and_diar_components_map_to_their_slots() {
-        assert_eq!(component_selection("voxcpm2"), vec![("tts_engine", "voxcpm2".to_string()), ("tts", "q8_0".to_string())]);
-        assert_eq!(component_selection("voxcpm2-bf16"), vec![("tts_engine", "voxcpm2".to_string()), ("tts", "bf16".to_string())]);
-        assert_eq!(component_selection("higgs-bf16"), vec![("tts_engine", "higgs".to_string()), ("tts", "bf16".to_string())]);
+        assert_eq!(component_selection("voxcpm2"), vec![("tts_engine", "voxcpm2".to_string()), ("voxcpm2_quant", "q8_0".to_string())]);
+        assert_eq!(component_selection("voxcpm2-bf16"), vec![("tts_engine", "voxcpm2".to_string()), ("voxcpm2_quant", "bf16".to_string())]);
+        assert_eq!(component_selection("higgs-bf16"), vec![("tts_engine", "higgs".to_string()), ("higgs_quant", "bf16".to_string())]);
         assert_eq!(component_selection("sortformer"), vec![("diar_model", "sortformer".to_string())]);
         assert_eq!(component_selection("nemotron-bf16"), vec![("diar_model", "nemotron-bf16".to_string())]);
         assert_eq!(component_selection("nemotron-q8_0"), vec![("diar_model", "nemotron-q8_0".to_string())]);
@@ -1105,7 +1105,7 @@ mod secret_tests {
     fn secrets_are_not_selection_slots() {
         assert!(!is_selection_key("or_key") && !is_selection_key("proxy_url") && !is_selection_key("srv_key"));
         assert!(is_selection_key("or_llm_on") && is_selection_key("llm_provider") && is_selection_key("srv_url"));
-        assert!(is_selection_key("tts_engine") && is_selection_key("higgs_execution") && is_selection_key("sep_mode") && is_selection_key("diar_model") && is_selection_key("mcp_on"));
+        assert!(is_selection_key("tts_engine") && is_selection_key("higgs_quant") && is_selection_key("voxcpm2_quant") && is_selection_key("higgs_execution") && is_selection_key("sep_mode") && is_selection_key("diar_model") && is_selection_key("mcp_on"));
         assert!(!is_selection_key("proxy_on") && !is_selection_key("proxy_mode"), "the proxy changes only through its form");
         assert!(is_selection_value("vision_provider", "server") && !is_selection_value("llm_provider", "ollama"));
     }
@@ -1133,6 +1133,10 @@ mod provider_tests {
         assert_eq!(llm_backend(&root, "vision"), LlmBackend::Server);
         assert!(!local_gemma_needed(&root));
         set_selection(&root, "vision_provider", "local").unwrap();
+        assert!(local_gemma_needed(&root));
+        set_selection(&root, "vision_on", "0").unwrap();
+        assert!(!local_gemma_needed(&root));
+        set_selection(&root, "vision_on", "1").unwrap();
         assert!(local_gemma_needed(&root));
         assert_eq!(server_url(&root), DEFAULT_SERVER_URL);
         set_selection(&root, "srv_url", "http://192.168.1.5:1234/v1").unwrap();

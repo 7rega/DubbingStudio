@@ -530,6 +530,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/projects/{pid}/files", get(project_files::files))
         .route("/projects/{pid}/export-text", post(project_files::export_text))
         .route("/projects/{pid}/dub-audio", post(dub_audio_project))
+        .route("/projects/{pid}/resume-dub", post(resume_dub_project))
+        .route("/projects/{pid}/cancel-dub", post(cancel_dub_project))
         .route("/projects/{pid}/synth-segments", post(synth_segments_project))
         .route("/projects/{pid}/mix-audio", post(mix_audio_project))
         .route("/projects/{pid}/segments/{id}/audio", get(segment_audio))
@@ -733,7 +735,7 @@ fn ensure_job_components(
         if missing("audiocpp-engine") {
             need.push("audiocpp-engine".to_string());
         }
-        let quant = models::pick(&sel, "tts").unwrap_or("q8_0");
+        let quant = models::pick(&sel, "voxcpm2_quant").or_else(|| models::pick(&sel, "tts")).unwrap_or("q8_0");
         let model_comp = if quant == "bf16" { "voxcpm2-bf16" } else { "voxcpm2" };
         if missing(model_comp) {
             need.push(model_comp.to_string());
@@ -1714,6 +1716,13 @@ async fn list_projects(State(st): State<AppState>) -> Response {
             let done = dir.join("output.mp4").is_file()
                 || dir.join("output.mkv").is_file()
                 || dir.join("output.wav").is_file();
+            let total_segments = proj.segments.len();
+            let voiced_segments = proj.segments.iter().filter(|s| {
+                let sid = segment_cache::audio_key(s);
+                dir.join(format!("seg_{sid}.wav")).is_file() && !s.dirty && s.ckpt.is_some()
+            }).count();
+            let is_dub = proj.mode == "dub" || proj.mode == "voiceover";
+            let incomplete = is_dub && total_segments > 0 && voiced_segments > 0 && voiced_segments < total_segments && !done;
             items.push(json!({
                 "pid": pid,
                 "video": video,
@@ -1726,6 +1735,8 @@ async fn list_projects(State(st): State<AppState>) -> Response {
                 "audio_only": audio_only,
                 "mtime": mtime,
                 "done": done,
+                "voiced": voiced_segments,
+                "incomplete": incomplete,
             }));
         }
     }
@@ -2017,6 +2028,7 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
         .map(|(_, q)| q)
         .unwrap_or_else(|| "q8_0".to_string());
     eprintln!("[models] render: engine={} · TTS={} (q={}) · SEP={}", tts_engine, higgs_model_root.display(), higgs_quant, sep_model.display());
+    let cancel_token = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let paths = render::RenderPaths {
         input,
         bench: models::bench_enabled(&st.models_root),
@@ -2042,6 +2054,7 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
         tts_engine,
         voxcpm2_quant,
         higgs_execution: models::resolve_higgs_execution(&sel).to_string(),
+        cancel_token: Some(cancel_token.clone()),
     };
 
     let dir_for_job = dir.clone();
@@ -2075,7 +2088,7 @@ async fn render_project(State(st): State<AppState>, AxPath(pid): AxPath<String>)
         bake_render_result(regen.then_some(&proj), &proj_path, &dir_for_job, false);
         Ok(json!({ "output": out_for_result.to_string_lossy() }))
     });
-    let job_id = st.jobs.enqueue_with_meta("render", &pid, job).await;
+    let job_id = st.jobs.enqueue_with_cancel("render", &pid, cancel_token, job).await;
     Json(json!({ "job_id": job_id })).into_response()
 }
 
@@ -2170,6 +2183,7 @@ async fn export_lang(
         .map(|(_, q)| q)
         .unwrap_or_else(|| "q8_0".to_string());
     let output = dst_dir.join("output.mp4");
+    let cancel_token = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let paths = render::RenderPaths {
         input,
         bench: models::bench_enabled(&st.models_root),
@@ -2195,6 +2209,7 @@ async fn export_lang(
         tts_engine,
         voxcpm2_quant,
         higgs_execution: models::resolve_higgs_execution(&sel).to_string(),
+        cancel_token: Some(cancel_token.clone()),
     };
 
     let dst_for_job = dst_dir.clone();
@@ -2256,7 +2271,7 @@ async fn export_lang(
         render::run(&p, &paths, true, &cb)?;
         Ok(json!({ "output": out_res.to_string_lossy(), "project_id": new_pid_res }))
     });
-    let job_id = st.jobs.enqueue_with_meta("export_lang", &new_pid, job).await;
+    let job_id = st.jobs.enqueue_with_cancel("export_lang", &new_pid, cancel_token, job).await;
     Json(json!({ "job_id": job_id, "project_id": new_pid })).into_response()
 }
 
@@ -2390,6 +2405,7 @@ async fn dub_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
     let voxcpm2_quant = models::resolve_voxcpm2(&st.models_root, &sel)
         .map(|(_, q)| q)
         .unwrap_or_else(|| "q8_0".to_string());
+    let cancel_token = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let paths = render::RenderPaths {
         input,
         bench: models::bench_enabled(&st.models_root),
@@ -2415,6 +2431,7 @@ async fn dub_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         tts_engine,
         voxcpm2_quant,
         higgs_execution: models::resolve_higgs_execution(&sel).to_string(),
+        cancel_token: Some(cancel_token.clone()),
     };
     let dir_for_job = dir.clone();
     let job: jobs::JobFn = Box::new(move |progress: jobs::ProgressFn| {
@@ -2427,7 +2444,7 @@ async fn dub_audio_project(State(st): State<AppState>, AxPath(pid): AxPath<Strin
         bake_render_result(regen.then_some(&proj), &proj_path, &dir_for_job, false);
         Ok(json!({ "audio": out.to_string_lossy() }))
     });
-    let job_id = st.jobs.enqueue(job).await;
+    let job_id = st.jobs.enqueue_with_cancel("dub_audio", &pid, cancel_token, job).await;
     Json(json!({ "job_id": job_id })).into_response()
 }
 
@@ -2451,6 +2468,7 @@ async fn synth_segments_project(State(st): State<AppState>, AxPath(pid): AxPath<
     let voxcpm2_quant = models::resolve_voxcpm2(&st.models_root, &sel)
         .map(|(_, q)| q)
         .unwrap_or_else(|| "q8_0".to_string());
+    let cancel_token = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let paths = render::RenderPaths {
         input,
         bench: models::bench_enabled(&st.models_root),
@@ -2476,6 +2494,7 @@ async fn synth_segments_project(State(st): State<AppState>, AxPath(pid): AxPath<
         tts_engine,
         voxcpm2_quant,
         higgs_execution: models::resolve_higgs_execution(&sel).to_string(),
+        cancel_token: Some(cancel_token.clone()),
     };
     let dir_for_job = dir.clone();
     let job: jobs::JobFn = Box::new(move |progress: jobs::ProgressFn| {
@@ -2490,8 +2509,19 @@ async fn synth_segments_project(State(st): State<AppState>, AxPath(pid): AxPath<
         }
         Ok(json!({ "mode": "synth", "audio": out.to_string_lossy() }))
     });
-    let job_id = st.jobs.enqueue_with_meta("dub_audio", &pid, job).await;
+    let job_id = st.jobs.enqueue_with_cancel("dub_audio", &pid, cancel_token, job).await;
     Json(json!({ "job_id": job_id })).into_response()
+}
+
+/// POST /projects/{pid}/resume-dub — возобновить озвучку прерванного проекта с места остановки.
+async fn resume_dub_project(State(st): State<AppState>, AxPath(pid): AxPath<String>) -> Response {
+    dub_audio_project(State(st), AxPath(pid)).await
+}
+
+/// POST /projects/{pid}/cancel-dub — остановить генерацию озвучки для проекта.
+async fn cancel_dub_project(State(st): State<AppState>, AxPath(pid): AxPath<String>) -> Response {
+    let ok = st.jobs.cancel_by_pid(&pid).await;
+    Json(json!({ "ok": ok })).into_response()
 }
 
 /// POST /projects/{pid}/mix-audio — явное сведение дорожки дубляжа/закадра в dub_audio.m4a (кнопка «Свести аудио»).

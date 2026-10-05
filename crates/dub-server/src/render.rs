@@ -84,6 +84,29 @@ pub struct RenderPaths {
     pub tts_engine: String,    // "higgs" | "voxcpm2"
     pub voxcpm2_quant: String, // "q8_0" | "bf16"
     pub higgs_execution: String, // "server" | "dll"
+    pub cancel_token: Option<Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl RenderPaths {
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_token
+            .as_ref()
+            .map_or(false, |t| t.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+/// Атомарно зафиксировать успешную генерацию фразы в project.json:
+/// выставляет s.ckpt = Some(ckpt_hash) и s.dirty = false под PROJECT_WRITE_LOCK.
+pub(crate) fn checkpoint_segment(dir: &Path, seg_id: &str, ckpt: &str) {
+    let Ok(_guard) = crate::PROJECT_WRITE_LOCK.lock() else { return; };
+    let proj_path = dir.join("project.json");
+    let Ok(text) = std::fs::read_to_string(&proj_path) else { return; };
+    let Ok(mut cur) = dub_core::Project::from_json(&text) else { return; };
+    if let Some(s) = cur.segments.iter_mut().find(|s| s.id == seg_id) {
+        s.ckpt = Some(ckpt.to_string());
+        s.dirty = false;
+        let _ = crate::save_project_unlocked(dir, &cur);
+    }
 }
 
 pub type Progress<'a> = dyn Fn(Value) + Send + Sync + 'a;
@@ -934,7 +957,9 @@ fn build_dub(
             }
             let sid = crate::segment_cache::audio_key(s);
             let raw = wd.join(format!("seg_{sid}.wav"));
-            (regen_dub && s.dirty) || !raw.is_file()
+            let cur_ckpt = crate::segment_cache::compute_ckpt(s, &paths.tts_engine);
+            let is_valid = raw.is_file() && !s.dirty && s.ckpt.as_deref() == Some(&cur_ckpt);
+            (regen_dub && s.dirty) || !is_valid
         })
         .count();
 
@@ -1518,6 +1543,14 @@ fn build_dub(
             emit(progress, "tts", &format!("облачный TTS: {} сегментов в {} параллельных потоков", jobs.len(), conc));
             let ok = crate::cloud_tts::synth_batch(&paths.models_root, jobs, conc);
             emit(progress, "tts", &format!("облачный TTS: пре-синтез готов ({ok} сегментов)"));
+            for &(_fi, s) in segs.iter() {
+                let sid = crate::segment_cache::audio_key(s);
+                let raw = wd.join(format!("seg_{sid}.wav"));
+                if raw.is_file() {
+                    let cur_ckpt = crate::segment_cache::compute_ckpt(s, &paths.tts_engine);
+                    checkpoint_segment(wd, &s.id, &cur_ckpt);
+                }
+            }
         }
     }
     let dirty_total = dirty_count;
@@ -1525,6 +1558,10 @@ fn build_dub(
     let mut engine_dead = false; // движок завис в DLL (ENGINE_STUCK) — больше не трогаем, остаток на оригинале
     let mut custom_ref_cache: std::collections::HashMap<String, (PathBuf, Option<String>)> = std::collections::HashMap::new();
     for &(fi, s) in segs.iter() {
+        if paths.is_cancelled() {
+            emit(progress, "tts", "⏹ Озвучка приостановлена пользователем");
+            return Err("Озвучка приостановлена пользователем".to_string());
+        }
         // Кэш-файл сегмента — ПО ЕГО ID, не по индексу fi. Кэш переиспользуется между рендерами (не-dirty
         // сегменты не ре-синтезируются). При индекс-имени удаление/перестановка сегмента сдвигает индексы —
         // и чистый сегмент подхватил бы seg_{fi}.wav ПРЕДЫДУЩЕГО жильца индекса => чужая речь/длительность =
@@ -1704,12 +1741,10 @@ fn build_dub(
             .map(|t| t.clamp(0.05, 2.00));
         let effective_temp: f64 = custom_temp.unwrap_or(user_voice_temp);
 
-        // Синтез ТОЛЬКО если сегмент dirty (правился текст/спикер/голос) ИЛИ нет кэша. Реф-клипы
-        // пересобираются каждый рендер, поэтому mtime-сравнение с рефом («stale_ref») ошибочно
-        // помечало ВЕСЬ кэш устаревшим на каждом рендере → экспорт ре-роллил уже одобренную озвучку
-        // («скидывалось»). Смена голоса и так метит все сегменты dirty (op_recast/op_segment), так что
-        // dirty-флага достаточно: не-dirty сегменты переиспользуют свой seg_XXX.wav между рендерами.
-        let need_synth = (regen_dub && s.dirty) || !raw.is_file();
+        // Синтез ТОЛЬКО если сегмент dirty (правился текст/спикер/голос) ИЛИ нет валидного кэша (ckpt).
+        let cur_ckpt = crate::segment_cache::compute_ckpt(s, &paths.tts_engine);
+        let is_valid = raw.is_file() && !s.dirty && s.ckpt.as_deref() == Some(&cur_ckpt);
+        let need_synth = (regen_dub && s.dirty) || !is_valid;
         // Полный провал лестницы на КОРОТКОМ сегменте -> оригинальная реплика вместо артефакта
         // (объявлен на уровне итерации: ниже гейтит и ASR-QC этого сегмента).
         let mut kept_original = false;
@@ -1742,6 +1777,7 @@ fn build_dub(
             match crate::cloud_tts::synth_audio(&paths.models_root, &clean_cloud_tgt, cv) {
                 Ok(wav) => {
                     std::fs::write(&raw, &wav).map_err(|e| format!("запись облачного seg_{sid}: {e}"))?;
+                    checkpoint_segment(wd, &s.id, &cur_ckpt);
                 }
                 Err(e) => {
                     emit(progress, "tts", &format!("⚠ фраза #{} ({sid}): облачный TTS не удался ({e}) — оригинал", fi + 1));
@@ -1960,6 +1996,7 @@ fn build_dub(
             if !kept_original {
                 let wav = AudiocppEngine::encode_wav(&samples, sr, 1);
                 std::fs::write(&raw, &wav).map_err(|e| format!("запись seg_{sid}: {e}"))?;
+                checkpoint_segment(wd, &s.id, &cur_ckpt);
             }
             // Много ретраев подряд/суммарно = систем. проблема (стенд/VRAM или реф-клипы) → стоп с ошибкой.
             if retried {

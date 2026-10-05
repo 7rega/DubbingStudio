@@ -19,7 +19,13 @@ const FFMPEG: &str = "ffmpeg";
 pub fn filter_script_flag() -> &'static str {
     static FLAG: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
     FLAG.get_or_init(|| {
-        let major = Command::new(FFMPEG)
+        let mut cmd = Command::new(FFMPEG);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let major = cmd
             .arg("-version")
             .output()
             .ok()
@@ -179,7 +185,7 @@ mod graph_tests {
 }
 
 /// Вжечь блюр боксов оригинала + оверлей ASS. blur_boxes: [(x,y,w,h,t0,t1)]. Без аудио (муксится
-/// отдельно). NVENC only (нет тихого CPU-фолбэка). Порт captions.burn.
+/// отдельно). При сбое GPU-декода (-hwaccel cuda) автоматически фолбэчится на CPU-декод, а при сбое NVENC — на программный x264/x265.
 #[allow(clippy::too_many_arguments)]
 pub fn burn(
     video: &Path,
@@ -231,17 +237,47 @@ pub fn burn(
         vec!["-vf".into(), ass_f.clone()]
     };
 
-    let enc = if gpu_encode { nv } else { sw };
+    let enc = if gpu_encode { &nv } else { &sw };
     // Таймаут пропорционален длительности: фикс-30мин зарезал бы легитимный burn многочасового
-    // фильма (NVENC ~5-10x риалтайма, softwarе медленнее). 4x длительность + 10 мин запас, минимум 30 мин.
+    // фильма (NVENC ~5-10x риалтайма, software медленнее). 4x длительность + 10 мин запас, минимум 30 мин.
     let dur_secs = probe_duration_secs(video).unwrap_or(0.0);
     let timeout = BURN_TIMEOUT_SECS.max((dur_secs * 4.0) as u64 + 600);
-    run_ffmpeg(video, &vargs, &enc, out, gpu_decode, timeout)
+    let mut res = run_ffmpeg(video, &vargs, enc, out, gpu_decode, timeout);
+
+    // Фолбэк 1: если GPU-декод (-hwaccel cuda) завершился с ошибкой (например, cuMemcpy2DAsync /
+    // CUDA_ERROR_INVALID_VALUE на вертикальных или нестандартных видео при возврате кадров из VRAM
+    // в софтверные фильтры libass/drawbox), повторяем с CPU-декодом (энкодер остаётся NVENC).
+    if let Err(e) = &res {
+        if gpu_decode {
+            eprintln!("[burn] GPU-декод (-hwaccel cuda) завершился с ошибкой:\n{e}\n[burn] Повторная попытка с CPU-декодом...");
+            let _ = std::fs::remove_file(out);
+            res = run_ffmpeg(video, &vargs, enc, out, false, timeout);
+        }
+    }
+
+    // Фолбэк 2: если и CPU-декод + NVENC не удался (или NVENC не поддерживается для разрешения/формата),
+    // повторяем с программным кодированием на CPU (libx264/libx265).
+    if let Err(e) = &res {
+        if gpu_encode {
+            eprintln!("[burn] GPU-кодирование (NVENC) завершилось с ошибкой:\n{e}\n[burn] Повторная попытка с программным кодеком (CPU)...");
+            let _ = std::fs::remove_file(out);
+            let sw_timeout = BURN_TIMEOUT_SECS.max((dur_secs * 8.0) as u64 + 1200);
+            res = run_ffmpeg(video, &vargs, &sw, out, false, sw_timeout);
+        }
+    }
+
+    res
 }
 
 /// Длительность видео в секундах через ffprobe (для пропорционального таймаута burn). Ошибка -> None.
 fn probe_duration_secs(video: &Path) -> Option<f64> {
-    let out = Command::new(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" })
+    let mut cmd = Command::new(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let out = cmd
         .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
         .arg(video)
         .output()
@@ -294,6 +330,11 @@ fn output_with_timeout(mut cmd: Command, secs: u64, log_cmd: bool) -> Result<std
         eprintln!("[burn] ffmpeg: {cmd:?}");
     }
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     let mut child = cmd.spawn().map_err(|e| format!("ffmpeg запуск: {e}"))?;
     let mut so = child.stdout.take().expect("piped stdout");
     let mut se = child.stderr.take().expect("piped stderr");

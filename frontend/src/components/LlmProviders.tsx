@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Eye, EyeOff, RefreshCw, Trash2 } from "lucide-react";
 import { api, llmProviderOf, slot, type LlmProviderKind, type Selection } from "../lib/api";
+import { useStore } from "../store";
 import OpenRouterModelSelect from "./OpenRouterModelSelect";
 
 type Stage = "llm" | "vision";
@@ -14,8 +15,14 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const rowCls = "px-2.5 py-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]";
 const fieldCls = "flex-1 min-w-0 px-2 py-1 rounded-md bg-[var(--color-surface)] border border-[var(--color-border)] text-[12px] mono focus:border-[var(--color-accent)] outline-none disabled:opacity-60";
 const selectCls = "w-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none";
-const tabCls = (on: boolean) =>
-  `flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${on ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"} disabled:opacity-40`;
+const tabCls = (on: boolean, disabled?: boolean) =>
+  `flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${
+    disabled
+      ? "opacity-40 cursor-not-allowed border-white/[0.06] text-[var(--color-muted)]"
+      : on
+      ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]"
+      : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
+  } disabled:opacity-40`;
 
 // Ключ локального сервера: наружу не отдаётся, поле всегда пустое; сохранённый виден по плейсхолдеру. Ключ
 // принадлежит адресу, для которого сохранён: `url` — сохранённый адрес, `typedUrl` — адрес в поле (ключ
@@ -75,7 +82,14 @@ export default function LlmProviders({ selection, hasOrKey, onChanged }: {
       (e: unknown) => { setErr(t("providers.saveFailed", { detail: errorText(e) })); return false; },
     );
   const savedUrl = sel("srv_url") || DEFAULT_SERVER_URL;
-  const usesServer = llmProviderOf(selection, "llm") === "server" || llmProviderOf(selection, "vision") === "server";
+  const isVisionOn = sel("vision_on") !== "0";
+  const usesServer = llmProviderOf(selection, "llm") === "server" || (isVisionOn && llmProviderOf(selection, "vision") === "server");
+
+  const toggleVision = async () => {
+    const next = !isVisionOn;
+    useStore.getState().setVisionOn(next);
+    await set("vision_on", next ? "1" : "0");
+  };
 
   useEffect(() => {
     if (!usesServer) return;
@@ -95,6 +109,8 @@ export default function LlmProviders({ selection, hasOrKey, onChanged }: {
   };
 
   const stageBlock = (stage: Stage) => {
+    const isVision = stage === "vision";
+    const disabled = isVision && !isVisionOn;
     const provider = llmProviderOf(selection, stage);
     const serverModel = sel(SERVER_MODEL_KEY[stage]);
     const tabs: { id: LlmProviderKind; label: string; disabled?: boolean; title?: string }[] = [
@@ -104,17 +120,46 @@ export default function LlmProviders({ selection, hasOrKey, onChanged }: {
     ];
     return (
       <div key={stage} className={`${rowCls} space-y-1.5`}>
-        <div className="flex items-baseline gap-2">
-          <span className="text-[12px] font-medium">{stage === "llm" ? t("providers.translate") : t("providers.vision")}</span>
-          <span className="mono text-[10px] text-[var(--color-muted)] truncate">{stage === "llm" ? t("providers.translateHint") : t("providers.visionHint")}</span>
-        </div>
+        {isVision ? (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-baseline gap-2 min-w-0">
+              <span className="text-[12px] font-medium text-[var(--color-text)]">{t("providers.vision")}</span>
+              <span className="mono text-[10px] text-[var(--color-muted)] truncate">
+                {isVisionOn ? t("providers.visionHint") : t("providers.visionOff")}
+              </span>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isVisionOn}
+              onClick={toggleVision}
+              title={isVisionOn ? t("providers.visionToggleOn") : t("providers.visionToggleOff")}
+              className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${
+                isVisionOn
+                  ? "bg-[var(--color-accent)]"
+                  : "bg-white/[0.08] border border-white/[0.12] hover:bg-white/[0.12]"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${
+                  isVisionOn ? "left-[18px]" : "left-0.5"
+                }`}
+              />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-baseline gap-2">
+            <span className="text-[12px] font-medium">{t("providers.translate")}</span>
+            <span className="mono text-[10px] text-[var(--color-muted)] truncate">{t("providers.translateHint")}</span>
+          </div>
+        )}
         <div className="flex gap-1">
           {tabs.map((tab) => (
-            <button key={tab.id} disabled={tab.disabled} title={tab.title} className={tabCls(provider === tab.id)}
-              onClick={() => { if (provider !== tab.id) set(PROVIDER_KEY[stage], tab.id); }}>{tab.label}</button>
+            <button key={tab.id} disabled={disabled || tab.disabled} title={tab.title} className={tabCls(provider === tab.id, disabled)}
+              onClick={() => { if (!disabled && provider !== tab.id) set(PROVIDER_KEY[stage], tab.id); }}>{tab.label}</button>
           ))}
         </div>
-        {provider === "server" && (
+        {!disabled && provider === "server" && (
           <select value={serverModel} onChange={(e) => { if (e.target.value) set(SERVER_MODEL_KEY[stage], e.target.value); }} className={selectCls}
             aria-label={stage === "llm" ? t("providers.pickTranslateModel") : t("providers.pickVisionModel")}>
             <option value="">{serverModels === null && !serverErr ? t("providers.loadingModels") : stage === "llm" ? t("providers.pickTranslateModel") : t("providers.pickVisionModel")}</option>
@@ -122,10 +167,15 @@ export default function LlmProviders({ selection, hasOrKey, onChanged }: {
             {(serverModels ?? []).map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
         )}
-        {provider === "openrouter" && (
+        {!disabled && provider === "openrouter" && (
           <OpenRouterModelSelect kind={stage} value={sel(OPENROUTER_MODEL_KEY[stage])}
             onChange={(id) => { if (id) set(OPENROUTER_MODEL_KEY[stage], id); }}
             placeholder={stage === "llm" ? t("providers.pickTranslateModel") : t("providers.visionAsTranslate")} />
+        )}
+        {disabled && (
+          <div className="text-[11px] text-[var(--color-muted)] px-0.5 py-0.5">
+            {t("providers.visionDisabledNotice")}
+          </div>
         )}
       </div>
     );
