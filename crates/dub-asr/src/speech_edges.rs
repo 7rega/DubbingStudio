@@ -17,6 +17,93 @@ impl Envelope {
         }
         m
     }
+    /// If a word begins inside dead silence (e.g. Qwen3 snapping to snippet sample 0),
+    /// advance start forward to acoustic onset, leaving a 20ms lead-in margin.
+    pub fn trim_start_silence(&self, start: f64, end: f64) -> f64 {
+        if self.rms.is_empty() || !(end > start) {
+            return start;
+        }
+        let i0 = (((start - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len());
+        let i_limit = (((end - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len());
+        let mut cur = i0;
+        // Quiet threshold: 0.0025 RMS corresponds to quiet ambient/room level
+        while cur < i_limit && self.rms[cur] < 0.0025 {
+            cur += 1;
+        }
+        // Only trim if there is significant leading silence (at least 80 ms = 16 frames)
+        if cur.saturating_sub(i0) >= 16 {
+            let onset = (cur as f64 * 0.005 + 0.005 - 0.020).max(start);
+            round_ms(onset)
+        } else {
+            start
+        }
+    }
+    /// If the final word ends inside trailing ambient noise/silence (e.g. Qwen3 overshooting into room tone),
+    /// pull back to acoustic offset, leaving a 30ms margin.
+    pub fn trim_end_silence(&self, start: f64, end: f64) -> f64 {
+        if self.rms.is_empty() || !(end > start) {
+            return end;
+        }
+        let i_end = (((end - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len().saturating_sub(1));
+        let i_start = (((start - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len().saturating_sub(1));
+
+        let mut peak = 0.0f64;
+        for i in i_start..=i_end {
+            peak = peak.max(self.rms[i]);
+        }
+        let floor = (0.0035f64).max(peak * 0.08);
+
+        let mut cur = i_end;
+        while cur > i_start && self.rms[cur] < floor {
+            cur -= 1;
+        }
+
+        // Only trim if trailing ambient noise/silence is at least 120 ms (24 frames)
+        if i_end.saturating_sub(cur) >= 24 {
+            let offset = (cur as f64 * 0.005 + 0.005 + 0.030).min(end).max(start);
+            round_ms(offset)
+        } else {
+            end
+        }
+    }
+    /// Controlled forward expansion for sustained vowels / shouts on the final word.
+    /// Only expands if acoustic energy is actively vibrating at the word boundary (RMS >= 0.015),
+    /// decays along the vowel envelope above speech floor (>= 0.010), and is capped at +250ms.
+    pub fn expand_tail(&self, w: &TimedWord, hi: f64) -> f64 {
+        if self.rms.is_empty() || !(hi > w.end) {
+            return w.end;
+        }
+        let edge = w.end;
+        let i_edge = (((edge - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len());
+        let edge_rms = self.rms.get(i_edge).copied().unwrap_or(0.0);
+
+        let i_wstart = (((w.start - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len());
+        let mut word_peak = edge_rms;
+        for i in i_wstart..=i_edge.min(self.rms.len().saturating_sub(1)) {
+            word_peak = word_peak.max(self.rms[i]);
+        }
+
+        // Only expand if the voice is still actively vibrating / shouting at edge
+        if edge_rms < 0.015 || edge_rms < word_peak * 0.20 {
+            return edge;
+        }
+
+        let floor = (0.010f64).max(word_peak * 0.15);
+        let limit_t = hi.min(edge + 0.250);
+        let stop = (((limit_t - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len());
+
+        let mut cur = i_edge;
+        while cur + 1 < stop && self.rms[cur + 1] >= floor {
+            cur += 1;
+        }
+
+        let expanded = cur as f64 * 0.005 + 0.005;
+        if expanded - edge >= 0.030 {
+            round_ms(expanded)
+        } else {
+            edge
+        }
+    }
     pub fn expand(&self,w:&TimedWord,start:bool,lo:f64,hi:f64)->f64 {
         let edge=if start{w.start}else{w.end};
         let first=((edge-0.46).max(0.0)/0.005) as usize;
@@ -146,5 +233,15 @@ mod tests {
         let end=env.expand(&word,false,0.0,3.0);
         assert!(end>1.55,"shout tail cropped at {end}");
         assert!(end<1.95,"tail overran into silence: {end}");
+    }
+    #[test]
+    fn trims_leading_dead_silence() {
+        let mut audio = vec![0.0f32; 32000];
+        for i in 16000..24000 {
+            audio[i] = (0.05 * ((i as f64) * 0.5).sin()) as f32;
+        }
+        let env = Envelope::new(&audio);
+        let trimmed = env.trim_start_silence(0.2, 1.5);
+        assert!(trimmed >= 0.95 && trimmed <= 1.05, "expected onset near 1.0s, got {trimmed}");
     }
 }

@@ -127,6 +127,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "sortformer" => vec![("diar_model", "sortformer".into())],
         "nemotron-bf16" => vec![("diar_model", "nemotron-bf16".into())],
         "nemotron-q8_0" => vec![("diar_model", "nemotron-q8_0".into())],
+        "alignment-q8_0" => vec![("align_model", "q8_0".into())],
         _ => vec![],
     }
 }
@@ -136,7 +137,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
 pub fn is_selection_key(key: &str) -> bool {
     matches!(
         key,
-        "tts" | "higgs_quant" | "voxcpm2_quant" | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device"
+        "tts" | "higgs_quant" | "voxcpm2_quant" | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device" | "align_model" | "align_lang"
             // Backend КАЖДОЙ локальной стадии независимо (auto|gpu|cpu): любой движок на любой инстанс.
             // gpu = CUDA, cpu = без NVIDIA. sep=сепарация(BSRoformer CUDA/CPU-сборка), diar=диаризация
             // (Sortformer onnx CUDA-EP/CPU), asr=локальный ASR (Parakeet onnx / Whisper CTranslate2).

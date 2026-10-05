@@ -70,17 +70,17 @@ pub fn fingerprint(project: &Project) -> Result<String,String> {
 pub fn language(project:&Project, requested:Option<&str>) -> Result<String,String> {
     let explicit=requested.filter(|l| !l.is_empty() && *l!="auto");
     let lang=explicit.or_else(|| project.meta.extra.get("detected_src_lang").and_then(Value::as_str))
-        .or_else(||project.meta.extra.get("src_lang").and_then(Value::as_str)).unwrap_or("auto");
-    match lang {
-        "en"|"English"|"english" => Ok("en".into()),
-        "auto"|"" => Err("ALIGN_LANGUAGE_REQUIRED: Укажите язык оригинала: для первой версии поддерживается английский.".into()),
-        _ => Err(format!("ALIGN_LANGUAGE_UNSUPPORTED: {lang}. Установленная модель выравнивания поддерживает английский оригинал.")),
-    }
+        .or_else(||project.meta.extra.get("src_lang").and_then(Value::as_str));
+    let lang = match lang {
+        Some(l) => l,
+        None => return Err("ALIGN_LANGUAGE_REQUIRED: Не указан язык оригинала в проекте. Выберите язык в выпадающем меню выравнивания.".into()),
+    };
+    forced::normalize_language(lang)
 }
 
 pub fn preflight(models:&Path) -> Result<(),String> {
-    if !forced::verified_model_ready(&models.join(forced::MODEL_DIR)) {
-        return Err("ALIGN_MODEL_MISSING: Установите «Выравнивание по вокалу — английский» в меню моделей и компонентов (нужен ONNX Runtime).".into());
+    if !forced::verified_model_ready(models) {
+        return Err("ALIGN_MODEL_MISSING: Установите «Выравнивание речи Qwen3 (Q8_0)» в меню моделей и компонентов.".into());
     }
     Ok(())
 }
@@ -177,16 +177,16 @@ pub fn run(project:&mut Project, work:&Path, models:&Path, requested:Option<&str
     if samples.is_empty() || samples.iter().any(|x| !x.is_finite()) { return Err("ALIGN_AUDIO_INVALID".into()); }
     let duration = samples.len() as f64 / 16000.0;
     let speakers:Vec<_>=project.segments.iter().map(|s|&s.speaker).collect();
-    let key=blake3::hash(serde_json::to_vec(&json!([forced::VERSION,forced::REVISION,audio_hash,lang,inputs,speakers])).map_err(|e|e.to_string())?.as_slice()).to_hex().to_string();
+    let key=blake3::hash(serde_json::to_vec(&json!([forced::VERSION,audio_hash,lang,inputs,speakers])).map_err(|e|e.to_string())?.as_slice()).to_hex().to_string();
     let path=work.join("alignment-cache.json");
     let cached=std::fs::read(&path).ok().and_then(|bytes|serde_json::from_slice::<Cache>(&bytes).ok())
         .filter(|c|c.key==key && valid_outcomes(&inputs,&c.outcomes)
             && c.outcomes.iter().all(|o| o.aligned.as_ref().is_none_or(|a| a.end <= duration + 0.001)));
     let was_cached=cached.is_some();
-    progress(json!({"stage":"aligning","msg":if was_cached{"Выравнивание: проверенный результат из кэша"}else{"Выравнивание слов по английскому вокалу"},"pct":0}));
+    progress(json!({"stage":"aligning","msg":if was_cached{"Выравнивание: проверенный результат из кэша".to_string()}else{format!("Выравнивание слов ({lang})")},"pct":0}));
     let outcomes=if let Some(c)=cached {c.outcomes} else {
-        let mut aligner=Aligner::load(&models.join(forced::MODEL_DIR))?;
-        aligner.align(&inputs,&samples,&|done,total|progress(json!({"stage":"aligning","msg":format!("Выравнивание: окно {done}/{total}"),"pct":done as f64/total.max(1) as f64*95.0})))?
+        let mut aligner=Aligner::load(models)?;
+        aligner.align_with_language(&inputs,&samples,&lang,&|done,total|progress(json!({"stage":"aligning","msg":format!("Выравнивание: реплика {done}/{total}"),"pct":done as f64/total.max(1) as f64*95.0})))?
     };
     if !valid_outcomes(&inputs,&outcomes){return Err("ALIGN_INVALID_RESULT".into());}
     if outcomes.iter().any(|o| o.aligned.as_ref().is_some_and(|a| a.end > duration + 0.001)) { return Err("ALIGN_INVALID_RESULT".into()); }
@@ -266,8 +266,10 @@ mod tests {
     #[test]
     fn auto_language_never_assumes_english() {
         let mut p=Project::default();assert!(language(&p,None).is_err());
-        p.meta.extra.insert("detected_src_lang".into(),json!("ja"));assert!(language(&p,None).is_err());
-        assert_eq!(language(&p,Some("en")).unwrap(),"en");
+        assert!(language(&p,Some("auto")).is_err());
+        p.meta.extra.insert("detected_src_lang".into(),json!("unsupported_xyz"));assert!(language(&p,None).is_err());
+        p.meta.extra.insert("detected_src_lang".into(),json!("ja"));assert_eq!(language(&p,None).unwrap(),"Japanese");
+        assert_eq!(language(&p,Some("en")).unwrap(),"English");
     }
 
     #[test]

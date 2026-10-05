@@ -590,7 +590,7 @@ async fn capabilities(State(st): State<AppState>) -> Json<Value> {
         // Выбор ASR: движок (parakeet|whisper), модель Whisper, квант Whisper (compute_type).
         "selection": models::public_selection(&st.models_root),
         "asr_engines": ["parakeet","whisper"],
-        "alignment": { "languages": ["en"], "ready": dub_asr::forced::verified_model_ready(&st.models_root.join(dub_asr::forced::MODEL_DIR)), "component": "alignment-en" },
+        "alignment": { "languages": ["ru","en","zh","de","fr","es","it","ja","ko","pt","yue"], "ready": dub_asr::forced::verified_model_ready(&st.models_root), "component": "alignment-q8_0" },
         "whisper_models": ["tiny","base","small","medium","large-v3","large-v3-turbo"],
         // Кванты Whisper (compute_type): float16 / int8_float16 задействуют Tensor Cores на CUDA GPU.
         "whisper_computes": ["int8","int8_float16","float16","int8_float32","float32"],

@@ -1,68 +1,94 @@
-//! English text-conditioned alignment. The model and time mapping are pinned
-//! to the validated WhisperX reference; segment identity is never reconstructed.
-use ort::{session::Session, value::TensorRef};
+//! Multilingual forced alignment using Qwen3 Forced Aligner (audio.cpp GGUF).
+//! Supports 11 languages (Russian, English, German, French, Spanish, Italian,
+//! Portuguese, Japanese, Korean, Chinese, Cantonese) on CUDA / CPU.
+
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io::Read, path::Path};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
-pub const VERSION: &str = "wav2vec2-en-fp32-edges-v2";
-pub const COMPONENT: &str = "alignment-en";
-pub const MODEL_DIR: &str = "alignment/en";
-pub const REVISION: &str = "a19f851b3d42865797e410752b4c570c871e4825";
-pub struct ModelFile {
-    pub name: &'static str,
-    pub url: &'static str,
-    pub size: u64,
-    pub hash: &'static str,
-}
-pub const BASE_URL: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/";
-pub const URL_MODEL: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/onnx/model.onnx";
-pub const URL_VOCAB: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/vocab.json";
-pub const URL_CONFIG: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/config.json";
-pub const URL_PREPROC: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/preprocessor_config.json";
-macro_rules! model_file {
-    ($name:literal, $url:expr, $size:literal, $hash:literal) => {
-        ModelFile { name: $name, url: $url, size: $size, hash: $hash }
-    };
-}
-pub const FILES: &[ModelFile] = &[
-    model_file!("model.onnx", URL_MODEL, 377887594, "5659fcc79c33b1000eecf88f8f43bae2c7a9898f608f3c0295f015e1cd3f46d3"),
-    model_file!("vocab.json", URL_VOCAB, 358, "795edde10fe7ae15e260d4f67fe453913ea7f67f69f857755c15ce839a7ea6e9"),
-    model_file!("config.json", URL_CONFIG, 2094, "aeeb74ef2996494acdc86f224d4df1a2da22007ca2135ea6b3f94b0655491655"),
-    model_file!("preprocessor_config.json", URL_PREPROC, 215, "288b3cfae2bedc4fc6de73bfd3fec4b3d29d5d5db5fbd1980884433cd3e60371"),
-];
+pub const VERSION: &str = "qwen3-forced-aligner-v1";
+pub const COMPONENT: &str = "alignment-q8_0";
+pub const MODEL_FILE_NAME: &str = "qwen3-forced-aligner-0.6b-q8_0.gguf";
+pub const MODEL_SUBDIR: &str = "alignment";
+pub const MODEL_REL_PATH: &str = "models/alignment/qwen3-forced-aligner-0.6b-q8_0.gguf";
+pub const MODEL_SIZE: u64 = 1_129_966_496;
+pub const MODEL_URL: &str = "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-ForcedAligner-0.6B-GGUF/qwen3-forced-aligner-0.6b-q8_0.gguf?download=true";
 
-pub fn file_valid(path: &Path, spec: &ModelFile) -> bool {
-    let Ok(mut f) = std::fs::File::open(path) else { return false };
-    if f.metadata().map(|m| m.len()).unwrap_or(0) != spec.size { return false; }
-    let mut hash = blake3::Hasher::new();
-    let mut buf = vec![0u8; 1024 * 1024];
-    loop {
-        match f.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => { hash.update(&buf[..n]); }
-            Err(_) => return false,
+pub fn resolve_model_file(models_root: &Path) -> Option<PathBuf> {
+    // Строгая проверка в подпапке models/alignment
+    let direct = models_root.join(MODEL_SUBDIR).join(MODEL_FILE_NAME);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let with_models = models_root.join("models").join(MODEL_SUBDIR).join(MODEL_FILE_NAME);
+    if with_models.is_file() {
+        return Some(with_models);
+    }
+    None
+}
+
+pub fn model_ready(models_root: &Path) -> bool {
+    resolve_model_file(models_root).is_some()
+}
+
+pub fn verified_model_ready(models_root: &Path) -> bool {
+    resolve_model_file(models_root)
+        .and_then(|p| std::fs::metadata(&p).ok())
+        .map(|m| m.len() == MODEL_SIZE)
+        .unwrap_or(false)
+}
+
+pub fn resolve_audiocpp_cli(models_root: &Path) -> Option<PathBuf> {
+    if let Ok(v) = std::env::var("DUB_STUDIO_AUDIOCPP_CLI") {
+        let p = PathBuf::from(v);
+        if p.is_file() {
+            return Some(p);
         }
     }
-    hash.finalize().to_hex().as_str() == spec.hash
+    let name = if cfg!(windows) { "audiocpp_cli.exe" } else { "audiocpp_cli" };
+    let mut candidates = vec![
+        models_root.join("tools").join("audiocpp").join(name),
+        models_root.join("tools").join(name),
+        models_root.join(name),
+        PathBuf::from("tools/audiocpp").join(name),
+    ];
+    if let Some(parent) = models_root.parent() {
+        candidates.push(parent.join("tools").join("audiocpp").join(name));
+        candidates.push(parent.join("tools").join(name));
+    }
+    // Также проверяем стандартную рабочую директорию DubStudio
+    candidates.push(PathBuf::from("F:\\DubStudio\\tools\\audiocpp").join(name));
+    for c in &candidates {
+        if c.is_file() {
+            return Some(c.clone());
+        }
+    }
+    None
 }
 
-pub fn model_ready(dir: &Path) -> bool {
-    FILES.iter().all(|s| std::fs::metadata(dir.join(s.name)).map(|m| m.len() == s.size).unwrap_or(false))
+pub fn normalize_language(lang: &str) -> Result<String, String> {
+    let l = lang.trim().to_lowercase();
+    match l.as_str() {
+        "ru" | "rus" | "russian" | "русский" | "рус" => Ok("Russian".into()),
+        "en" | "eng" | "english" | "английский" | "англ" => Ok("English".into()),
+        "de" | "ger" | "german" | "немецкий" => Ok("German".into()),
+        "fr" | "fre" | "french" | "французский" => Ok("French".into()),
+        "es" | "spa" | "spanish" | "испанский" => Ok("Spanish".into()),
+        "it" | "ita" | "italian" | "итальянский" => Ok("Italian".into()),
+        "pt" | "por" | "portuguese" | "португальский" => Ok("Portuguese".into()),
+        "ja" | "jpn" | "japanese" | "японский" => Ok("Japanese".into()),
+        "ko" | "kor" | "korean" | "корейский" => Ok("Korean".into()),
+        "zh" | "chi" | "chinese" | "китайский" => Ok("Chinese".into()),
+        "yue" | "cantonese" | "кантонский" => Ok("Cantonese".into()),
+        "auto" | "" => Err("ALIGN_LANGUAGE_REQUIRED: Не указан язык для выравнивания речи.".into()),
+        other => Err(format!(
+            "ALIGN_LANGUAGE_UNSUPPORTED: {other}. Модель поддерживает: Russian, English, German, French, Spanish, Italian, Portuguese, Japanese, Korean, Chinese, Cantonese."
+        )),
+    }
 }
 
-/// Hash once per file metadata revision, not on every capabilities poll.
-pub fn verified_model_ready(dir: &Path) -> bool {
-    type Signature = Vec<(u64, std::time::SystemTime)>;
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<std::path::PathBuf,(Signature,bool)>>> = std::sync::OnceLock::new();
-    let signature: Option<Signature> = FILES.iter().map(|s| {
-        let m=std::fs::metadata(dir.join(s.name)).ok()?;
-        Some((m.len(),m.modified().ok()?))
-    }).collect();
-    let Some(signature)=signature else{return false;};
-    let Ok(mut cache)=CACHE.get_or_init(Default::default).lock() else{return false;};
-    if let Some((old,ready))=cache.get(dir){if old==&signature{return *ready;}}
-    let ready=FILES.iter().all(|s|file_valid(&dir.join(s.name),s));
-    cache.insert(dir.to_path_buf(),(signature,ready));ready
+pub fn round_ms(t: f64) -> f64 {
+    (t * 1000.0).round() / 1000.0
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -72,6 +98,7 @@ pub struct Input {
     pub start: f64,
     pub end: f64,
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimedWord {
     pub word: String,
@@ -79,6 +106,7 @@ pub struct TimedWord {
     pub end: f64,
     pub score: f32,
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Aligned {
     pub start: f64,
@@ -86,211 +114,465 @@ pub struct Aligned {
     pub words: Vec<TimedWord>,
     pub review: bool,
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Outcome {
     pub id: String,
     pub aligned: Option<Aligned>,
     pub reason: Option<String>,
 }
+
 impl Outcome {
-    fn skipped(id: &str, reason: &str) -> Self {
-        Self { id: id.into(), aligned: None, reason: Some(reason.into()) }
+    pub fn skipped(id: &str, reason: &str) -> Self {
+        Self {
+            id: id.into(),
+            aligned: None,
+            reason: Some(reason.into()),
+        }
     }
+}
+
+#[derive(Deserialize, Debug)]
+struct RawWordTimestamp {
+    start_sample: u64,
+    end_sample: u64,
+    #[allow(dead_code)]
+    word: String,
+    #[serde(default)]
+    confidence: Option<f32>,
 }
 
 pub struct Aligner {
-    session: Session,
-    dictionary: HashMap<char, usize>,
-    columns: Vec<usize>,
+    pub model_path: PathBuf,
+    pub cli_bin: PathBuf,
+    pub backend: String,
+    pub language: String,
 }
+
 impl Aligner {
-    pub fn load(dir: &Path) -> Result<Self, String> {
-        for spec in FILES {
-            if !file_valid(&dir.join(spec.name), spec) {
-                return Err(format!("ALIGN_MODEL_MISSING: {}. Установите «Выравнивание по вокалу — английский» в меню компонентов.", spec.name));
-            }
-        }
-        let vocab: HashMap<String, usize> = serde_json::from_slice(&std::fs::read(dir.join("vocab.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-        // Torchaudio's reference head excludes HF's <s>, </s>, <unk> columns.
-        let mut columns = vec![0usize];
-        let mut chars: Vec<(char, usize)> = vocab.iter().filter_map(|(c,&i)| {
-            let mut it = c.chars();
-            let ch = it.next()?;
-            (it.next().is_none()).then_some((ch.to_ascii_lowercase(),i))
-        }).collect();
-        chars.sort_by_key(|(_,i)| *i);
-        let mut dictionary = HashMap::new();
-        for (ch,index) in chars { dictionary.insert(ch,columns.len()); columns.push(index); }
-        crate::ensure_ort_dylib();
-        let session = Session::builder().map_err(|e| e.to_string())?
-            .with_intra_threads(6).map_err(|e| e.to_string())?
-            .commit_from_file(dir.join("model.onnx")).map_err(|e| format!("ALIGN_RUNTIME: {e}"))?;
-        Ok(Self { session, dictionary, columns })
+    pub fn load(models_root: &Path) -> Result<Self, String> {
+        let model_path = resolve_model_file(models_root)
+            .ok_or_else(|| "ALIGN_MODEL_MISSING: Модель «Выравнивание речи Qwen3 (Q8_0)» не найдена. Установите её в меню компонентов.".to_string())?;
+        let cli_bin = resolve_audiocpp_cli(models_root)
+            .ok_or_else(|| "ALIGN_CLI_MISSING: audiocpp_cli не найден в папке tools/audiocpp.".to_string())?;
+        let backend = std::env::var("DUB_ALIGN_BACKEND").unwrap_or_else(|_| "cuda".to_string());
+        Ok(Self {
+            model_path,
+            cli_bin,
+            backend,
+            language: "Russian".to_string(),
+        })
     }
 
-    fn emissions(&mut self, wave: &[f32]) -> Result<Vec<Vec<f32>>, String> {
-        let tensor = TensorRef::from_array_view(([1i64, wave.len() as i64], wave)).map_err(|e| e.to_string())?;
-        let output = self.session.run(ort::inputs![tensor]).map_err(|e| format!("ALIGN_INFERENCE: {e}"))?;
-        let (_,value) = output.iter().next().ok_or("ALIGN_INFERENCE: no output")?;
-        let (shape,data) = value.try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
-        if shape.len()!=3 || shape[0]!=1 || shape[2]!=32 { return Err("ALIGN_INFERENCE: unexpected model shape".into()); }
-        let mut rows = Vec::with_capacity(shape[1] as usize);
-        for frame in data.chunks_exact(32) {
-            let mut row: Vec<f32> = self.columns.iter().map(|&i| frame[i]).collect();
-            if row.iter().any(|x| !x.is_finite()) { return Err("ALIGN_INFERENCE: non-finite emission".into()); }
-            let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let sum: f32 = row.iter().map(|x| (*x-max).exp()).sum();
-            let norm = max+sum.ln();
-            for x in &mut row { *x -= norm; }
-            let wildcard = row[1..].iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            row.push(wildcard);
-            rows.push(row);
+    pub fn set_language(&mut self, lang: &str) {
+        if let Ok(normalized) = normalize_language(lang) {
+            self.language = normalized;
         }
-        Ok(rows)
     }
 
-    pub fn align(&mut self, inputs: &[Input], samples: &[f32], progress: &dyn Fn(usize,usize)) -> Result<Vec<Outcome>,String> {
+    pub fn align(
+        &mut self,
+        inputs: &[Input],
+        samples: &[f32],
+        progress: &dyn Fn(usize, usize),
+    ) -> Result<Vec<Outcome>, String> {
+        self.align_with_language(inputs, samples, &self.language.clone(), progress)
+    }
+
+    pub fn align_with_language(
+        &mut self,
+        inputs: &[Input],
+        samples: &[f32],
+        lang: &str,
+        progress: &dyn Fn(usize, usize),
+    ) -> Result<Vec<Outcome>, String> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let target_lang = normalize_language(lang)?;
         let duration = samples.len() as f64 / 16000.0;
-        let mut result: Vec<Outcome> = inputs.iter().map(|s| Outcome::skipped(&s.id,"not_aligned")).collect();
-        let valid: Vec<bool> = inputs.iter().enumerate().map(|(i,s)| {
-            s.start.is_finite() && s.end.is_finite() && s.start>=0.0 && s.end>s.start && s.end<=duration+0.02
-                && s.end-s.start<=28.0 && !s.text.trim().is_empty()
-                && s.text.split_whitespace().all(|w| w.chars().any(|c| c.is_ascii_alphabetic()) && !w.chars().any(|c| c.is_numeric() || (c.is_alphabetic() && !c.is_ascii())))
-                && (i==0 || inputs[i-1].end<=s.start) && (i+1==inputs.len() || s.end<=inputs[i+1].start)
-        }).collect();
-        for (i,ok) in valid.iter().enumerate() { if !ok { result[i].reason=Some("unsupported_text_bounds_or_overlap".into()); } }
-        let groups = groups(inputs, &valid);
-        for (gi,members) in groups.iter().enumerate() {
-            let first=members[0]; let last=*members.last().unwrap();
-            let mut context=members.clone();
-            if first>0 && valid[first-1] && inputs[first].start-inputs[first-1].end<1.2 { context.insert(0,first-1); }
-            if last+1<inputs.len() && valid[last+1] && inputs[last+1].start-inputs[last].end<1.2 { context.push(last+1); }
-            let start=(inputs[context[0]].start-0.8).max(0.0);
-            let end=(inputs[*context.last().unwrap()].end+0.8).min(duration);
-            if end-start>60.0 { for &i in members { result[i].reason=Some("window_too_long".into()); } continue; }
-            let text=context.iter().map(|&i| inputs[i].text.split_whitespace().collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join(" ");
-            let chars: Vec<char> = text.chars().collect();
-            let a=(start*16000.0) as usize; let b=((end*16000.0) as usize).min(samples.len());
-            if b.saturating_sub(a)<400 { continue; }
-            let emissions=self.emissions(&samples[a..b])?;
-            let wildcard=emissions[0].len()-1;
-            let tokens: Vec<usize> = chars.iter().map(|c| {
-                let c=if *c==' ' { '|' } else if *c=='’' { '\'' } else { c.to_ascii_lowercase() };
-                *self.dictionary.get(&c).unwrap_or(&wildcard)
-            }).collect();
-            let Some(spans)=ctc_path(&emissions,&tokens) else { for &i in members { result[i].reason=Some("ctc_path_failed".into()); } continue; };
-            let mut words=Vec::new();
-            let mut offset=0;
-            for word in text.split_whitespace() {
-                let len=word.chars().count();
-                let indexes: Vec<usize>=(offset..offset+len).filter(|&i| chars[i].is_ascii_alphabetic()).collect();
-                if indexes.is_empty() { return Err("ALIGN_TEXT: empty lexical word".into()); }
-                let begin=spans[indexes[0]].0; let finish=spans[*indexes.last().unwrap()].1;
-                let scale=(end-start)/emissions.len() as f64;
-                words.push(TimedWord { word:word.into(), start:round_ms(start+begin as f64*scale), end:round_ms(start+finish as f64*scale), score:indexes.iter().map(|&j| spans[j].2).sum::<f32>()/indexes.len() as f32 });
-                offset+=len+1;
+        let mut outcomes: Vec<Outcome> = inputs
+            .iter()
+            .map(|s| Outcome::skipped(&s.id, "not_aligned"))
+            .collect();
+
+        // 1. Фильтрация валидных сегментов
+        let valid: Vec<bool> = inputs
+            .iter()
+            .map(|s| {
+                s.start.is_finite()
+                    && s.end.is_finite()
+                    && s.start >= 0.0
+                    && s.end > s.start
+                    && s.end <= duration + 0.1
+                    && !s.text.trim().is_empty()
+            })
+            .collect();
+
+        for (i, ok) in valid.iter().enumerate() {
+            if !ok {
+                outcomes[i].reason = Some("unsupported_text_bounds_or_overlap".into());
             }
-            let mut wi=0;
-            for &i in &context {
-                let count=inputs[i].text.split_whitespace().count();
-                if members.contains(&i) {
-                    let ws=words[wi..wi+count].to_vec();
-                    let start=ws[0].start; let end=ws.last().unwrap().end;
-                    if end>start && (start-inputs[i].start).abs()<=1.5 && (end-inputs[i].end).abs()<=1.5 {
-                        result[i]=Outcome { id:inputs[i].id.clone(), reason:None, aligned:Some(Aligned { start,end,review:ws.iter().any(|w| w.score<0.3),words:ws }) };
-                    } else { result[i].reason=Some("implausible_bounds".into()); }
+        }
+
+        let valid_indices: Vec<usize> = (0..inputs.len()).filter(|&i| valid[i]).collect();
+        if valid_indices.is_empty() {
+            return Ok(outcomes);
+        }
+
+        // 2. Создание временной директории для сэмплов
+        let temp_dir = std::env::temp_dir().join(format!(
+            "dub_align_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+        std::fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("ALIGN_IO_TEMP_DIR: {e}"))?;
+
+        struct SnippetMeta {
+            index: usize,
+            win_start: f64,
+            prev_end: f64,
+            next_start: f64,
+        }
+
+        let envelope = crate::speech_edges::Envelope::new(samples);
+        let mut requests = Vec::new();
+        let mut metas = Vec::new();
+
+        // 3. Нарезка адаптивных окон звука и подготовка requests.json
+        for &i in &valid_indices {
+            let s = &inputs[i];
+            let prev_end = if i > 0 { inputs[i - 1].end } else { 0.0 };
+            let next_start = if i + 1 < inputs.len() { inputs[i + 1].start } else { duration };
+
+            // Проверяем наличие мертвой тишины перед репликой:
+            // если перед s.start тишина (RMS < 0.0025), отступ минимальный (50 мс),
+            // чтобы Qwen3 не прилипал к сэмплу 0 тишины на коротких словах (Oi. и др.)
+            let silence_check_start = (s.start - 0.35).max(prev_end);
+            let is_silent_before = envelope.max_rms(silence_check_start, s.start) < 0.0025;
+
+            let pad_left = if is_silent_before {
+                0.05
+            } else {
+                (0.35f64).min((0.10f64).max((s.start - prev_end) * 0.5))
+            };
+            let pad_right = (0.60f64).min((0.15f64).max((next_start - s.end) * 0.7));
+
+            let win_start = (s.start - pad_left).max(0.0);
+            let win_end = (s.end + pad_right).min(duration);
+
+            let a = (win_start * 16000.0) as usize;
+            let b = ((win_end * 16000.0) as usize).min(samples.len());
+
+            if b.saturating_sub(a) < 160 {
+                continue;
+            }
+
+            let seg_wav = temp_dir.join(format!("seg_{i}.wav"));
+            if let Err(e) = write_wav_16k_mono(&seg_wav, &samples[a..b]) {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Err(format!("ALIGN_IO_WAV: {e}"));
+            }
+
+            let req_id = format!("req_{i}");
+            requests.push(serde_json::json!({
+                "id": req_id,
+                "audio": seg_wav.to_string_lossy(),
+                "language": target_lang,
+                "text": s.text.trim()
+            }));
+
+            metas.push(SnippetMeta {
+                index: i,
+                win_start,
+                prev_end,
+                next_start,
+            });
+        }
+
+        let seq_file = temp_dir.join("requests.json");
+        let seq_data = serde_json::json!({ "requests": requests });
+        if let Err(e) = std::fs::write(&seq_file, serde_json::to_vec(&seq_data).unwrap_or_default()) {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Err(format!("ALIGN_IO_SEQ: {e}"));
+        }
+
+        // 4. Потоковый запуск audiocpp_cli.exe с отображением прогресса в реальном времени
+        let run_and_stream = |backend: &str| -> Result<std::collections::HashMap<String, Vec<RawWordTimestamp>>, (String, String)> {
+            let mut cmd = Command::new(&self.cli_bin);
+            cmd.arg("--task").arg("align");
+            cmd.arg("--family").arg("qwen3_forced_aligner");
+            cmd.arg("--model").arg(&self.model_path);
+            cmd.arg("--backend").arg(backend);
+            cmd.arg("--request-sequence").arg(&seq_file);
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+
+            if let Some(parent) = self.cli_bin.parent() {
+                cmd.current_dir(parent);
+            }
+
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                cmd.creation_flags(CREATE_NO_WINDOW);
+            }
+
+            let mut child = cmd.spawn().map_err(|e| (format!("ALIGN_SPAWN: {e}"), String::new()))?;
+            let child_stdout = child.stdout.take().ok_or_else(|| ("ALIGN_SPAWN_STDOUT".into(), String::new()))?;
+
+            let mut results_by_req: std::collections::HashMap<String, Vec<RawWordTimestamp>> =
+                std::collections::HashMap::new();
+            let mut cur_req_id = None;
+            let mut completed = 0;
+            let total_reqs = metas.len();
+
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(child_stdout);
+            for line_res in reader.lines() {
+                if let Ok(line) = line_res {
+                    if let Some(id_part) = line.strip_prefix("request_id=") {
+                        cur_req_id = Some(id_part.trim().to_string());
+                    } else if let Some(ts_part) = line.strip_prefix("word_timestamps=") {
+                        if let Some(id) = cur_req_id.take() {
+                            if let Ok(words) = serde_json::from_str::<Vec<RawWordTimestamp>>(ts_part.trim()) {
+                                results_by_req.insert(id, words);
+                                completed += 1;
+                                progress(completed, total_reqs);
+                            }
+                        }
+                    }
                 }
-                wi+=count;
             }
-            progress(gi+1,groups.len());
+
+            let status = child.wait().map_err(|e| (format!("ALIGN_WAIT: {e}"), String::new()))?;
+            if !status.success() {
+                let mut err_msg = String::new();
+                if let Some(mut child_stderr) = child.stderr.take() {
+                    use std::io::Read;
+                    let _ = child_stderr.read_to_string(&mut err_msg);
+                }
+                return Err((format!("ALIGN_CLI_EXIT: code {:?}", status.code()), err_msg));
+            }
+
+            Ok(results_by_req)
+        };
+
+        let results_by_req = match run_and_stream(&self.backend) {
+            Ok(res) => res,
+            Err((_err, stderr)) if self.backend != "cpu" => {
+                // Фоллбэк на CPU, если GPU-запуск вернул ошибку
+                match run_and_stream("cpu") {
+                    Ok(cpu_res) => cpu_res,
+                    Err((_, cpu_stderr)) => {
+                        let _ = std::fs::remove_dir_all(&temp_dir);
+                        let out_err = if !cpu_stderr.is_empty() { cpu_stderr } else { stderr };
+                        return Err(format!("ALIGN_CLI_FAILED: {out_err}"));
+                    }
+                }
+            }
+            Err((err, stderr)) => {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                let out_err = if !stderr.is_empty() { stderr } else { err };
+                return Err(format!("ALIGN_CLI_FAILED: {out_err}"));
+            }
+        };
+
+        // 5. Очистка временных файлов
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        // 6. Построение Aligned с акустической огибающей и гарантией валидности границ
+        let total_requests = metas.len();
+        for (step, meta) in metas.into_iter().enumerate() {
+            let req_id = format!("req_{}", meta.index);
+            let s_text = &inputs[meta.index].text;
+            let orig_tokens: Vec<&str> = s_text.split_whitespace().collect();
+
+            if orig_tokens.is_empty() {
+                outcomes[meta.index] = Outcome::skipped(&inputs[meta.index].id, "empty_text");
+                progress(step + 1, total_requests);
+                continue;
+            }
+
+            if let Some(raw_words) = results_by_req.get(&req_id) {
+                if raw_words.is_empty() {
+                    outcomes[meta.index] = Outcome::skipped(&inputs[meta.index].id, "empty_words");
+                } else if raw_words.len() != orig_tokens.len() {
+                    // Число распознанных слов не совпадает с числом токенов (valid_words требует строгого совпадения)
+                    outcomes[meta.index] = Outcome::skipped(&inputs[meta.index].id, "word_count_mismatch");
+                } else {
+                    let mut timed_words = Vec::with_capacity(raw_words.len());
+                    let mut prev_word_end = 0.0f64;
+
+                    for (k, w) in raw_words.iter().enumerate() {
+                        let mut w_start = round_ms(meta.win_start + (w.start_sample as f64 / 16000.0));
+                        let mut w_end = round_ms(meta.win_start + (w.end_sample as f64 / 16000.0));
+
+                        // Гарантируем монотонность и отсутствие нахлёстов между соседними словами
+                        if w_start < prev_word_end {
+                            w_start = prev_word_end;
+                        }
+                        if w_end < w_start {
+                            w_end = w_start;
+                        }
+                        w_start = w_start.min(duration);
+                        w_end = w_end.min(duration);
+                        prev_word_end = w_end;
+
+                        let score = w.confidence.unwrap_or(1.0).clamp(0.0, 1.0);
+                        timed_words.push(TimedWord {
+                            word: orig_tokens[k].to_string(),
+                            start: w_start,
+                            end: w_end,
+                            score,
+                        });
+                    }
+
+                    // Акустическое уточнение:
+                    // 1) Отсечение предречевой тишины на первом слове
+                    let trimmed_start = envelope.trim_start_silence(timed_words[0].start, timed_words[0].end);
+                    timed_words[0].start = trimmed_start;
+                    if timed_words[0].end < timed_words[0].start {
+                        timed_words[0].end = timed_words[0].start;
+                    }
+
+                    // 2) Акустическая калибровка последнего слова:
+                    let last_idx = timed_words.len() - 1;
+                    // а) Отсечение наведённого хвоста фонового шума, если Qwen3 залез в тишину/шум комнаты
+                    let last_trimmed = envelope.trim_end_silence(timed_words[last_idx].start, timed_words[last_idx].end);
+                    timed_words[last_idx].end = last_trimmed.max(timed_words[last_idx].start);
+
+                    // б) Ведение огибающей для реально затянутых гласных и выкриков
+                    let hi = (meta.next_start - 0.02).min(duration).max(timed_words[last_idx].end);
+                    let exp_end = envelope.expand_tail(&timed_words[last_idx], hi);
+                    timed_words[last_idx].end = exp_end.max(timed_words[last_idx].start).min(hi);
+
+                    let first_start = timed_words[0].start;
+                    let last_end = timed_words.last().unwrap().end;
+
+                    // Границы сегмента: безопасный запас, строго first_start <= aligned_start и last_end >= aligned_end
+                    let aligned_start = (first_start - 0.020).max(meta.prev_end).min(first_start);
+                    let aligned_start = round_ms(aligned_start.max(0.0)).min(first_start);
+
+                    let aligned_end = (last_end + 0.020).min(meta.next_start).max(last_end);
+                    let aligned_end = round_ms(aligned_end.min(duration)).max(last_end);
+
+                    if aligned_end > aligned_start {
+                        let review = timed_words.iter().any(|w| w.score < 0.3);
+                        outcomes[meta.index] = Outcome {
+                            id: inputs[meta.index].id.clone(),
+                            aligned: Some(Aligned {
+                                start: aligned_start,
+                                end: aligned_end,
+                                words: timed_words,
+                                review,
+                            }),
+                            reason: None,
+                        };
+                    } else {
+                        outcomes[meta.index] = Outcome::skipped(&inputs[meta.index].id, "implausible_bounds");
+                    }
+                }
+            } else {
+                outcomes[meta.index] = Outcome::skipped(&inputs[meta.index].id, "alignment_failed");
+            }
+
+            progress(step + 1, total_requests);
         }
-        // Acoustic ownership uses the original lexical boundaries of ALL
-        // neighbours, never the previously expanded subtitle frame.
-        let raw=result.clone();
-        let envelope=crate::speech_edges::Envelope::new(samples);
-        for (i,out) in result.iter_mut().enumerate() {
-            if let Some(aligned)=out.aligned.as_mut() {
-                let left=if i==0 {0.0} else { raw[i-1].aligned.as_ref().map(|a| a.end).unwrap_or(inputs[i-1].end) };
-                let right=if i+1==inputs.len() {duration} else {raw[i+1].aligned.as_ref().map(|a| a.start).unwrap_or(inputs[i+1].start)};
-                if left>aligned.start || right<aligned.end { *out=Outcome::skipped(&out.id,"neighbour_conflict"); continue; }
-                let lo=if i==0 {0.0} else {(left+aligned.start)/2.0};
-                let hi=if i+1==inputs.len() {duration} else {(right+aligned.end)/2.0};
-                aligned.start=envelope.expand(&aligned.words[0],true,lo,hi);
-                aligned.end=envelope.expand(aligned.words.last().unwrap(),false,lo,hi);
+
+        // 7. Коррекция граничных акустических запасов между соседними сегментами (для исключения микронахлёстов)
+        for i in 1..inputs.len() {
+            if outcomes[i - 1].aligned.is_some() && outcomes[i].aligned.is_some() {
+                let p_end = outcomes[i - 1].aligned.as_ref().unwrap().end;
+                let c_start = outcomes[i].aligned.as_ref().unwrap().start;
+                if p_end > c_start && inputs[i - 1].end <= inputs[i].start {
+                    let p_last_w = outcomes[i - 1].aligned.as_ref().unwrap().words.last().unwrap().end;
+                    let c_first_w = outcomes[i].aligned.as_ref().unwrap().words.first().unwrap().start;
+                    if p_last_w <= c_first_w {
+                        let mid = round_ms((p_last_w + c_first_w) / 2.0);
+                        if let Some(a_prev) = outcomes[i - 1].aligned.as_mut() {
+                            a_prev.end = mid.max(p_last_w);
+                        }
+                        if let Some(a_cur) = outcomes[i].aligned.as_mut() {
+                            a_cur.start = mid.min(c_first_w);
+                        }
+                    }
+                }
             }
         }
-        // Rejected candidates can expose an unchanged neighbour. Revalidate the
-        // final set; never clip a spoken word to hide a cross-segment conflict.
+
+        // Разрешение оставшихся нахлёстов (если слова физически накладываются)
         loop {
-            let mut reject=Vec::new();
+            let mut reject = Vec::new();
             for i in 1..inputs.len() {
-                let prev=result[i-1].aligned.as_ref().map(|a| a.end).unwrap_or(inputs[i-1].end);
-                let next=result[i].aligned.as_ref().map(|a| a.start).unwrap_or(inputs[i].start);
-                if prev>next && inputs[i-1].end<=inputs[i].start {
-                    if result[i-1].aligned.is_some(){reject.push(i-1);}
-                    if result[i].aligned.is_some(){reject.push(i);}
+                let prev = outcomes[i - 1].aligned.as_ref().map(|a| a.end).unwrap_or(inputs[i - 1].end);
+                let next = outcomes[i].aligned.as_ref().map(|a| a.start).unwrap_or(inputs[i].start);
+                if prev > next && inputs[i - 1].end <= inputs[i].start {
+                    if outcomes[i - 1].aligned.is_some() {
+                        reject.push(i - 1);
+                    }
+                    if outcomes[i].aligned.is_some() {
+                        reject.push(i);
+                    }
                 }
             }
-            if reject.is_empty(){break;}
-            for i in reject {result[i]=Outcome::skipped(&inputs[i].id,"neighbour_conflict");}
+            if reject.is_empty() {
+                break;
+            }
+            for i in reject {
+                outcomes[i] = Outcome::skipped(&inputs[i].id, "neighbour_conflict");
+            }
         }
-        Ok(result)
+
+        Ok(outcomes)
     }
 }
 
-fn groups(inputs:&[Input], valid:&[bool])->Vec<Vec<usize>> {
-    let mut groups=Vec::new(); let mut cur:Vec<usize>=Vec::new();
-    for (i,s) in inputs.iter().enumerate() {
-        if !cur.is_empty() && (!valid[i] || i!=cur[cur.len()-1]+1 || s.start-inputs[*cur.last().unwrap()].end>=1.2 || s.end-inputs[cur[0]].start>18.0) { groups.push(std::mem::take(&mut cur)); }
-        if valid[i] {cur.push(i);}
+fn write_wav_16k_mono(path: &Path, samples: &[f32]) -> Result<(), String> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| e.to_string())?;
+    for &s in samples {
+        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+        writer.write_sample(v).map_err(|e| e.to_string())?;
     }
-    if !cur.is_empty(){groups.push(cur);}
-    groups
-}
-
-pub(crate) fn round_ms(t:f64)->f64 { (t*1000.0).round()/1000.0 }
-
-// Same trellis/backtracking as the pinned WhisperX reference. Retain punctuation
-// as wildcard context, but only alphabetic spans define exported word edges.
-fn ctc_path(emission:&[Vec<f32>],tokens:&[usize])->Option<Vec<(usize,usize,f32)>> {
-    let n=emission.len(); let m=tokens.len(); let stride=m+1;
-    if m==0 || m>n || (n+1).checked_mul(stride)?>20_000_000 {return None;}
-    let mut table=vec![f32::NEG_INFINITY;(n+1)*stride]; table[0]=0.0;
-    let mut blank=0.0;
-    for t in 1..=n {blank+=emission[t-1][0];table[t*stride]=if t>=n+1-m {f32::INFINITY}else{blank};}
-    for t in 0..n {for j in 1..=m {
-        table[(t+1)*stride+j]=(table[t*stride+j]+emission[t][0]).max(table[t*stride+j-1]+emission[t][tokens[j-1]]);
-    }}
-    let mut best=0; for t in 1..=n {if table[t*stride+m]>table[best*stride+m]{best=t;}}
-    let mut j=m; let mut points=Vec::new();
-    for t in (1..=best).rev() {
-        let stay=table[(t-1)*stride+j]+emission[t-1][0];
-        let change=table[(t-1)*stride+j-1]+emission[t-1][tokens[j-1]];
-        let changed=change>stay;
-        points.push((j-1,t-1,emission[t-1][if changed{tokens[j-1]}else{0}].exp()));
-        if changed {j-=1;if j==0{break;}}
-    }
-    if j!=0{return None;}
-    points.reverse();
-    let mut spans=vec![(usize::MAX,0,0.0f32);m];let mut counts=vec![0usize;m];
-    for (j,t,p) in points {spans[j].0=spans[j].0.min(t);spans[j].1=t+1;spans[j].2+=p;counts[j]+=1;}
-    for (span,count) in spans.iter_mut().zip(counts) {if count==0{return None;}span.2/=count as f32;}
-    Some(spans)
+    writer.finalize().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn ctc_keeps_token_order_and_handles_silence() {
-        let e=vec![vec![-0.01,-9.0,-9.0],vec![-9.0,-0.01,-9.0],vec![-0.01,-9.0,-9.0],vec![-9.0,-9.0,-0.01],vec![-0.01,-9.0,-9.0]];
-        let spans=ctc_path(&e,&[1,2]).unwrap();
-        assert_eq!(spans.len(),2);assert!(spans[0].1<=spans[1].0);assert_eq!(spans[1].1,4);
-        assert!(ctc_path(&e,&[1;6]).is_none());
-    }
-    #[test]
-    fn groups_do_not_bridge_invalid_overlap() {
-        let rows=(0..4).map(|i|Input{id:i.to_string(),text:"word".into(),start:i as f64,end:i as f64+0.5}).collect::<Vec<_>>();
-        assert_eq!(groups(&rows,&[true,false,false,true]),vec![vec![0],vec![3]]);
+    fn test_normalize_language() {
+        assert_eq!(normalize_language("ru").unwrap(), "Russian");
+        assert_eq!(normalize_language("rus").unwrap(), "Russian");
+        assert_eq!(normalize_language("russian").unwrap(), "Russian");
+        assert_eq!(normalize_language("en").unwrap(), "English");
+        assert_eq!(normalize_language("eng").unwrap(), "English");
+        assert_eq!(normalize_language("de").unwrap(), "German");
+        assert_eq!(normalize_language("fr").unwrap(), "French");
+        assert_eq!(normalize_language("es").unwrap(), "Spanish");
+        assert_eq!(normalize_language("it").unwrap(), "Italian");
+        assert_eq!(normalize_language("pt").unwrap(), "Portuguese");
+        assert_eq!(normalize_language("ja").unwrap(), "Japanese");
+        assert_eq!(normalize_language("ko").unwrap(), "Korean");
+        assert_eq!(normalize_language("zh").unwrap(), "Chinese");
+        assert_eq!(normalize_language("yue").unwrap(), "Cantonese");
+        assert!(normalize_language("auto").is_err());
+        assert!(normalize_language("").is_err());
+        assert!(normalize_language("unsupported_xyz").is_err());
     }
 }
+

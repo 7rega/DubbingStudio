@@ -327,7 +327,7 @@
     "summary": "Alignment: changed {{count}}, unchanged {{unchanged}}, skipped {{skipped}}, needs review {{review}}",
     "none": "Subtitles are already aligned to vocals",
     "installPrompt": "The alignment component is not installed. Open Settings → Components to install it?",
-    "languagePrompt": "Source language was not detected. Specify the language of the source lines (supported: en):",
+    "languagePrompt": "Source language was not detected. Specify language of source lines (ru, en, de, fr, es, it, pt, ja, ko, zh):",
     "working": "Aligning..."
   },
   "regroup": {

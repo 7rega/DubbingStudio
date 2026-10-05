@@ -181,23 +181,22 @@ pub const NVIDIA_DRIVER_URL: &str = "https://www.nvidia.com/Download/index.aspx"
 pub fn manifest() -> Vec<Component> {
     vec![
         Component {
-            id: "alignment-en",
-            name: "Выравнивание по вокалу — английский (wav2vec2)",
-            purpose: "Точное время слов и границы реплик. Английский оригинал, CPU; требуется ONNX Runtime.",
+            id: "alignment-q8_0",
+            name: "Выравнивание речи Qwen3 (Q8_0)",
+            purpose: "Пословное мультиязычное выравнивание субтитров (11 языков, включая русский). Точность границ до 40 мс.",
             requirement: Requirement::Optional,
             delivery: Delivery::Download,
-            size: 377_890_261,
+            size: dub_asr::forced::MODEL_SIZE,
             files: &[
-                FileSpec { url: dub_asr::forced::URL_MODEL, dest_rel: "models/alignment/en/model.onnx", size: 377887594, extract: Extract::None },
-                FileSpec { url: dub_asr::forced::URL_VOCAB, dest_rel: "models/alignment/en/vocab.json", size: 358, extract: Extract::None },
-                FileSpec { url: dub_asr::forced::URL_CONFIG, dest_rel: "models/alignment/en/config.json", size: 2094, extract: Extract::None },
-                FileSpec { url: dub_asr::forced::URL_PREPROC, dest_rel: "models/alignment/en/preprocessor_config.json", size: 215, extract: Extract::None },
+                FileSpec {
+                    url: dub_asr::forced::MODEL_URL,
+                    dest_rel: dub_asr::forced::MODEL_REL_PATH,
+                    size: dub_asr::forced::MODEL_SIZE,
+                    extract: Extract::None,
+                },
             ],
             markers: &[
-                Marker { rel: "models/alignment/en/model.onnx", expect: 377887594 },
-                Marker { rel: "models/alignment/en/vocab.json", expect: 358 },
-                Marker { rel: "models/alignment/en/config.json", expect: 2094 },
-                Marker { rel: "models/alignment/en/preprocessor_config.json", expect: 215 },
+                Marker { rel: dub_asr::forced::MODEL_REL_PATH, expect: dub_asr::forced::MODEL_SIZE },
             ],
             external_url: None,
         },
@@ -1065,8 +1064,8 @@ pub fn component_status(repo_root: &Path, c: &Component) -> ComponentStatus {
     let (installed, detail) = if c.delivery == Delivery::External {
         // Драйвер: детект по загрузке nvcuda.dll (часть драйвера). Версию не тянем (без NVML-зависимости).
         (detect_driver(), None)
-    } else if c.id == "alignment-en" {
-        (dub_asr::forced::verified_model_ready(&repo_root.join("models/alignment/en")), Some("CPU · English · ONNX Runtime".into()))
+    } else if c.id == "alignment-q8_0" {
+        (dub_asr::forced::verified_model_ready(&repo_root.join("models")), Some("CUDA / CPU · 11 языков · GGUF".into()))
     } else if c.id == "ffmpeg" {
         // ffmpeg дублирует пайплайн через PATH: если он уже в системе (Command::new("ffmpeg") найдёт) —
         // считаем установленным и НЕ навязываем закачку. Иначе — по маркеру в tools/ffmpeg.
@@ -1406,12 +1405,7 @@ pub fn download_components(
     progress: &ProgressCb,
 ) -> Result<Value, String> {
     let all = manifest();
-    let mut ids = ids.to_vec();
-    if ids.iter().any(|id| id == "alignment-en") && !all.iter()
-        .filter(|c| c.id == "onnxruntime" || c.id == "onnxruntime-gpu")
-        .any(|c| component_status(repo_root, c).installed) {
-        ids.push("onnxruntime".into());
-    }
+    let ids = ids.to_vec();
     let selected: Vec<&Component> = all
         .iter()
         .filter(|c| ids.iter().any(|x| x == c.id) && c.delivery == Delivery::Download)
@@ -1446,9 +1440,7 @@ pub fn download_components(
             }
             if f.extract == Extract::None && f.size != 0 {
                 if let Ok(meta) = std::fs::metadata(&dest) {
-                    if meta.len() == f.size && (c.id != "alignment-en" ||
-                        dub_asr::forced::FILES.iter().find(|s| dest.file_name().and_then(|n|n.to_str()) == Some(s.name))
-                            .is_some_and(|s|dub_asr::forced::file_valid(&dest,s))) {
+                    if meta.len() == f.size {
                         continue; // уже на месте
                     }
                 }
@@ -1747,7 +1739,7 @@ pub fn download_components(
     let mut results = Vec::new();
     for c in &selected {
         let st = component_status(repo_root, c);
-        if c.id == "alignment-en" && !st.installed {
+        if c.id == "alignment-q8_0" && !st.installed {
             return Err("ALIGN_MODEL_INVALID: файлы модели не прошли проверку. Повторите установку компонента.".into());
         }
         // Скачанный вариант модели -> делаем активным (models/active.json). Резолв при следующей

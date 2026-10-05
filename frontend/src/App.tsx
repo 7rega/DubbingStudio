@@ -1165,6 +1165,8 @@ function DropZone() {
   const [autoRegroup, setAutoRegroup] = useState<boolean>(() => localStorage.getItem("dub-auto-regroup") === "1");
   const setAutoAlignSaved = (v: boolean) => { setAutoAlign(v); localStorage.setItem("dub-auto-align", v ? "1" : "0"); };
   const setAutoRegroupSaved = (v: boolean) => { setAutoRegroup(v); localStorage.setItem("dub-auto-regroup", v ? "1" : "0"); };
+  const [alignLang, setAlignLang] = useState<string>(() => localStorage.getItem("dub-align-lang") || "auto");
+  const setAlignLangSaved = (v: string) => { setAlignLang(v); localStorage.setItem("dub-align-lang", v); };
   const [keepOrig, setKeepOrig] = useState<boolean>(() => localStorage.getItem("dub-keep-orig") === "1");
   const [container, setContainer] = useState<"mp4" | "mkv">(() => (localStorage.getItem("dub-container") === "mkv" ? "mkv" : "mp4"));
   const setKeepOrigSaved = (v: boolean) => { setKeepOrig(v); localStorage.setItem("dub-keep-orig", v ? "1" : "0"); };
@@ -1769,13 +1771,35 @@ function DropZone() {
                       Автовыравнивание по вокалу
                       <span title={t("align.hint")} onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
                     </label>
-                    {/* Пересборка фраз (авто-сплит по доказанной тишине после выравнивания; склейка только вручную). */}
+                    {/* Пересборка фраз и выбор языка выравнивания */}
                     {autoAlign && (
-                      <label className="mt-1.5 ml-5 flex items-center gap-2 text-[12px] cursor-pointer select-none w-fit" title={t("regroup.hint")}>
-                        <input type="checkbox" checked={autoRegroup} onChange={(e) => setAutoRegroupSaved(e.target.checked)} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
-                        {t("regroup.auto")}
-                        <span title={t("regroup.hint")} onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
-                      </label>
+                      <div className="ml-5 flex flex-col gap-1.5 mt-1.5">
+                        <div className="flex items-center gap-2 text-[11px] text-[var(--color-muted)]">
+                          <span>Язык выравнивания:</span>
+                          <select
+                            value={alignLang}
+                            onChange={(e) => setAlignLangSaved(e.target.value)}
+                            className="px-2 py-0.5 rounded bg-[var(--color-surface-2)] text-[var(--color-text)] border border-white/[0.08] text-[11px] outline-none cursor-pointer hover:border-[var(--color-accent)] transition-colors"
+                          >
+                            <option value="auto">Авто (из ASR / проекта)</option>
+                            <option value="ru">🇷🇺 Русский (Russian)</option>
+                            <option value="en">🇬🇧 Английский (English)</option>
+                            <option value="de">🇩🇪 Немецкий (German)</option>
+                            <option value="fr">🇫🇷 Французский (French)</option>
+                            <option value="es">🇪🇸 Испанский (Spanish)</option>
+                            <option value="it">🇮🇹 Итальянский (Italian)</option>
+                            <option value="pt">🇵🇹 Португальский (Portuguese)</option>
+                            <option value="ja">🇯🇵 Японский (Japanese)</option>
+                            <option value="ko">🇰🇷 Корейский (Korean)</option>
+                            <option value="zh">🇨🇳 Китайский (Chinese)</option>
+                          </select>
+                        </div>
+                        <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none w-fit" title={t("regroup.hint")}>
+                          <input type="checkbox" checked={autoRegroup} onChange={(e) => setAutoRegroupSaved(e.target.checked)} className="accent-[var(--color-accent)] w-3.5 h-3.5" />
+                          {t("regroup.auto")}
+                          <span title={t("regroup.hint")} onClick={(e) => e.preventDefault()} className="cursor-help inline-flex text-[var(--color-muted)] opacity-40 hover:opacity-100 hover:text-[var(--color-accent-2)] transition"><HelpCircle size={12} /></span>
+                        </label>
+                      </div>
                     )}
                     {/* КАСТИНГ ПЕРСОНАЖЕЙ (#115): доп. проход по кадрам -> база персонажей (аватар/голос). Опц., дефолт ВЫКЛ. */}
                     {showCasting && (
@@ -4682,6 +4706,8 @@ function Editor() {
   const [blurSigmaDraft, setBlurSigmaDraft] = useState<number | null>(null); // черновик силы блюра
   const [blurAlphaDraft, setBlurAlphaDraft] = useState<number | null>(null); // черновик затемнения/прозрачности блюра
   const [isAligning, setIsAligning] = useState(false);               // индикатор автовыравнивания субтитров по вокалу
+  const [alignLang, setAlignLang] = useState<string>(() => localStorage.getItem("dub-align-lang") || "auto");
+  const setAlignLangSaved = (v: string) => { setAlignLang(v); localStorage.setItem("dub-align-lang", v); };
   const projectOperation = useRef(false);
   const [regroupError, setRegroupError] = useState<string | null>(null);
   const [alignProgress, setAlignProgress] = useState<number | null>(null);
@@ -5531,10 +5557,14 @@ function Editor() {
         if (window.confirm(t("align.installPrompt"))) window.dispatchEvent(new Event("dub-open-components"));
         return;
       }
-      let language = snapshot.meta.detected_src_lang || snapshot.meta.src_lang || "auto";
+      let language = alignLang !== "auto" ? alignLang : (snapshot.meta.detected_src_lang || snapshot.meta.src_lang || "auto");
       if (language === "auto") {
-        const selected = window.prompt(t("align.languagePrompt"), "en");
-        if (!selected) return;
+        const selected = window.prompt(t("align.languagePrompt"), "ru");
+        if (!selected) {
+          projectOperation.current = false;
+          setIsAligning(false);
+          return;
+        }
         language = selected.trim().toLowerCase();
       }
       const { job_id } = await api.alignProject(pid, language);
@@ -6373,21 +6403,42 @@ function Editor() {
                   <span className="hidden xl:inline">Пересинтез</span>
                 </button>
 
-                {/* Кнопка «Автовыравнивание субтитров по вокалу» */}
-                <button
-                  type="button"
-                  onClick={doAlignProject}
-                  disabled={isAligning || isRegrouping || rendering || !!regenId}
-                  title={t("align.hint")}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--color-surface-2)] border border-cyan-500/40 hover:border-cyan-400 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 font-semibold text-[11px] transition-all shadow-sm shrink-0 disabled:opacity-50"
-                >
-                  {isAligning ? (
-                    <Loader2 size={12} className="animate-spin text-cyan-400" />
-                  ) : (
-                    <Magnet size={12} className="text-cyan-400" />
-                  )}
-                  <span className="hidden xl:inline">{isAligning ? `${t("align.working")}${alignProgress === null ? "" : ` ${Math.round(alignProgress)}%`}` : t("align.btn")}</span>
-                </button>
+                {/* Кнопка «Автовыравнивание субтитров по вокалу» с выбором языка */}
+                <div className="inline-flex rounded-lg shadow-sm shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => doAlignProject()}
+                    disabled={isAligning || isRegrouping || rendering || !!regenId}
+                    title={t("align.hint")}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-l-lg bg-[var(--color-surface-2)] border border-cyan-500/40 hover:border-cyan-400 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 font-semibold text-[11px] transition-all disabled:opacity-50"
+                  >
+                    {isAligning ? (
+                      <Loader2 size={12} className="animate-spin text-cyan-400" />
+                    ) : (
+                      <Magnet size={12} className="text-cyan-400" />
+                    )}
+                    <span className="hidden xl:inline">{isAligning ? `${t("align.working")}${alignProgress === null ? "" : ` ${Math.round(alignProgress)}%`}` : t("align.btn")}</span>
+                  </button>
+                  <select
+                    value={alignLang}
+                    onChange={(e) => setAlignLangSaved(e.target.value)}
+                    disabled={isAligning || isRegrouping || rendering || !!regenId}
+                    title="Язык оригинала для выравнивания (Qwen3 Forced Aligner)"
+                    className="px-1 py-1 rounded-r-lg bg-[var(--color-surface-2)] border-y border-r border-l-0 border-cyan-500/40 hover:border-cyan-400 text-cyan-400 font-semibold text-[10px] outline-none cursor-pointer transition-all disabled:opacity-50"
+                  >
+                    <option value="auto" title="Определить автоматически из ASR или свойств проекта">Auto</option>
+                    <option value="ru" title="Русский">RU</option>
+                    <option value="en" title="Английский">EN</option>
+                    <option value="de" title="Немецкий">DE</option>
+                    <option value="fr" title="Французский">FR</option>
+                    <option value="es" title="Испанский">ES</option>
+                    <option value="it" title="Итальянский">IT</option>
+                    <option value="pt" title="Португальский">PT</option>
+                    <option value="ja" title="Японский">JA</option>
+                    <option value="ko" title="Корейский">KO</option>
+                    <option value="zh" title="Китайский">ZH</option>
+                  </select>
+                </div>
 
                 {/* Кнопка «Пересборка фраз»: авто-сплит по тишине + модалка предложений склейки */}
                 <button
