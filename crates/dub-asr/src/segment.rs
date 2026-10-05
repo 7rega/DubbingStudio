@@ -253,10 +253,10 @@ pub fn segment_words_with_diarization(
             let is_long_pause = gap > max_gap;
 
             // 2. Смена спикера: разрешается ТОЛЬКО если есть пауза между словами (gap >= 0.20с) ИЛИ
-            //    предыдущее слово завершило фразу/клаузу (.!? или ,;:). Слитная речь (gap < 0.20с)
-            //    защищена от разрыва фразы («Shut the fuck up» не делится на «Shut» и «the fuck up»).
+            //    предыдущее слово завершило законченное предложение (.!?…). Слитная речь защищена
+            //    от ложного разрыва на запятых и клаузах из-за единичных флуктуаций классификатора.
             let next_last = Some(w.word.as_str());
-            let is_speaker_change = *spk != cur_spk && (gap >= 0.20 || ends_clause(&last.word) || ends_sentence(&last.word, next_last));
+            let is_speaker_change = *spk != cur_spk && (gap >= 0.20 || ends_sentence(&last.word, next_last));
 
             // 3. Жёлтая зона (12–15с): мягкий разрыв по клаузе/VAD/паузе
             let is_soft_split = dur >= SEG_IDEAL_DUR
@@ -280,7 +280,8 @@ pub fn segment_words_with_diarization(
         raw_segs.push(cur);
     }
 
-    // Для каждого сегмента определяем доминантного спикера по всему интервалу [start, end]
+    // Для каждого сегмента определяем доминантного спикера по всему интервалу [start, end].
+    // Акустические пословные метки Whisper являются абсолютным авторитетом для начала и конца речи.
     raw_segs
         .into_iter()
         .filter(|ws| !ws.is_empty())
@@ -288,13 +289,18 @@ pub fn segment_words_with_diarization(
             let start = ws.first().unwrap().start;
             let mut end = ws.last().unwrap().end;
             let spk = diar_index.assign(start, end);
-            if let Some(turn_end) = diar_index.active_turn_end(start, spk) {
-                // Если конец фразы вылез далеко за границу реплики спикера в тишину (>0.25с)
-                if end > turn_end + 0.25 {
-                    end = (turn_end + 0.15).max(start + 0.10);
-                    // Синхронизируем конец последнего слова сегмента
-                    if let Some(last_w) = ws.last_mut() {
-                        last_w.end = last_w.end.min(end);
+
+            // Защита от багов отдельных ASR-моделей (напр. Parakeet), когда последнее слово аномально
+            // растянуто в тишину (>2.0с длительности одного слова и вылезает далеко за turn_end).
+            // Обычные слова никогда не обрезаются.
+            if let Some(last_w) = ws.last_mut() {
+                if let Some(turn_end) = diar_index.active_turn_end(start, spk) {
+                    if last_w.end > turn_end + 1.0 && (last_w.end - last_w.start) > 2.0 {
+                        let clamped = (turn_end + 0.20).max(last_w.start + 0.30);
+                        if clamped < last_w.end {
+                            last_w.end = clamped;
+                            end = clamped;
+                        }
                     }
                 }
             }

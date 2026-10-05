@@ -505,9 +505,9 @@ fn merge_short_turns(segs: &mut Vec<Segment>) {
             let dur_ok = (s.end - last.start) <= MAX_DUR;
             let ch_ok = last.src_text.chars().count() + s.src_text.chars().count() < MAX_CH;
             let last_finished = ends_sentence_text(&last.src_text, Some(&s.src_text));
-            // Если предыдущее предложение уже грамматически завершено точкой, склеиваем лишь при плотном примыкании микро-осколка
+            // Если предыдущее предложение одного спикера завершено точкой, разрешаем слияние при естественной речевой паузе вдоха (<0.25с)
             let can_merge = if last_finished {
-                gap > -OVERLAP && gap < 0.12 && ((last.end - last.start) < 0.8 || (s.end - s.start) < 0.8)
+                gap > -OVERLAP && gap < 0.25 && ((last.end - last.start) < 2.5 || (s.end - s.start) < 2.5)
             } else {
                 gap > -OVERLAP && gap < GAP && short
             };
@@ -679,8 +679,8 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
                 &mpath,
                 diar_bk,
                 nemotron_threshold,
-                0.5,
-                1.5,
+                0.8,
+                1.0,
             ) {
                 Ok(d) => Some(d),
                 Err(e) => {

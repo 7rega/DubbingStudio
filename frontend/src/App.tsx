@@ -479,11 +479,19 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
                 <div className="flex flex-wrap gap-1">
                   {[
                     { label: "Дефолт", val: "" },
+                    { label: "Дубляж", val: "--device cuda --compute_type float16 --vad_filter True --vad_method silero_v4_fw --word_timestamps True --condition_on_previous_text False --beam_size 5 --temperature 0 --batched" },
                     { label: "Субтитры", val: "--standard --batched" },
                     { label: "Скорость", val: "--batched" },
                     { label: "Анти-галлюцинации", val: "--vad_filter True --vad_method silero_v5_fw --condition_on_previous_text False --beam_size 1 --temperature 0 --hallucination_silence_threshold 2 --batched" }
                   ].map((p) => (
-                    <button key={p.label} type="button" onClick={() => { setXxlArgs(p.val); setSel("whisper_xxl_args", p.val); }}
+                    <button key={p.label} type="button" onClick={() => {
+                      setXxlArgs(p.val);
+                      setSel("whisper_xxl_args", p.val);
+                      if (p.label === "Дубляж") {
+                        setWhisperCompute("float16");
+                        api.setSelection("whisper_compute", "float16").catch(() => {});
+                      }
+                    }}
                       className="px-2 py-1 rounded-md text-[10px] bg-white/[0.04] border border-white/[0.08] text-[var(--color-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors">
                       {p.label}
                     </button>

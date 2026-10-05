@@ -22,8 +22,8 @@ impl Default for NemotronDiarConfig {
             backend: "cuda".to_string(),
             threshold: 0.48,
             min_frames: 10,
-            merge_gap: 0.5,
-            min_speaker_dur: 1.5,
+            merge_gap: 0.8,
+            min_speaker_dur: 1.0,
         }
     }
 }
@@ -86,6 +86,7 @@ pub fn diarize_nemotron(
     cmd.arg("--backend").arg(backend);
     cmd.arg("--audio").arg(wav_path);
     cmd.arg("--turns-out").arg(&temp_json);
+    cmd.arg("--session-option").arg("latency_profile=very_high");
     cmd.arg("--request-option").arg(format!("speaker_threshold={}", cfg.threshold));
     if cfg.min_frames > 0 {
         cmd.arg("--request-option").arg(format!("speaker_min_frames={}", cfg.min_frames));
