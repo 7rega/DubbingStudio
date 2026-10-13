@@ -50,14 +50,11 @@ pub fn resolve_audiocpp_cli(models_root: &Path) -> Option<PathBuf> {
         models_root.join("tools").join("audiocpp").join(name),
         models_root.join("tools").join(name),
         models_root.join(name),
-        PathBuf::from("tools/audiocpp").join(name),
     ];
     if let Some(parent) = models_root.parent() {
         candidates.push(parent.join("tools").join("audiocpp").join(name));
         candidates.push(parent.join("tools").join(name));
     }
-    // Также проверяем стандартную рабочую директорию DubStudio
-    candidates.push(PathBuf::from("F:\\DubStudio\\tools\\audiocpp").join(name));
     for c in &candidates {
         if c.is_file() {
             return Some(c.clone());

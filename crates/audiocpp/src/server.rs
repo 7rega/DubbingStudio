@@ -463,19 +463,25 @@ pub fn resolve_audiocpp_bin(tools_dir: &Path) -> PathBuf {
     };
 
     let direct = tools_dir.join(name);
-    if direct.exists() {
+    if direct.is_file() {
         return direct;
     }
 
     let sub = tools_dir.join("audiocpp").join(name);
-    if sub.exists() {
+    if sub.is_file() {
         return sub;
     }
 
-    // Fallback на E:\audio.cpp если скачано туда
-    let ext_fallback = PathBuf::from("E:\\audio.cpp").join(name);
-    if ext_fallback.exists() {
-        return ext_fallback;
+    let in_tools = tools_dir.join("tools").join("audiocpp").join(name);
+    if in_tools.is_file() {
+        return in_tools;
+    }
+
+    if let Some(parent) = tools_dir.parent() {
+        let p_sub = parent.join("tools").join("audiocpp").join(name);
+        if p_sub.is_file() {
+            return p_sub;
+        }
     }
 
     direct
@@ -495,16 +501,16 @@ pub fn resolve_audiocpp_cli(tools_or_models_root: &Path) -> PathBuf {
         "audiocpp_cli"
     };
 
-    let candidates = [
+    let mut candidates = vec![
         tools_or_models_root.join(name),
         tools_or_models_root.join("tools").join(name),
         tools_or_models_root.join("tools").join("audiocpp").join(name),
         tools_or_models_root.join("audiocpp").join(name),
-        PathBuf::from("tools/audiocpp").join(name),
-        PathBuf::from("F:\\DubStudio\\tools\\audiocpp").join(name),
-        PathBuf::from("E:\\audio.cpp").join(name),
-        PathBuf::from("E:\\audio.cpp\\build\\bin\\Release").join(name),
     ];
+    if let Some(parent) = tools_or_models_root.parent() {
+        candidates.push(parent.join("tools").join("audiocpp").join(name));
+        candidates.push(parent.join("tools").join(name));
+    }
 
     for c in &candidates {
         if c.is_file() {
@@ -524,9 +530,8 @@ pub fn resolve_voxcpm2_path(models_root: &Path, quant: &str) -> Option<PathBuf> 
 
     let candidates = [
         models_root.join("voxcpm2").join(filename),
+        models_root.join("models").join("voxcpm2").join(filename),
         models_root.join(filename),
-        PathBuf::from("E:\\audio.cpp\\models").join(filename),
-        PathBuf::from("F:\\DubStudio\\models\\voxcpm2").join(filename),
     ];
 
     for c in candidates {

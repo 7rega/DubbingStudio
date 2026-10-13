@@ -128,6 +128,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "nemotron-bf16" => vec![("diar_model", "nemotron-bf16".into())],
         "nemotron-q8_0" => vec![("diar_model", "nemotron-q8_0".into())],
         "alignment-q8_0" => vec![("align_model", "q8_0".into())],
+        "qwen3-asr" => vec![("asr_engine", "qwen3".into())],
         _ => vec![],
     }
 }
@@ -649,7 +650,7 @@ pub fn higgs_ref_secs(mroot: &Path) -> f64 {
     sel_num(mroot, "higgs_ref_secs").filter(|s| *s > 0.0 && *s <= 60.0).unwrap_or(12.0)
 }
 
-/// Выбор ASR-движка для одной джобы: Parakeet (каталог TDT) либо Whisper (бинарь + модель + квант + девайс).
+/// Выбор ASR-движка для одной джобы: Parakeet (каталог TDT), Whisper (бинарь + модель) либо Qwen3 (audiocpp).
 #[derive(Debug, Clone)]
 pub enum AsrChoice {
     Parakeet(PathBuf),
@@ -660,6 +661,12 @@ pub enum AsrChoice {
         compute: String,
         device: String,
         xxl_args: Option<String>,
+    },
+    Qwen3 {
+        cli: PathBuf,
+        asr_model: PathBuf,
+        aligner_model: PathBuf,
+        backend: String,
     },
 }
 
@@ -677,6 +684,9 @@ impl AsrChoice {
             AsrChoice::Whisper { model, compute, device, xxl_args, .. } => {
                 let args_part = xxl_args.as_deref().unwrap_or("");
                 format!("Whisper {model} (compute={compute}, device={device}, xxl_args={args_part})")
+            }
+            AsrChoice::Qwen3 { backend, .. } => {
+                format!("Qwen3 ASR (audiocpp, backend={backend})")
             }
         }
     }
@@ -730,11 +740,90 @@ fn whisper_model_installed(mroot: &Path, size: &str) -> bool {
     mroot.join("whisper").join(format!("faster-whisper-{size}")).join("model.bin").is_file()
 }
 
-/// Резолв активного ASR: если выбран движок whisper И бинарь+модель на диске — Whisper (модель = выбор,
-/// иначе первый установленный по убыванию качества); иначе — Parakeet (существующий резолв каталога TDT).
-/// Так «выбрал Whisper + скачал модель» применяется без рестарта, а недо-настроенный Whisper тихо
-/// откатывается на Parakeet (analyze не падает).
+/// Поиск GGUF-модели Qwen3-ASR (1.7B).
+pub fn resolve_qwen3_asr_path(mroot: &Path) -> Option<PathBuf> {
+    if let Ok(env) = std::env::var("DUB_STUDIO_QWEN3_ASR_MODEL") {
+        let p = PathBuf::from(env);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let filename = "qwen3-asr-1.7b-q8_0.gguf";
+    let candidates = [
+        mroot.join("qwen3").join(filename),
+        mroot.join("models").join("qwen3").join(filename),
+        mroot.join(filename),
+    ];
+    for c in &candidates {
+        if c.is_file() {
+            return Some(c.clone());
+        }
+    }
+    None
+}
+
+/// Поиск safetensors модели Silero VAD (16k) для нарезки длинных файлов в audio.cpp.
+pub fn resolve_silero_vad_path(repo_root: &Path) -> Option<PathBuf> {
+    if let Ok(env) = std::env::var("DUB_STUDIO_SILERO_VAD_PATH") {
+        let p = PathBuf::from(env);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let rel = "tools/audiocpp/assets/framework/models/silero_vad/silero_vad_16k.safetensors";
+    let p = repo_root.join(rel);
+    if p.is_file() {
+        return Some(p);
+    }
+    let alt = repo_root.join("assets/framework/models/silero_vad/silero_vad_16k.safetensors");
+    if alt.is_file() {
+        return Some(alt);
+    }
+    None
+}
+
+/// Список недостающих компонентов для Qwen3 ASR (id из setup::manifest).
+pub fn qwen3_missing_components(repo_root: &Path, mroot: &Path) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    let cli = dub_asr::forced::resolve_audiocpp_cli(repo_root)
+        .or_else(|| dub_asr::forced::resolve_audiocpp_cli(mroot));
+    if cli.is_none() {
+        missing.push("audiocpp-engine");
+    }
+    if resolve_qwen3_asr_path(mroot).is_none() {
+        missing.push("qwen3-asr");
+    }
+    if dub_asr::forced::resolve_model_file(mroot).is_none() {
+        missing.push("alignment-q8_0");
+    }
+    if resolve_silero_vad_path(repo_root).is_none() {
+        missing.push("silero-vad");
+    }
+    missing
+}
+
+/// Резолв активного ASR: если выбран qwen3 И все компоненты на диске — Qwen3 ASR;
+/// если выбран движок whisper И бинарь+модель на диске — Whisper; иначе — Parakeet.
 pub fn resolve_asr_choice(repo_root: &Path, mroot: &Path, sel: &Value) -> AsrChoice {
+    if pick(sel, "asr_engine") == Some("qwen3") {
+        let cli = dub_asr::forced::resolve_audiocpp_cli(repo_root)
+            .or_else(|| dub_asr::forced::resolve_audiocpp_cli(mroot));
+        let asr_model = resolve_qwen3_asr_path(mroot);
+        let aligner_model = dub_asr::forced::resolve_model_file(mroot);
+        if let (Some(cli), Some(asr_model), Some(aligner_model)) = (cli, asr_model, aligner_model) {
+            let backend = if stage_backend(mroot, "asr_backend") == "cpu" {
+                "cpu".to_string()
+            } else {
+                "gpu".to_string()
+            };
+            return AsrChoice::Qwen3 {
+                cli,
+                asr_model,
+                aligner_model,
+                backend,
+            };
+        }
+    }
     if pick(sel, "asr_engine") == Some("whisper") {
         let bin = whisper_bin(repo_root, Some(sel));
         // выбранная модель, если скачана; иначе — лучшая из установленных.
@@ -808,6 +897,9 @@ pub fn build_engine(choice: &AsrChoice) -> Box<dyn dub_asr::AsrEngine> {
         AsrChoice::Parakeet(dir) => Box::new(dub_asr::Asr::new(dir)),
         AsrChoice::Whisper { bin, model_dir, model, compute, device, xxl_args } => {
             Box::new(dub_asr::WhisperAsr::new(bin, model_dir, model, compute, device, xxl_args.clone()))
+        }
+        AsrChoice::Qwen3 { cli, asr_model, aligner_model, backend } => {
+            Box::new(dub_asr::Qwen3Asr::new(cli, asr_model, aligner_model, backend))
         }
     }
 }
@@ -953,6 +1045,7 @@ mod asr_variant_tests {
         assert_eq!(component_selection("sortformer"), vec![("diar_model", "sortformer".to_string())]);
         assert_eq!(component_selection("nemotron-bf16"), vec![("diar_model", "nemotron-bf16".to_string())]);
         assert_eq!(component_selection("nemotron-q8_0"), vec![("diar_model", "nemotron-q8_0".to_string())]);
+        assert_eq!(component_selection("qwen3-asr"), vec![("asr_engine", "qwen3".to_string())]);
     }
 
     struct TmpModels(PathBuf);

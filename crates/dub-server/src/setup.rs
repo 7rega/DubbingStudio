@@ -305,6 +305,24 @@ pub fn manifest() -> Vec<Component> {
             external_url: Some("https://github.com/0xShug0/audio.cpp/releases"),
         },
         Component {
+            id: "silero-vad",
+            name: "Silero VAD (16k, audio.cpp)",
+            purpose: "Детектор голосовой активности для нарезки длинного аудио в audio.cpp",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: 1_239_748,
+            files: &[
+                FileSpec {
+                    url: "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad_16k.safetensors",
+                    dest_rel: "tools/audiocpp/assets/framework/models/silero_vad/silero_vad_16k.safetensors",
+                    size: 1_239_748,
+                    extract: Extract::None,
+                },
+            ],
+            markers: &[Marker { rel: "tools/audiocpp/assets/framework/models/silero_vad/silero_vad_16k.safetensors", expect: 1_239_748 }],
+            external_url: Some("https://github.com/snakers4/silero-vad"),
+        },
+        Component {
             id: "gemma",
             name: "Gemma-4 12B QAT q4_0 + vision",
             purpose: "Перевод и vision-оркестратор субтитров/титров",
@@ -636,6 +654,24 @@ pub fn manifest() -> Vec<Component> {
             ],
             markers: &[Marker { rel: "models/whisper/faster-whisper-large-v3-turbo/model.bin", expect: 1_617_884_929 }, Marker { rel: "models/whisper/faster-whisper-large-v3-turbo/tokenizer.json", expect: 2_710_337 }],
             external_url: None,
+        },
+        Component {
+            id: "qwen3-asr",
+            name: "Qwen3 ASR (1.7B Q8_0, audio.cpp)",
+            purpose: "Точное мультиязычное распознавание речи без галлюцинаций (audio.cpp GGUF)",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: 2_473_010_048,
+            files: &[
+                FileSpec {
+                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf?download=true",
+                    dest_rel: "models/qwen3/qwen3-asr-1.7b-q8_0.gguf",
+                    size: 2_473_010_048,
+                    extract: Extract::None,
+                },
+            ],
+            markers: &[Marker { rel: "models/qwen3/qwen3-asr-1.7b-q8_0.gguf", expect: 2_473_010_048 }],
+            external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
         },
         Component {
             id: "sortformer",
@@ -1002,8 +1038,6 @@ fn resolve_marker_metadata(repo_root: &Path, rel: &str) -> std::io::Result<std::
             let cands = [
                 repo_root.join("models").join(fname),
                 repo_root.join("models").join("diarization").join(fname),
-                std::path::PathBuf::from("F:\\DubStudio\\models\\diarization").join(fname),
-                std::path::PathBuf::from("F:\\DubStudio\\TEST").join(fname),
             ];
             for c in &cands {
                 if let Ok(meta) = std::fs::metadata(c) {
@@ -1065,7 +1099,20 @@ pub fn component_status(repo_root: &Path, c: &Component) -> ComponentStatus {
         // Драйвер: детект по загрузке nvcuda.dll (часть драйвера). Версию не тянем (без NVML-зависимости).
         (detect_driver(), None)
     } else if c.id == "alignment-q8_0" {
-        (dub_asr::forced::verified_model_ready(&repo_root.join("models")), Some("CUDA / CPU · 11 языков · GGUF".into()))
+        let ok = dub_asr::forced::verified_model_ready(&repo_root.join("models"));
+        (ok, if ok { Some("CUDA / CPU · 11 языков · GGUF".into()) } else { None })
+    } else if c.id == "qwen3-asr" {
+        let ok = c.markers.iter().all(|m| marker_ok(repo_root, m))
+            || crate::models::resolve_qwen3_asr_path(&repo_root.join("models")).is_some_and(|p| {
+                p.metadata().map(|m| m.len() >= 2_400_000_000).unwrap_or(false)
+            });
+        (ok, if ok { Some("CUDA / CPU · 1.7B Q8_0 · GGUF".into()) } else { None })
+    } else if c.id == "silero-vad" {
+        let ok = c.markers.iter().all(|m| marker_ok(repo_root, m))
+            || crate::models::resolve_silero_vad_path(repo_root).is_some_and(|p| {
+                p.metadata().map(|m| m.len() >= 1_200_000).unwrap_or(false)
+            });
+        (ok, if ok { Some("Silero VAD 16k · safetensors".into()) } else { None })
     } else if c.id == "ffmpeg" {
         // ffmpeg дублирует пайплайн через PATH: если он уже в системе (Command::new("ffmpeg") найдёт) —
         // считаем установленным и НЕ навязываем закачку. Иначе — по маркеру в tools/ffmpeg.
@@ -1081,14 +1128,27 @@ pub fn component_status(repo_root: &Path, c: &Component) -> ComponentStatus {
         let all = c.markers.iter().all(|m| marker_ok(repo_root, m));
         (all, None)
     };
-    let missing: Vec<String> = c
-        .markers
-        .iter()
-        .filter(|m| !marker_ok(repo_root, m))
-        .map(|m| m.rel.to_string())
-        .collect();
+    let missing: Vec<String> = if installed {
+        Vec::new()
+    } else {
+        c.markers
+            .iter()
+            .filter(|m| !marker_ok(repo_root, m))
+            .map(|m| m.rel.to_string())
+            .collect()
+    };
     let bytes_on_disk: u64 = if c.id == "whisper-xxl" {
         dir_size(&repo_root.join("tools").join("Faster-Whisper-XXL"))
+    } else if c.id == "qwen3-asr" {
+        crate::models::resolve_qwen3_asr_path(&repo_root.join("models"))
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .unwrap_or(0)
+    } else if c.id == "silero-vad" {
+        crate::models::resolve_silero_vad_path(repo_root)
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .unwrap_or(0)
     } else {
         c.markers.iter().map(|m| marker_bytes(repo_root, m)).sum()
     };
@@ -1268,7 +1328,7 @@ pub fn setup_status(repo_root: &Path) -> SetupStatus {
         }
         let is_gemma = c.id.starts_with("gemma") || c.id == "llama";
         let is_higgs = c.id.starts_with("higgs");
-        let is_asr = c.id.starts_with("parakeet") || c.id.starts_with("whisper");
+        let is_asr = c.id.starts_with("parakeet") || c.id.starts_with("whisper") || c.id == "qwen3-asr";
         if (cloud_llm && is_gemma) || (cloud_tts && is_higgs) || (cloud_asr && is_asr) {
             c.requirement = Requirement::Optional;
         }

@@ -589,7 +589,7 @@ async fn capabilities(State(st): State<AppState>) -> Json<Value> {
         "voice_modes": ["clone","autocast","auto","voice"],
         // Выбор ASR: движок (parakeet|whisper), модель Whisper, квант Whisper (compute_type).
         "selection": models::public_selection(&st.models_root),
-        "asr_engines": ["parakeet","whisper"],
+        "asr_engines": ["parakeet","whisper","qwen3"],
         "alignment": { "languages": ["ru","en","zh","de","fr","es","it","ja","ko","pt","yue"], "ready": dub_asr::forced::verified_model_ready(&st.models_root), "component": "alignment-q8_0" },
         "whisper_models": ["tiny","base","small","medium","large-v3","large-v3-turbo"],
         // Кванты Whisper (compute_type): float16 / int8_float16 задействуют Tensor Cores на CUDA GPU.
@@ -647,9 +647,22 @@ async fn setup_status(State(st): State<AppState>) -> Json<Value> {
 
 /// POST /setup/download {ids:[...]} — запустить фоновую закачку (мимо GPU-очереди): {download}.
 async fn setup_download(State(st): State<AppState>, Json(body): Json<Value>) -> Response {
-    let ids = body_ids(&body);
+    let mut ids = body_ids(&body);
     if ids.is_empty() {
         return dl_error_response(setup::DlError::new("no_ids", "ids пуст"));
+    }
+    // Если заказан qwen3-asr, автоматически догружаем недостающие зависимости (aligner, vad, audiocpp)
+    if ids.iter().any(|id| id == "qwen3-asr") {
+        for dep in ["audiocpp-engine", "alignment-q8_0", "silero-vad"] {
+            if !ids.iter().any(|id| id == dep) {
+                let manifest = setup::manifest();
+                if let Some(c) = manifest.iter().find(|c| c.id == dep) {
+                    if !setup::component_status(&st.repo_root, c).installed {
+                        ids.push(dep.to_string());
+                    }
+                }
+            }
+        }
     }
     let dl = st.downloads.clone();
     match tokio::task::spawn_blocking(move || dl.start(ids)).await {
@@ -739,6 +752,16 @@ fn ensure_job_components(
         let model_comp = if quant == "bf16" { "voxcpm2-bf16" } else { "voxcpm2" };
         if missing(model_comp) {
             need.push(model_comp.to_string());
+        }
+    }
+
+    // ASR Qwen3: audiocpp-engine + qwen3-asr + alignment-q8_0 + silero-vad
+    let asr_engine = models::pick(&sel, "asr_engine");
+    if asr_engine == Some("qwen3") {
+        for id in models::qwen3_missing_components(repo_root, models_root) {
+            if !need.iter().any(|x| x == id) {
+                need.push(id.to_string());
+            }
         }
     }
 
@@ -1892,6 +1915,22 @@ async fn analyze_project(
     // Активный вариант модели резолвится ПРИ КАЖДОЙ джобе (не морозится на старте): скачал/выбрал
     // квант -> применяется без рестарта. См. models::resolve_*.
     let sel = models::load_selection(&st.models_root);
+    if models::pick(&sel, "asr_engine") == Some("qwen3") && !models::openrouter_asr_on(&st.models_root) {
+        let missing = models::qwen3_missing_components(&st.repo_root, &st.models_root);
+        if !missing.is_empty() {
+            let names: Vec<&'static str> = missing.iter().map(|id| match *id {
+                "qwen3-asr" => "«Qwen3 ASR (1.7B Q8_0)»",
+                "alignment-q8_0" => "«Выравнивание речи Qwen3 (Q8_0)»",
+                "silero-vad" => "«Silero VAD»",
+                "audiocpp-engine" => "«audio.cpp движок (audiocpp_cli)»",
+                _ => *id,
+            }).collect();
+            return (
+                StatusCode::CONFLICT,
+                format!("QWEN_COMPONENTS_MISSING: Для распознавания Qwen ASR необходимо установить: {}. Перейдите в меню «Модели и компоненты» для их установки.", names.join(", "))
+            ).into_response();
+        }
+    }
     // Backend локальных ONNX-стадий (диаризация Sortformer / Parakeet): exec_config читает DUB_ASR_BACKEND
     // при создании сессии — gpu регистрирует CUDA-EP с error_on_failure (недоступность = ошибка, не тихий
     // CPU-фоллбек), иначе CPU-провайдер. Задаём из local_backend на КАЖДУЮ джобу (переключение без рестарта).
