@@ -12,14 +12,17 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use serde::Deserialize;
 
-use crate::segment::{segment_words, segment_words_with_diarization, Segment, Word, SEG_MAX_DUR, SEG_MAX_GAP};
+use crate::segment::{segment_words, segment_words_with_diarization, Segment, Word, SEG_MAX_DUR};
 use crate::{AsrEngine, AsrError, SpeakerSegment, Turn};
+
+pub const QWEN_MAX_GAP: f64 = 0.50;
 
 #[derive(Clone, Debug)]
 pub struct Qwen3Asr {
     pub cli_bin: PathBuf,
     pub asr_model: PathBuf,
     pub aligner_model: PathBuf,
+    pub vad_model: PathBuf,
     pub backend: String,
     pub detected_language: Arc<Mutex<Option<String>>>,
 }
@@ -39,12 +42,14 @@ impl Qwen3Asr {
         cli_bin: impl AsRef<Path>,
         asr_model: impl AsRef<Path>,
         aligner_model: impl AsRef<Path>,
+        vad_model: impl AsRef<Path>,
         backend: impl Into<String>,
     ) -> Self {
         Self {
             cli_bin: cli_bin.as_ref().to_path_buf(),
             asr_model: asr_model.as_ref().to_path_buf(),
             aligner_model: aligner_model.as_ref().to_path_buf(),
+            vad_model: vad_model.as_ref().to_path_buf(),
             backend: backend.into(),
             detected_language: Arc::new(Mutex::new(None)),
         }
@@ -73,6 +78,12 @@ impl AsrEngine for Qwen3Asr {
             return Err(AsrError::Transcribe(format!(
                 "модель Qwen3 Forced Aligner не найдена: {}",
                 self.aligner_model.display()
+            )));
+        }
+        if !self.vad_model.is_file() {
+            return Err(AsrError::Transcribe(format!(
+                "модель Silero VAD не найдена: {}",
+                self.vad_model.display()
             )));
         }
         if !wav.is_file() {
@@ -110,8 +121,15 @@ impl AsrEngine for Qwen3Asr {
             "qwen3_asr.forced_aligner_path={}",
             self.aligner_model.display()
         ));
+        cmd.arg("--session-option").arg(format!(
+            "qwen3_asr.vad_path={}",
+            self.vad_model.display()
+        ));
         cmd.arg("--request-option").arg("qwen3_asr.return_timestamps=true");
+        cmd.arg("--request-option").arg("qwen3_asr.audio_chunk_mode=vad");
+        cmd.arg("--request-option").arg("qwen3_asr.clamp_timestamps_to_audio=true");
         cmd.arg("--request-option").arg("qwen3_asr.preserve_punctuation=true");
+        cmd.arg("--temperature").arg("0");
         cmd.arg("--words-out").arg(&temp_words);
         cmd.arg("--text-out").arg(&temp_text);
 
@@ -169,23 +187,57 @@ impl AsrEngine for Qwen3Asr {
                 AsrError::Transcribe(format!("ошибка парсинга words.json: {e}"))
             })?;
 
-        // Читаем чистый текст с пунктуацией для 1-в-1 переноса на слова Aligner
+        // Читаем чистый текст с пунктуацией и капитализацией
         let punctuated_text = std::fs::read_to_string(&temp_text).unwrap_or_default();
         let _ = std::fs::remove_file(&temp_text);
         let tokens: Vec<&str> = punctuated_text.split_whitespace().collect();
 
-        // Преобразуем сэмплы (16000 Гц) в секунды и восстанавливаем пунктуацию
+        fn normalize_word(s: &str) -> String {
+            s.chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(|c| c.to_lowercase())
+                .collect()
+        }
+
         let mut words: Vec<Word> = Vec::with_capacity(raw_entries.len());
-        for (i, entry) in raw_entries.into_iter().enumerate() {
+        let mut tok_idx = 0;
+
+        for (i, entry) in raw_entries.iter().enumerate() {
             let start = entry.start_sample as f64 / 16000.0;
             let end = entry.end_sample as f64 / 16000.0;
-            let word_text = if i < tokens.len() {
-                tokens[i].trim()
-            } else {
-                entry.word.trim()
-            };
-            if end > start && !word_text.is_empty() {
-                words.push(Word::new(word_text, start, end));
+            if end <= start {
+                continue;
+            }
+
+            let e_norm = normalize_word(&entry.word);
+            let mut word_text = entry.word.trim();
+
+            if !e_norm.is_empty() {
+                let lookahead = (tokens.len().saturating_sub(tok_idx)).min(6);
+                for offset in 0..lookahead {
+                    let t_pos = tok_idx + offset;
+                    let t_norm = normalize_word(tokens[t_pos]);
+                    if t_norm == e_norm || (t_norm.starts_with(&e_norm) && t_norm.len() > e_norm.len()) {
+                        word_text = tokens[t_pos].trim();
+                        tok_idx = t_pos + 1;
+                        break;
+                    }
+                }
+            }
+
+            if !word_text.is_empty() {
+                let mut word = Word::new(word_text, start, end);
+                let next_gap = raw_entries
+                    .get(i + 1)
+                    .map(|next| (next.start_sample as f64 - entry.end_sample as f64) / 16000.0)
+                    .unwrap_or(1.0);
+                let is_boundary = next_gap >= 0.45
+                    || word_text.ends_with(['.', '!', '?', '…'])
+                    || word_text.ends_with("...");
+                if is_boundary {
+                    word = word.with_boundary(true);
+                }
+                words.push(word);
             }
         }
 
@@ -200,7 +252,7 @@ impl AsrEngine for Qwen3Asr {
 
     fn transcribe(&mut self, wav: &Path, lang: &str) -> Result<Vec<Segment>, AsrError> {
         let words = self.transcribe_words(wav, lang)?;
-        Ok(segment_words(&words, SEG_MAX_GAP, SEG_MAX_DUR))
+        Ok(segment_words(&words, QWEN_MAX_GAP, SEG_MAX_DUR))
     }
 
     fn transcribe_with_diar(
@@ -210,7 +262,7 @@ impl AsrEngine for Qwen3Asr {
         lang: &str,
     ) -> Result<Vec<Segment>, AsrError> {
         let words = self.transcribe_words(wav, lang)?;
-        Ok(segment_words_with_diarization(&words, turns, SEG_MAX_GAP, SEG_MAX_DUR))
+        Ok(segment_words_with_diarization(&words, turns, QWEN_MAX_GAP, SEG_MAX_DUR))
     }
 
     fn transcribe_turns(

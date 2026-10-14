@@ -666,6 +666,7 @@ pub enum AsrChoice {
         cli: PathBuf,
         asr_model: PathBuf,
         aligner_model: PathBuf,
+        vad_model: PathBuf,
         backend: String,
     },
 }
@@ -810,7 +811,8 @@ pub fn resolve_asr_choice(repo_root: &Path, mroot: &Path, sel: &Value) -> AsrCho
             .or_else(|| dub_asr::forced::resolve_audiocpp_cli(mroot));
         let asr_model = resolve_qwen3_asr_path(mroot);
         let aligner_model = dub_asr::forced::resolve_model_file(mroot);
-        if let (Some(cli), Some(asr_model), Some(aligner_model)) = (cli, asr_model, aligner_model) {
+        let vad_model = resolve_silero_vad_path(repo_root);
+        if let (Some(cli), Some(asr_model), Some(aligner_model), Some(vad_model)) = (cli, asr_model, aligner_model, vad_model) {
             let backend = if stage_backend(mroot, "asr_backend") == "cpu" {
                 "cpu".to_string()
             } else {
@@ -820,6 +822,7 @@ pub fn resolve_asr_choice(repo_root: &Path, mroot: &Path, sel: &Value) -> AsrCho
                 cli,
                 asr_model,
                 aligner_model,
+                vad_model,
                 backend,
             };
         }
@@ -898,8 +901,8 @@ pub fn build_engine(choice: &AsrChoice) -> Box<dyn dub_asr::AsrEngine> {
         AsrChoice::Whisper { bin, model_dir, model, compute, device, xxl_args } => {
             Box::new(dub_asr::WhisperAsr::new(bin, model_dir, model, compute, device, xxl_args.clone()))
         }
-        AsrChoice::Qwen3 { cli, asr_model, aligner_model, backend } => {
-            Box::new(dub_asr::Qwen3Asr::new(cli, asr_model, aligner_model, backend))
+        AsrChoice::Qwen3 { cli, asr_model, aligner_model, vad_model, backend } => {
+            Box::new(dub_asr::Qwen3Asr::new(cli, asr_model, aligner_model, vad_model, backend))
         }
     }
 }
