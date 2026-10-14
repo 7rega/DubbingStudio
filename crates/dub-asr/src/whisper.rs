@@ -116,15 +116,18 @@ impl WhisperAsr {
     /// Авто-выбор пути:
     /// - WhisperXXL: ВСЕГДА монолитный прогон (1 процесс на весь файл) без нарезки,
     ///   использует нативный --batched + Silero VAD и пользовательские флаги из UI.
-    /// - Классический Faster-Whisper: короткий файл (< PAR_MIN_DUR) — монолитный прогон;
-    ///   длинный (>= PAR_MIN_DUR) — параллельные 5-минутные окна (2 потока на GPU, до PAR_MAX_WORKERS на CPU).
+    /// - Классический Faster-Whisper:
+    ///   * На GPU (device == "cuda"): ВСЕГДА монолитный прогон (1 процесс на весь файл).
+    ///     CTranslate2 нативно и быстро обрабатывает аудио любой длины без VRAM-конфликтов.
+    ///   * На CPU (device == "cpu"): короткий файл (< PAR_MIN_DUR) — монолитный прогон;
+    ///     длинный (>= PAR_MIN_DUR) — параллельные окна по CPU-ядрам.
     fn run_words_auto(&self, wav: &Path, lang: &str) -> Result<Vec<Word>, AsrError> {
         let is_xxl = self.bin.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.to_ascii_lowercase().contains("xxl"));
         if is_xxl {
             return self.run_words(wav, lang, None);
         }
         let dur = wav_duration_secs(wav).unwrap_or(0.0);
-        if dur < PAR_MIN_DUR {
+        if self.device == "cuda" || dur < PAR_MIN_DUR {
             return self.run_words(wav, lang, None);
         }
         self.run_words_windowed(wav, lang)
@@ -161,14 +164,10 @@ impl WhisperAsr {
         std::fs::create_dir_all(&tmp_dir).map_err(|e| AsrError::Io(e.to_string()))?;
 
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
-        // Для CUDA каждый процесс грузит модель в себя в VRAM (large-v3 ≈ 3Гб) - 2 потока;
-        // для CPU - до PAR_MAX_WORKERS (при тяжелой large-v3 - 2 воркера во избежание насыщения RAM).
+        // Оконная параллель вызывается только на CPU: делим ядра между воркерами.
+        // При тяжелой large-v3 ограничиваем до 2 воркеров во избежание насыщения RAM.
         let is_heavy = self.model.contains("large") && !self.model.contains("turbo");
-        let max_workers = if self.device == "cuda" {
-            2
-        } else {
-            if is_heavy { 2 } else { PAR_MAX_WORKERS }
-        };
+        let max_workers = if is_heavy { 2 } else { PAR_MAX_WORKERS };
         let workers = max_workers.min(bounds.len() - 1).max(1);
         // CPU-потоки на сабпроцесс: делим ядра между воркерами (флаг --threads есть в v1.0.1 help).
         let threads_per = (cores / workers).max(2);
