@@ -289,11 +289,8 @@ impl WhisperAsr {
                 cmd.arg("--batched");
             }
         } else {
-            // Для классического faster-whisper (не XXL) жестко включаем Silero VAD и защиту от зацикливания.
-            // min_silence 500мс (вместо дефолтных 3000мс): естественный разрыв пауз между репликами и спикерами.
-            // speech_pad и max_speech оставлены на дефолтах движка во избежание артефактов на смехе/паузах.
+            // Для классического faster-whisper (не XXL) жестко включаем Silero VAD и защиту от зацикливания
             cmd.arg("--vad_filter").arg("True")
-                .arg("--vad_min_silence_duration_ms").arg("500")
                 .arg("--condition_on_previous_text").arg("False");
         }
         // Явные CPU-потоки (флаг есть в v1.0.1): оконная параллель делит ядра между сабпроцессами.
