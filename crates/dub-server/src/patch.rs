@@ -403,6 +403,17 @@ fn op_tts_settings(p: &mut Project, edit: &Value) -> PatchResult {
         }
     }
 
+    if let Some(preset_val) = edit.get("gen_preset") {
+        let new_preset = if preset_val.is_null() {
+            None
+        } else {
+            preset_val.as_str().map(|s| s.to_string())
+        };
+        if p.audio.gen_preset != new_preset {
+            p.audio.gen_preset = new_preset;
+        }
+    }
+
     if changed {
         p.audio.mix_dirty = true;
     }
@@ -1089,8 +1100,22 @@ pub fn apply(p: &mut Project, edit: &Value) -> PatchResult {
         "reorder_segments" => op_reorder_segments(p, edit),
         "take_select" => op_take_select(p, edit),
         "take_pin" => op_take_pin(p, edit),
+        "gen_preset" => op_gen_preset(p, edit),
         other => Err((400, format!("unknown op {other:?}"))),
     }
+}
+
+/// gen_preset — привязать или отвязать пресет генерации (субтитры + TTS + микс).
+fn op_gen_preset(p: &mut Project, edit: &Value) -> PatchResult {
+    let name = edit.get("name").and_then(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_str().map(|s| s.to_string())
+        }
+    });
+    p.audio.gen_preset = name;
+    Ok(())
 }
 
 /// take_select — сделать дубль из истории фразы активным.
@@ -1576,5 +1601,22 @@ mod tests {
         // Изменение настроек модели не инвалидирует существующие сегменты
         assert!(!p.segments[0].dirty);
         assert_eq!(p.segments[0].ckpt.as_deref(), Some("ck-test"));
+    }
+
+    #[test]
+    fn gen_preset_sets_and_clears() {
+        let mut p = Project::default();
+        assert_eq!(p.audio.gen_preset, None);
+        apply(&mut p, &json!({
+            "op": "gen_preset",
+            "name": "Shorts TikTok"
+        })).unwrap();
+        assert_eq!(p.audio.gen_preset.as_deref(), Some("Shorts TikTok"));
+
+        apply(&mut p, &json!({
+            "op": "gen_preset",
+            "name": null
+        })).unwrap();
+        assert_eq!(p.audio.gen_preset, None);
     }
 }

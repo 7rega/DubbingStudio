@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
-import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, MicOff, Disc, Layers, SkipBack, SkipForward, Magnet, Flame, Headphones, Bot } from "lucide-react";
+import { Upload, Languages, AudioLines, Sparkles, ArrowRight, ShieldCheck, Download, Loader2, Trash2, Plus, Captions, Folder, FolderDown, ExternalLink, X, Undo2, Redo2, Settings, Settings2, Eye, EyeOff, Play, Pause, RotateCw, RotateCcw, RefreshCw, Square, Droplet, Check, HelpCircle, Music, Move, Minimize2, Maximize2, FileText, Users, Mic2, AlignLeft, AlignCenter, AlignRight, ChevronFirst, ChevronLast, ArrowLeftToLine, ArrowRightToLine, ChevronDown, ChevronUp, ScrollText, Clock, Keyboard, Save, ZoomIn, ZoomOut, Sliders, SlidersHorizontal, FolderOpen, Search, Volume2, Scissors, Link, VolumeX, Mic, MicOff, Disc, Layers, SkipBack, SkipForward, Magnet, Flame, Headphones, Bot } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useFloatable, dockSlot } from "./lib/useFloatable";
 import { api, type Project, type SubStyle, type Capabilities, type SetupStatus, type SetupComponent, type Character, type Selection } from "./lib/api";
@@ -28,6 +28,14 @@ import type { SettingsTabId } from "./lib/settingsNav";
 import { useHotkeysStore, formatKeyCombo } from "./lib/hotkeys";
 import DownloadFooterProgress from "./components/settings/DownloadFooterProgress";
 import { useSetupStatus } from "./lib/useSetupStatus";
+import GenPresetBar from "./components/GenPresetBar";
+import {
+  loadPresets,
+  applyPresetToProject,
+  applyPresetToBackend,
+  setLastUsedPresetId,
+  getLastUsedPresetId,
+} from "./lib/genPresets";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -40,14 +48,14 @@ function fmtT(s: number) {
 // Имя файла из пути (Windows/POSIX-разделители); fallback — сам путь.
 const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
 
-// Начальный playhead: ?t=SEC из URL (deep-link на кадр — для скринов/шаринга), иначе 1.0с.
+// Начальный playhead: ?t=SEC из URL (deep-link на кадр — для скринов/шаринга), иначе 0с.
 const initialScrub = (): number => {
   try {
     const q = new URLSearchParams(location.search).get("t");
     const n = q ? parseFloat(q) : NaN;
     if (Number.isFinite(n) && n >= 0) return n;
   } catch { /* нет URL/DOM */ }
-  return 1.0;
+  return 0;
 };
 
 // Направления тени титра/субтитра (значение, стрелка) — единый список для двух селектов.
@@ -1224,6 +1232,7 @@ function DropZone() {
   const setSlotsMSaved = (v: string[]) => { setSlotsM(v); localStorage.setItem("dub-voice-slots-m", JSON.stringify(v)); };
   const setSlotsFSaved = (v: string[]) => { setSlotsF(v); localStorage.setItem("dub-voice-slots-f", JSON.stringify(v)); };
   const [voiceLib, setVoiceLib] = useState<string[]>([]);                        // имена голосов из GET /voices (для селектов слотов)
+  const [dropPresetId, setDropPresetId] = useState<string>(() => getLastUsedPresetId() || "");
   const [mainTranscribeSpeakers, setMainTranscribeSpeakers] = useState<number>(0); // выбор спикеров для режима транскрипции на главном экране
   const visionOn = useStore((s) => s.visionOn);
   useEffect(() => {
@@ -1420,6 +1429,13 @@ function DropZone() {
           }
         } catch (e) {
           useStore.getState().pushActivity(String(e), "error");
+        }
+      }
+      if (dropPresetId) {
+        const presets = loadPresets();
+        const found = presets[dropPresetId];
+        if (found) {
+          await applyPresetToBackend(api, project_id, found);
         }
       }
       s.setProject(await api.getProject(project_id));
@@ -1624,6 +1640,35 @@ function DropZone() {
                 <Icon size={14} />{key.includes(".") ? t(key) : t(`comp.${key}`)}</button>
             ))}
           </div>
+
+          {/* Выбор пресета генерации на главном экране */}
+          {(() => {
+            const allPresets = Object.values(loadPresets());
+            if (allPresets.length === 0) return null;
+            return (
+              <div className="mt-2.5 flex items-center justify-between gap-2 p-2 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+                <span className="text-[11px] font-medium text-[var(--color-muted)] flex items-center gap-1.5 shrink-0">
+                  <SlidersHorizontal size={13} className="text-[var(--color-accent)]" />
+                  <span>Пресет:</span>
+                </span>
+                <select
+                  value={dropPresetId}
+                  onChange={(e) => {
+                    setDropPresetId(e.target.value);
+                    setLastUsedPresetId(e.target.value || null);
+                  }}
+                  className="flex-1 min-w-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-2 py-1 text-[11px] text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none cursor-pointer truncate"
+                >
+                  <option value="">(По умолчанию / Без пресета)</option>
+                  {allPresets.map((pr) => (
+                    <option key={pr.id} value={pr.id}>
+                      {pr.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            );
+          })()}
           {/* Прогрессивное раскрытие (#118): вторичные опции — в свёрнутых аккордеонах, только релевантные режиму.
               Все стейты/обработчики/условия те же, изменилась лишь группировка разметки. */}
           {(() => {
@@ -2019,7 +2064,7 @@ function DropZone() {
       <input ref={inputRef} type="file" accept={MEDIA_ACCEPT} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); }} />
       <input ref={batchRef} type="file" multiple accept={MEDIA_ACCEPT} className="hidden"
-        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.autoAlign = autoAlign; batchState.autoRegroup = autoRegroup; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.voDuckMode = voDuckMode; batchState.dubMixMode = dubMixMode; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; s.setStage("batch"); } }} />
+        onChange={(e) => { const fs = [...(e.target.files || [])]; if (fs.length) { batchState.files = fs; batchState.tgt = tgt; batchState.src = src; batchState.audio = audio; batchState.subs = subs; batchState.burn = burn; batchState.detectText = detectText; batchState.subBlur = subBlur; batchState.autoAlign = autoAlign; batchState.autoRegroup = autoRegroup; batchState.funnyOn = funnyOn; batchState.funny = funny; batchState.voGain = voGain; batchState.voDuckMode = voDuckMode; batchState.dubMixMode = dubMixMode; batchState.trStyle = resolveTrStyle(trStyle, trStyleCustom); batchState.keepOrig = keepOrig; batchState.container = container; batchState.voiceSrc = voiceSrc; batchState.slotsM = slotsM; batchState.slotsF = slotsF; batchState.transcribeSpeakers = mainTranscribeSpeakers; batchState.vision = visionOn; batchState.presetId = dropPresetId; s.setStage("batch"); } }} />
 
       {/* Модальное окно "Все проекты" со скроллом и поиском */}
       {allProjectsModal && (
@@ -4699,7 +4744,7 @@ function Editor() {
   const redo = useStore((s) => s.redo);
   const canUndo = useStore((s) => s.past.length > 0);
   const canRedo = useStore((s) => s.future.length > 0);
-  const [scrub, setScrub] = useState(initialScrub);                   // ?t=SEC — deep-link на кадр (для скринов/шаринга), иначе 1.0с
+  const [scrub, setScrub] = useState(initialScrub);                   // ?t=SEC — deep-link на кадр (для скринов/шаринга), иначе 0с
   const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null);
   const [selSegs, setSelSegs] = useState<Set<string>>(new Set());     // multi-select for bulk hide/delete
   const [selBlurs, setSelBlurs] = useState<Set<number>>(new Set());   // multi-select: mask boxes
@@ -7139,6 +7184,43 @@ function Editor() {
         ) : (
           /* Контент вкладки «Настройка генерации» */
           <div data-kb-scroll className="flex-1 min-h-0 overflow-y-auto p-4 bg-[var(--color-surface)] text-sm space-y-5">
+            {/* Панель пользовательских пресетов генерации */}
+            <GenPresetBar
+              project={p}
+              activeTtsEngine={activeTtsEngine}
+              onApplyPreset={async (preset) => {
+                const updated = applyPresetToProject(p, preset);
+                pushHistory(p);
+                setRendered(false);
+                try {
+                  const saved = await api.putProject(pid, updated);
+                  setProject(saved);
+                  bump();
+                  if (preset.tts.engine && preset.tts.engine !== activeTtsEngine) {
+                    try {
+                      await api.setSelection("tts_engine", preset.tts.engine);
+                      setActiveTtsEngine(preset.tts.engine);
+                    } catch { /* ignore */ }
+                  }
+                  pushActivity(`Применён пресет «${preset.name}»`, "done");
+                  playSfx("success");
+                } catch (err) {
+                  await surfaceErr(err);
+                }
+              }}
+              onClearPreset={async () => {
+                pushHistory(p);
+                try {
+                  const fresh = await api.patch(pid, { op: "gen_preset", name: null });
+                  setProject(fresh);
+                  bump();
+                  pushActivity("Пресет отвязан от проекта", "done");
+                } catch (err) {
+                  await surfaceErr(err);
+                }
+              }}
+            />
+
             <div>
               <SectionLabel>{t("preset.title")}</SectionLabel>
               <div className="grid grid-cols-2 gap-1.5 mb-2 max-h-44 overflow-y-auto pr-1">
@@ -9820,8 +9902,8 @@ function FirstRun({ embedded, onClose }: { embedded?: boolean; onClose?: () => v
 }
 
 // Пакетная обработка: DropZone кладёт выбранные файлы + настройки сюда, BatchView читает (без раздувания стора).
-const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; autoAlign: boolean; autoRegroup: boolean; funnyOn: boolean; funny: string; voGain: number; voDuckMode: string; dubMixMode: string; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean } =
-  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") === "1" : false, autoAlign: typeof window !== "undefined" ? localStorage.getItem("dub-auto-align") === "1" : false, autoRegroup: typeof window !== "undefined" ? localStorage.getItem("dub-auto-regroup") === "1" : false, funnyOn: false, funny: "", voGain: -12, voDuckMode: "dynamic", dubMixMode: "separated", trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true };
+const batchState: { files: File[]; tgt: string; src: string; audio: string; subs: string; burn: boolean; detectText: boolean; subBlur: boolean; autoAlign: boolean; autoRegroup: boolean; funnyOn: boolean; funny: string; voGain: number; voDuckMode: string; dubMixMode: string; trStyle: string; keepOrig: boolean; container: "mp4" | "mkv"; voiceSrc: "clone" | "library"; slotsM: string[]; slotsF: string[]; transcribeSpeakers: number; vision: boolean; presetId?: string } =
+  { files: [], tgt: "ru", src: "auto", audio: "dub", subs: "translate", burn: true, detectText: false, subBlur: typeof window !== "undefined" ? localStorage.getItem("dub-sub-blur") === "1" : false, autoAlign: typeof window !== "undefined" ? localStorage.getItem("dub-auto-align") === "1" : false, autoRegroup: typeof window !== "undefined" ? localStorage.getItem("dub-auto-regroup") === "1" : false, funnyOn: false, funny: "", voGain: -12, voDuckMode: "dynamic", dubMixMode: "separated", trStyle: "", keepOrig: false, container: "mp4", voiceSrc: "clone", slotsM: [], slotsF: [], transcribeSpeakers: 0, vision: true, presetId: "" };
 
 type BatchItem = {
   name: string;
@@ -9846,6 +9928,7 @@ function BatchView() {
   const [batchSubBlur, setBatchSubBlur] = useState(subBlur);
   const [batchAutoAlign, setBatchAutoAlign] = useState(autoAlign);
   const [batchAutoRegroup, setBatchAutoRegroup] = useState(autoRegroup);
+  const [batchPresetId, setBatchPresetId] = useState<string>(() => batchState.presetId ?? (getLastUsedPresetId() || ""));
   const [items, setItems] = useState<BatchItem[]>(() => filesRef.current.map((f) => ({ name: f.name, status: "queued", pid: null, pct: 0, subsFile: null })));
   const [running, setRunning] = useState(false);
   const [doneN, setDoneN] = useState(0);
@@ -9903,6 +9986,13 @@ function BatchView() {
         // Голоса из библиотеки (#114): раздать слоты ПЕРЕД render каждого проекта. Ошибка не роняет батч (клон-фолбэк).
         if (voiceSrc === "library" && doRender && (slotsM.length || slotsF.length)) {
           try { await api.voiceSlots(project_id, { male: slotsM, female: slotsF }); } catch { /* фолбэк на клон */ }
+        }
+        if (batchPresetId) {
+          const presets = loadPresets();
+          const found = presets[batchPresetId];
+          if (found) {
+            await applyPresetToBackend(api, project_id, found);
+          }
         }
         if (doRender) {
           upd({ status: "rendering", pct: null, detail: t("batch.startingRender") });
@@ -9995,6 +10085,36 @@ function BatchView() {
             <span className="text-[12px] text-[var(--color-muted)] whitespace-nowrap">{doneN}/{items.length} · {items.length} {t("batch.files")}</span>
           </div>
         </div>
+
+        {/* Панель выбора пресета для всей пачки видео */}
+        {(() => {
+          const allPresets = Object.values(loadPresets());
+          if (allPresets.length === 0) return null;
+          return (
+            <div className="flex items-center justify-between gap-2 px-3.5 py-2 mb-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-xs">
+              <span className="text-[12px] font-medium text-[var(--color-text)] flex items-center gap-1.5 shrink-0">
+                <SlidersHorizontal size={14} className="text-[var(--color-accent)]" />
+                <span>Пресет для всех роликов:</span>
+              </span>
+              <select
+                value={batchPresetId}
+                onChange={(e) => {
+                  setBatchPresetId(e.target.value);
+                  setLastUsedPresetId(e.target.value || null);
+                }}
+                disabled={running}
+                className="max-w-[260px] flex-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg px-2.5 py-1 text-xs text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none cursor-pointer truncate disabled:opacity-50"
+              >
+                <option value="">(По умолчанию / Без пресета)</option>
+                {allPresets.map((pr) => (
+                  <option key={pr.id} value={pr.id}>
+                    {pr.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          );
+        })()}
 
         <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] divide-y divide-[var(--color-border)]">
           {items.map((it, i) => (
@@ -10407,7 +10527,7 @@ function TranscriptView() {
   }
   const [busy, setBusy] = useState<string | null>(null);            // спикер в работе, либо "__all__"
   const [made, setMade] = useState<Record<string, string>>({});     // спикер -> имя созданного голоса
-  const [scrub, setScrub] = useState(() => initialScrub() || 0);      // ?t=SEC — deep-link на кадр транскрипта
+  const [scrub, setScrub] = useState(initialScrub);                   // ?t=SEC — deep-link на кадр транскрипта, иначе 0с
   const [play, setPlay] = useState(false);
   const [showHelp, setShowHelp] = useState(false);                  // оверлей-шпаргалка хоткеев (?)
   const previewRef = useRef<HTMLDivElement>(null);                  // контейнер <video> -> фулскрин по F + Ctrl-колесо
@@ -10757,6 +10877,7 @@ function TranscriptView() {
 export default function App() {
   const stage = useStore((s) => s.stage);                 // only re-route on stage change (not on every store write)
   const projMode = useStore((s) => (s.project as Project | null)?.mode);   // transcribe -> отдельный экран
+  const pid = useStore((s) => s.pid);
   const setPid = useStore((s) => s.setPid);
   const setProject = useStore((s) => s.setProject);
   const setStage = useStore((s) => s.setStage);
@@ -10821,7 +10942,7 @@ export default function App() {
       {stage === "analyzing" && <AnalyzeProgress />}
       {stage === "batch" && <BatchView />}
       {stage === "multilang" && <MultiLangView />}
-      {stage === "editor" && (projMode === "transcribe" ? <TranscriptView /> : <Editor />)}
+      {stage === "editor" && (projMode === "transcribe" ? <TranscriptView key={pid ?? undefined} /> : <Editor key={pid ?? undefined} />)}
       <footer className="mono h-6 px-4 flex items-center gap-2 text-[10px] text-[var(--color-muted)] border-t border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] shrink-0" /><span className="truncate" title={cap}>{cap}</span>
       </footer>

@@ -124,6 +124,9 @@ pub struct Audio {
     /// Флаг наличия несведённых изменений (перегенерированных фраз, не запечённых в мастер-трек dub_audio.m4a).
     #[serde(default)]
     pub mix_dirty: bool,
+    /// Имя применённого пресета генерации (субтитры + TTS + микс).
+    #[serde(default)]
+    pub gen_preset: Option<String>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -181,6 +184,7 @@ impl Default for Audio {
             higgs_temp: None,
             higgs_seed: None,
             mix_dirty: false,
+            gen_preset: None,
             extra: Extra::new(),
         }
     }
