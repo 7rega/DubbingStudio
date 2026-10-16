@@ -192,8 +192,8 @@ impl Envelope {
     /// Никогда не срезает границу внутрь (zero trim), сохраняя 100% хронометража.
     /// Расширяет влево до 20 мс в свободную тишину, оставляя защитный буфер >= 30 мс до предыдущей фразы.
     pub fn smart_trim_expand_start(&self, start: f64, _end: f64, lo: f64) -> f64 {
-        let safety_buffer = 0.030;
-        let max_expand = 0.020;
+        let safety_buffer: f64 = 0.030;
+        let max_expand: f64 = 0.020;
         let gap_left = start - lo;
 
         if gap_left <= safety_buffer {
@@ -210,8 +210,8 @@ impl Envelope {
     /// Никогда не срезает границу внутрь (zero trim), не отнимая хронометраж у дубляжа.
     /// Расширяет вправо до 30 мс в свободную тишину, оставляя защитный буфер >= 30 мс до следующей фразы.
     pub fn smart_trim_expand_end(&self, _start: f64, end: f64, hi: f64) -> f64 {
-        let safety_buffer = 0.030;
-        let max_expand = 0.030;
+        let safety_buffer: f64 = 0.030;
+        let max_expand: f64 = 0.030;
         let gap_right = hi - end;
 
         if gap_right <= safety_buffer {
