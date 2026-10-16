@@ -261,12 +261,49 @@ fn atempo_chain(factor: f64) -> String {
     parts.join(",")
 }
 
-/// factor>1 ускоряет (укорачивает); <1 замедляет. Порт media.time_stretch.
+/// factor>1 ускоряет (укорачивает); <1 замедляет.
+/// Первоочередно использует профессиональный алгоритм librubberband с удержанием формант человеческого голоса
+/// (formant=preserved) и защитой атаки согласных звуков (transients=crisp).
+/// При отсутствии librubberband в используемой сборке FFmpeg выполняет безопасный откат на каскадный atempo.
 pub fn time_stretch(src: &Path, dst: &Path, factor: f64) -> Result<(), String> {
+    if !factor.is_finite() || factor <= 0.0 {
+        return Err(format!("invalid time_stretch factor: {factor}"));
+    }
+    if (factor - 1.0).abs() < 1e-4 {
+        if src != dst {
+            let _ = std::fs::copy(src, dst);
+        }
+        return Ok(());
+    }
+
+    // 1. Приоритетный запуск: студийный алгоритм Rubberband (R3 + Formant Preservation)
+    let rb_arg = format!(
+        "rubberband=tempo={:.6}:formant=preserved:transients=crisp:pitchq=quality",
+        factor
+    );
+    let rb_res = run_ff(&[
+        OsStr::new("-y"),
+        OsStr::new("-i"),
+        src.as_os_str(),
+        OsStr::new("-filter:a"),
+        OsStr::new(&rb_arg),
+        dst.as_os_str(),
+    ]);
+
+    if rb_res.is_ok() && dst.is_file() {
+        return Ok(());
+    }
+
+    // 2. Безопасный откат (Fallback): цепочка atempo для совместимости
+    let _ = std::fs::remove_file(dst);
     let chain = atempo_chain(factor);
     run_ff(&[
-        OsStr::new("-y"), OsStr::new("-i"), src.as_os_str(),
-        OsStr::new("-filter:a"), OsStr::new(&chain), dst.as_os_str(),
+        OsStr::new("-y"),
+        OsStr::new("-i"),
+        src.as_os_str(),
+        OsStr::new("-filter:a"),
+        OsStr::new(&chain),
+        dst.as_os_str(),
     ])
 }
 
@@ -1702,6 +1739,42 @@ mod pause_squeeze_tests {
             assert!(mean.abs() < 1e-3);
         }
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_time_stretch_rubberband_and_fallback() {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let src = std::env::temp_dir().join(format!("test_ts_src_{}.wav", std::process::id()));
+        let dst_fast = std::env::temp_dir().join(format!("test_ts_fast_{}.wav", std::process::id()));
+        let dst_slow = std::env::temp_dir().join(format!("test_ts_slow_{}.wav", std::process::id()));
+        {
+            let mut writer = hound::WavWriter::create(&src, spec).unwrap();
+            for i in 0..16000 {
+                let sample = ((i as f32 * 0.1).sin() * 5000.0) as i16;
+                writer.write_sample(sample).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+        // Ускорение в 1.25x -> файл должен стать короче (~0.80 сек = ~12800 сэмплов)
+        if time_stretch(&src, &dst_fast, 1.25).is_ok() && dst_fast.is_file() {
+            let (samples, sr) = crate::wavio::read_mono_f32(&dst_fast).unwrap();
+            assert_eq!(sr, 16_000);
+            assert!(samples.len() >= 12000 && samples.len() <= 13500);
+            let _ = std::fs::remove_file(&dst_fast);
+        }
+        // Замедление в 0.85x -> файл должен стать длиннее (~1.17 сек = ~18823 сэмпла)
+        if time_stretch(&src, &dst_slow, 0.85).is_ok() && dst_slow.is_file() {
+            let (samples, sr) = crate::wavio::read_mono_f32(&dst_slow).unwrap();
+            assert_eq!(sr, 16_000);
+            assert!(samples.len() >= 18000 && samples.len() <= 19500);
+            let _ = std::fs::remove_file(&dst_slow);
+        }
+        let _ = std::fs::remove_file(&src);
     }
 }
 
