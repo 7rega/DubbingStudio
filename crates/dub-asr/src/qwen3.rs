@@ -3,7 +3,7 @@
 //! Интеграция связки Qwen3 ASR (1.7B) и Qwen3 Forced Aligner (0.6B) со встроенным Silero VAD.
 //! Пайплайн работает в 3 этапа:
 //! 1. Standalone Silero VAD через audiocpp_cli (`--task vad --family silero_vad`) с тюнингованными
-//!    параметрами (`threshold=0.35`, `speech_pad_ms=800`, `min_silence_duration_ms=2000`, `max_seconds=30`).
+//!    параметрами (`threshold=0.50`, `speech_pad_ms=250`, `min_silence_duration_ms=1000`, `min_speech_duration_ms=300`, `max_seconds=30`).
 //!    Это полностью отсекает фоновую музыку, песни и шум, предотвращая зацикливания и галлюцинации,
 //!    при этом надёжно захватывая тихие реплики и имена в начале фраз (например, «Aaron»).
 //! 2. Нарезка аудио-чанков по границам VAD в 16 кГц моно WAV.
@@ -116,6 +116,17 @@ fn normalize_word(s: &str) -> String {
         .filter(|c| c.is_alphanumeric())
         .flat_map(|c| c.to_lowercase())
         .collect()
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x4E00..=0x9FFF      // CJK Unified Ideographs
+        | 0x3400..=0x4DBF    // CJK Extension A
+        | 0x20000..=0x2A6DF  // CJK Extension B
+        | 0xAC00..=0xD7AF    // Hangul Syllables
+        | 0x3040..=0x309F    // Hiragana
+        | 0x30A0..=0x30FF    // Katakana
+    )
 }
 
 struct BatchChunkOutput {
@@ -245,9 +256,10 @@ impl AsrEngine for Qwen3Asr {
         vad_cmd.arg("--model").arg(&self.vad_model);
         vad_cmd.arg("--backend").arg(backend);
         vad_cmd.arg("--audio").arg(wav);
-        vad_cmd.arg("--request-option").arg("threshold=0.35");
-        vad_cmd.arg("--request-option").arg("speech_pad_ms=800");
-        vad_cmd.arg("--request-option").arg("min_silence_duration_ms=2000");
+        vad_cmd.arg("--request-option").arg("threshold=0.50");
+        vad_cmd.arg("--request-option").arg("speech_pad_ms=250");
+        vad_cmd.arg("--request-option").arg("min_silence_duration_ms=1000");
+        vad_cmd.arg("--request-option").arg("min_speech_duration_ms=300");
         vad_cmd.arg("--vad-chunk-max-seconds").arg("30");
         vad_cmd.arg("--vad-chunks-out").arg(&vad_chunks_file);
 
@@ -397,6 +409,20 @@ impl AsrEngine for Qwen3Asr {
                     }
 
                     if !word_text.is_empty() {
+                        // Подавление CJK-галлюцинаций (звукоподражания 嗯, 啊 на вздохах/стонах):
+                        // если целевой язык проекта не восточно-азиатский, отбрасываем слова,
+                        // состоящие только из CJK-иероглифов и пунктуации.
+                        let is_cjk_target = target_lang
+                            .as_deref()
+                            .map(|l| matches!(l, "Chinese" | "Cantonese" | "Japanese" | "Korean"))
+                            .unwrap_or(false);
+                        if !is_cjk_target && word_text.chars().any(is_cjk) {
+                            let letters: Vec<char> = word_text.chars().filter(|c| c.is_alphabetic()).collect();
+                            if !letters.is_empty() && letters.iter().all(|&c| is_cjk(c)) {
+                                continue;
+                            }
+                        }
+
                         let mut word = Word::new(word_text, start, end);
                         let next_gap = chunk_res.raw_words
                             .get(j + 1)

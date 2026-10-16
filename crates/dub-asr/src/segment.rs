@@ -245,6 +245,9 @@ pub fn segment_words_with_diarization(
     let mut cur_spk = tagged[0].1;
 
     for (i, (w, spk)) in tagged.iter().enumerate() {
+        if cur.is_empty() {
+            cur_spk = *spk;
+        }
         if let (Some(last), Some(first)) = (cur.last(), cur.first()) {
             let gap = (w.start - last.end).max(0.0);
             let dur = (last.end - first.start).max(0.0);
