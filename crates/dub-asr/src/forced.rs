@@ -431,34 +431,23 @@ impl Aligner {
                         });
                     }
 
-                    // Акустическое уточнение:
-                    // 1) Отсечение предречевой тишины на первом слове
-                    let trimmed_start = envelope.trim_start_silence(timed_words[0].start, timed_words[0].end);
-                    timed_words[0].start = trimmed_start;
-                    if timed_words[0].end < timed_words[0].start {
-                        timed_words[0].end = timed_words[0].start;
-                    }
+                    // Акустическое уточнение (безопасный Guarded Expand -20мс / +30мс без подрезки):
+                    // 1) Старт первого слова: расширение влево до 20мс в тишину (с защитным буфером до prev_end)
+                    let lo_start = meta.prev_end.max(0.0);
+                    let adj_start = envelope.smart_trim_expand_start(timed_words[0].start, timed_words[0].end, lo_start);
+                    timed_words[0].start = adj_start;
 
-                    // 2) Акустическая калибровка последнего слова:
+                    // 2) Конец последнего слова: расширение вправо до 30мс в тишину (с защитным буфером до next_start)
                     let last_idx = timed_words.len() - 1;
-                    // а) Отсечение наведённого хвоста фонового шума, если Qwen3 залез в тишину/шум комнаты
-                    let last_trimmed = envelope.trim_end_silence(timed_words[last_idx].start, timed_words[last_idx].end);
-                    timed_words[last_idx].end = last_trimmed.max(timed_words[last_idx].start);
-
-                    // б) Ведение огибающей для реально затянутых гласных и выкриков
-                    let hi = (meta.next_start - 0.02).min(duration).max(timed_words[last_idx].end);
-                    let exp_end = envelope.expand_tail(&timed_words[last_idx], hi);
-                    timed_words[last_idx].end = exp_end.max(timed_words[last_idx].start).min(hi);
+                    let hi_end = meta.next_start.min(duration).max(timed_words[last_idx].end);
+                    let adj_end = envelope.smart_trim_expand_end(timed_words[last_idx].start, timed_words[last_idx].end, hi_end);
+                    timed_words[last_idx].end = adj_end.max(timed_words[last_idx].start).min(hi_end);
 
                     let first_start = timed_words[0].start;
                     let last_end = timed_words.last().unwrap().end;
 
-                    // Границы сегмента: безопасный запас, строго first_start <= aligned_start и last_end >= aligned_end
-                    let aligned_start = (first_start - 0.020).max(meta.prev_end).min(first_start);
-                    let aligned_start = round_ms(aligned_start.max(0.0)).min(first_start);
-
-                    let aligned_end = (last_end + 0.020).min(meta.next_start).max(last_end);
-                    let aligned_end = round_ms(aligned_end.min(duration)).max(last_end);
+                    let aligned_start = round_ms(first_start.max(0.0));
+                    let aligned_end = round_ms(last_end.min(duration));
 
                     if aligned_end > aligned_start {
                         let review = timed_words.iter().any(|w| w.score < 0.3);

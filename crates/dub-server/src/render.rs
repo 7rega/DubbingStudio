@@ -1011,7 +1011,11 @@ fn build_dub(
                     media::trim(src, &out, 0.0, paths.ref_secs, 16_000).is_ok()
                 };
                 if trimmed && out.is_file() {
-                    let _ = media::align_wav_to_codec_frames(&out);
+                    if smart_ref_on {
+                        let _ = media::clean_and_align_reference_wav(&out);
+                    } else {
+                        let _ = media::align_wav_to_codec_frames(&out);
+                    }
                     map.insert(spk.clone(), out);
                 } else {
                     clone_slot_spks.insert(spk.clone());
@@ -1053,7 +1057,11 @@ fn build_dub(
                         media::trim(&src, &out, 0.0, paths.ref_secs, 16_000).is_ok()
                     };
                     if trimmed && out.is_file() {
-                        let _ = media::align_wav_to_codec_frames(&out);
+                        if smart_ref_on {
+                            let _ = media::clean_and_align_reference_wav(&out);
+                        } else {
+                            let _ = media::align_wav_to_codec_frames(&out);
+                        }
                         map.insert(spk.clone(), out);
                     }
                 }
@@ -1203,7 +1211,11 @@ fn build_dub(
         let out = wd.join(format!("emoref_{sid}.wav"));
         match media::trim(&vocals16, &out, raw_start, raw_end.max(raw_start + 0.05), 16_000) {
             Ok(()) => {
-                let _ = media::align_wav_to_codec_frames(&out);
+                if emo_ref_clean {
+                    let _ = media::clean_and_align_reference_wav(&out);
+                } else {
+                    let _ = media::align_wav_to_codec_frames(&out);
+                }
                 Some((out, ref_text))
             }
             Err(e) => {
@@ -1630,7 +1642,11 @@ fn build_dub(
                         let trim_end = if dur > 0.0 { dur.min(cap) } else { cap };
                         let trim_ok = media::trim(dwav, &out, 0.0, trim_end, 16_000).is_ok();
                         if trim_ok && out.is_file() {
-                            let _ = media::align_wav_to_codec_frames(&out);
+                            if smart_ref_on {
+                                let _ = media::clean_and_align_reference_wav(&out);
+                            } else {
+                                let _ = media::align_wav_to_codec_frames(&out);
+                            }
                             // Для донора передаём только акустику без текста (Audio-Only In-Context Prompting).
                             // Экспериментально доказано, что передача чужого текста референса ломает интонацию
                             // и проглатывает окончания целевой фразы (в то время как Audio-Only даёт идеальное произношение).
@@ -1647,7 +1663,11 @@ fn build_dub(
                             media::trim(&vocals16, &out, ds.start, end.max(ds.start + 0.05), 16_000).is_ok()
                         };
                         if trim_ok && out.is_file() {
-                            let _ = media::align_wav_to_codec_frames(&out);
+                            if smart_ref_on {
+                                let _ = media::clean_and_align_reference_wav(&out);
+                            } else {
+                                let _ = media::align_wav_to_codec_frames(&out);
+                            }
                             Some((out, None))
                         } else {
                             None
@@ -1680,7 +1700,11 @@ fn build_dub(
                     };
                     let _ = std::fs::remove_file(&temp_in);
                     if trim_ok && out.is_file() {
-                        let _ = media::align_wav_to_codec_frames(&out);
+                        if smart_ref_on {
+                            let _ = media::clean_and_align_reference_wav(&out);
+                        } else {
+                            let _ = media::align_wav_to_codec_frames(&out);
+                        }
                         // Если включена умная нарезка, получаем точный текст среза через ASR,
                         // исключая передачу огромного несоответствующего .txt файла в модель
                         let txt_content = if smart_ref_on {
@@ -2906,7 +2930,11 @@ fn build_speaker_refs(
             if !trimmed {
                 media::trim(vocals16, &p, c.start, c.end.min(c.start + ref_secs), 16_000)?;
             }
-            let _ = media::align_wav_to_codec_frames(&p);
+            if smart_ref_on {
+                let _ = media::clean_and_align_reference_wav(&p);
+            } else {
+                let _ = media::align_wav_to_codec_frames(&p);
+            }
             batch.push(p);
         }
         cand_map.insert(spk.clone(), good);

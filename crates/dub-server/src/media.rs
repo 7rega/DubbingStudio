@@ -1155,7 +1155,8 @@ pub fn trim_smart_ref(
     let abs_start = start_offset + rel_start;
     let abs_end = start_offset + rel_end;
 
-    let idx_start = ((rel_start * sr as f64).round() as usize).min(available.len());
+    let raw_idx_start = ((rel_start * sr as f64).round() as usize).min(available.len());
+    let idx_start = find_nearest_zero_crossing(available, raw_idx_start, 80);
     let mut idx_end = ((rel_end * sr as f64).round() as usize).min(available.len()).max(idx_start + 160);
 
     // Квантование длины сэмпла кратно 640 сэмплам (40мс @ 16kHz) для точного совпадения фреймов
@@ -1173,18 +1174,9 @@ pub fn trim_smart_ref(
         return Err("empty slice".to_string());
     }
 
-    // Мягкий микро fade-in (15 мс)
-    let fi_len = ((sr as f64 * 0.015).round() as usize).min(slice.len() / 2);
-    for i in 0..fi_len {
-        slice[i] *= i as f32 / fi_len as f32;
-    }
-
-    // Мягкий микро fade-out (30 мс)
-    let fo_len = ((sr as f64 * 0.030).round() as usize).min(slice.len() / 2);
-    for i in 0..fo_len {
-        let idx = slice.len() - 1 - i;
-        slice[idx] *= i as f32 / fo_len as f32;
-    }
+    // Удаление постоянной составляющей (DC offset) и наложение мягких косинусных микро-фейдов
+    remove_dc_offset(&mut slice);
+    apply_smooth_cosine_fades(&mut slice, sr, 0.015, 0.030);
 
     // Запись в mono 16kHz PCM16 WAV
     let spec = hound::WavSpec {
@@ -1202,6 +1194,117 @@ pub fn trim_smart_ref(
     writer.finalize().map_err(|e| format!("finalize wav: {e}"))?;
 
     Ok((abs_start, abs_end))
+}
+
+/// Удаляет постоянную составляющую (DC offset) из сэмплов аудиосигнала.
+pub fn remove_dc_offset(samples: &mut [f32]) {
+    if samples.is_empty() {
+        return;
+    }
+    let mean: f32 = samples.iter().copied().sum::<f32>() / (samples.len() as f32);
+    if mean.abs() > 1e-6 {
+        for s in samples.iter_mut() {
+            *s -= mean;
+        }
+    }
+}
+
+/// Накладывает мягкие косинусные фейды (raised cosine / Hann) на границы сэмпла:
+/// fade-in (15 мс) и fade-out (25-30 мс).
+/// Первый и последний сэмпл строго равны 0.0, первая производная на краях равна нулю (C1-гладкость),
+/// что полностью исключает высокочастотные щелчки и фазовые ступеньки.
+pub fn apply_smooth_cosine_fades(samples: &mut [f32], sr: u32, fade_in_secs: f64, fade_out_secs: f64) {
+    if samples.is_empty() {
+        return;
+    }
+    let fi_len = ((sr as f64 * fade_in_secs).round() as usize).min(samples.len() / 2);
+    if fi_len > 0 {
+        for i in 0..fi_len {
+            let phase = std::f64::consts::PI * (i as f64) / (fi_len as f64);
+            let gain = (0.5 * (1.0 - phase.cos())) as f32;
+            samples[i] *= gain;
+        }
+        samples[0] = 0.0;
+    }
+
+    let fo_len = ((sr as f64 * fade_out_secs).round() as usize).min(samples.len() / 2);
+    if fo_len > 0 {
+        let last_idx = samples.len() - 1;
+        for i in 0..fo_len {
+            let phase = std::f64::consts::PI * (i as f64) / (fo_len as f64);
+            let gain = (0.5 * (1.0 - phase.cos())) as f32;
+            samples[last_idx - i] *= gain;
+        }
+        samples[last_idx] = 0.0;
+    }
+}
+
+/// Выполняет полную DSP-подготовку голосового референса (Clean Emo-Ref / Smart Ref):
+/// 1. Читает mono 16kHz WAV.
+/// 2. Ищет ближайший переход через ноль (zero-crossing) в начале клипа (первые 5мс / 80 сэмплов).
+/// 3. Удаляет постоянную составляющую (DC offset).
+/// 4. При длине < 1.00с (16000 сэмплов) сначала сглаживает хвост аудио, а затем дополняет нулями до 16000.
+/// 5. При длине >= 1.00с квантует сэмплы кратно 640 сэмплам (40мс) для совпадения кодеков Higgs Audio v3 / audio.cpp.
+/// 6. Накладывает мягкие косинусные фейды (15мс fade-in, 30мс fade-out), гарантируя строго нулевой уровень на краях.
+/// 7. Записывает результат обратно в WAV.
+pub fn clean_and_align_reference_wav(wav_path: &Path) -> Result<(), String> {
+    let (mut samples, sr) = match crate::wavio::read_mono_f32(wav_path) {
+        Ok((s, sr)) => (s, sr),
+        Err(e) => return Err(format!("clean_ref read {}: {e}", wav_path.display())),
+    };
+    if sr != 16_000 || samples.is_empty() {
+        return Ok(());
+    }
+
+    // 1. Поиск zero-crossing в окрестности старта (первые 5мс = 80 сэмплов)
+    let zc_start = find_nearest_zero_crossing(&samples, 0, 80);
+    if zc_start > 0 && zc_start < samples.len() / 4 {
+        samples.drain(0..zc_start);
+    }
+
+    // 2. Удаление постоянного смещения
+    remove_dc_offset(&mut samples);
+
+    let frame_samples = 640; // 40мс @ 16kHz
+    let min_samples = 25 * frame_samples; // 16000 сэмплов (1.00 сек @ 16kHz)
+
+    if samples.len() < min_samples {
+        // Сначала мягко уводим в ноль сам хвост короткого звука, чтобы не было ступеньки перед нулями
+        apply_smooth_cosine_fades(&mut samples, sr, 0.015, 0.030);
+        // Затем дополняем чистой тишиной до минимального порога фреймов кодека
+        samples.resize(min_samples, 0.0);
+    } else {
+        // Усекаем до границы фрейма кодека
+        let rem = samples.len() % frame_samples;
+        if rem != 0 {
+            samples.truncate(samples.len() - rem);
+        }
+        // Накладываем фейды на итоговую длину
+        apply_smooth_cosine_fades(&mut samples, sr, 0.015, 0.030);
+    }
+
+    // Гарантируем строгие нули на границах
+    if !samples.is_empty() {
+        samples[0] = 0.0;
+        let last = samples.len() - 1;
+        samples[last] = 0.0;
+    }
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(wav_path, spec)
+        .map_err(|e| format!("clean_ref create {}: {e}", wav_path.display()))?;
+    for &s in &samples {
+        let pcm = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        writer.write_sample(pcm).map_err(|e| format!("clean_ref write: {e}"))?;
+    }
+    writer.finalize().map_err(|e| format!("clean_ref finalize: {e}"))?;
+
+    Ok(())
 }
 
 /// Выравнивает количество сэмплов в mono 16kHz WAV-файле до целого числа фреймов (кратного 640 сэмплам / 40мс)
@@ -1564,6 +1667,41 @@ mod pause_squeeze_tests {
             assert_eq!(samples.len() % 640, 0);
         }
         let _ = std::fs::remove_file(&tmp2);
+    }
+
+    #[test]
+    fn test_clean_and_align_reference_wav() {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        // Короткий файл со смещением (DC offset) и ненулевым началом
+        let tmp = std::env::temp_dir().join(format!("test_clean_ref_{}.wav", std::process::id()));
+        {
+            let mut writer = hound::WavWriter::create(&tmp, spec).unwrap();
+            for i in 0..12000 {
+                // Синусоида с постоянным сдвигом +2000
+                let sample = ((i as f32 * 0.1).sin() * 5000.0 + 2000.0) as i16;
+                writer.write_sample(sample).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+        clean_and_align_reference_wav(&tmp).unwrap();
+        {
+            let (samples, sr) = crate::wavio::read_mono_f32(&tmp).unwrap();
+            assert_eq!(sr, 16_000);
+            assert_eq!(samples.len(), 16000);
+            assert_eq!(samples.len() % 640, 0);
+            // Первый и последний сэмплы гарантированно строго нулевые (без щелчков)
+            assert_eq!(samples[0], 0.0);
+            assert_eq!(samples[samples.len() - 1], 0.0);
+            // Среднее (DC offset) должно быть устранено
+            let mean: f32 = samples.iter().copied().sum::<f32>() / (samples.len() as f32);
+            assert!(mean.abs() < 1e-3);
+        }
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 

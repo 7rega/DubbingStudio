@@ -187,6 +187,49 @@ impl Envelope {
         }
         None
     }
+
+    /// Безопасное микро-расширение начала фразы наружу (Zero-Trim & Guarded Expand <= 20мс).
+    /// Никогда не срезает границу внутрь (zero trim), сохраняя 100% хронометража.
+    /// Расширяет влево до 20 мс в свободную тишину, оставляя защитный буфер >= 30 мс до предыдущей фразы.
+    pub fn smart_trim_expand_start(&self, start: f64, _end: f64, lo: f64) -> f64 {
+        let safety_buffer = 0.030;
+        let max_expand = 0.020;
+        let gap_left = start - lo;
+
+        if gap_left <= safety_buffer {
+            // Фразы идут впритык — блокируем расширение во избежание наложений
+            return start;
+        }
+
+        let avail = gap_left - safety_buffer;
+        let expand = max_expand.min(avail);
+        round_ms((start - expand).max(lo))
+    }
+
+    /// Безопасное микро-расширение конца фразы наружу (Zero-Trim & Guarded Expand <= 30мс).
+    /// Никогда не срезает границу внутрь (zero trim), не отнимая хронометраж у дубляжа.
+    /// Расширяет вправо до 30 мс в свободную тишину, оставляя защитный буфер >= 30 мс до следующей фразы.
+    pub fn smart_trim_expand_end(&self, _start: f64, end: f64, hi: f64) -> f64 {
+        let safety_buffer = 0.030;
+        let max_expand = 0.030;
+        let gap_right = hi - end;
+
+        if gap_right <= safety_buffer {
+            // Следующая фраза идет впритык — блокируем расширение
+            return end;
+        }
+
+        let avail = gap_right - safety_buffer;
+        let expand = max_expand.min(avail);
+        round_ms((end + expand).min(hi))
+    }
+
+    /// Двусторонний «умный» контроль обоих краёв фразы (Guarded Expand: -20мс слева / +30мс справа).
+    pub fn smart_adjust_bounds(&self, start: f64, end: f64, lo: f64, hi: f64) -> (f64, f64) {
+        let adj_start = self.smart_trim_expand_start(start, end, lo);
+        let adj_end = self.smart_trim_expand_end(adj_start, end, hi);
+        (adj_start, adj_end)
+    }
 }
 fn percentile(values:&[f64],p:f64)->f64 {
     if values.is_empty(){return 0.0;}
@@ -243,5 +286,31 @@ mod tests {
         let env = Envelope::new(&audio);
         let trimmed = env.trim_start_silence(0.2, 1.5);
         assert!(trimmed >= 0.95 && trimmed <= 1.05, "expected onset near 1.0s, got {trimmed}");
+    }
+
+    #[test]
+    fn smart_trim_expand_start_guarded_expand() {
+        let audio = vec![0.0f32; 16000];
+        let env = Envelope::new(&audio);
+        // Free space to the left (lo = 0.0, start = 1.0) -> expands by 20ms to 0.98s
+        let expanded = env.smart_trim_expand_start(1.0, 2.0, 0.0);
+        assert!((expanded - 0.98).abs() < 0.001, "expected 0.98s, got {expanded}");
+
+        // Tight space (lo = 0.98, start = 1.0, gap = 20ms <= 30ms buffer) -> locked at 1.0s
+        let locked = env.smart_trim_expand_start(1.0, 2.0, 0.98);
+        assert!((locked - 1.0).abs() < 0.001, "expected locked at 1.0s, got {locked}");
+    }
+
+    #[test]
+    fn smart_trim_expand_end_guarded_expand() {
+        let audio = vec![0.0f32; 16000];
+        let env = Envelope::new(&audio);
+        // Free space to the right (end = 1.0, hi = 2.0) -> expands by 30ms to 1.03s
+        let expanded = env.smart_trim_expand_end(0.5, 1.0, 2.0);
+        assert!((expanded - 1.03).abs() < 0.001, "expected 1.03s, got {expanded}");
+
+        // Tight space (end = 1.0, hi = 1.02, gap = 20ms <= 30ms buffer) -> locked at 1.0s
+        let locked = env.smart_trim_expand_end(0.5, 1.0, 1.02);
+        assert!((locked - 1.0).abs() < 0.001, "expected locked at 1.0s, got {locked}");
     }
 }
