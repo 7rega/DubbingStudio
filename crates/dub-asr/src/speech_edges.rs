@@ -25,9 +25,13 @@ impl Envelope {
         }
         let i0 = (((start - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len());
         let i_limit = (((end - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len());
+        let mut peak = 0.0f64;
+        for i in i0..i_limit {
+            peak = peak.max(self.rms[i]);
+        }
+        let floor = (0.0020f64).max(peak * 0.08);
         let mut cur = i0;
-        // Quiet threshold: 0.0025 RMS corresponds to quiet ambient/room level
-        while cur < i_limit && self.rms[cur] < 0.0025 {
+        while cur < i_limit && self.rms[cur] < floor {
             cur += 1;
         }
         // Only trim if there is significant leading silence (at least 80 ms = 16 frames)
@@ -51,7 +55,7 @@ impl Envelope {
         for i in i_start..=i_end {
             peak = peak.max(self.rms[i]);
         }
-        let floor = (0.0035f64).max(peak * 0.08);
+        let floor = (0.0020f64).max(peak * 0.08);
 
         let mut cur = i_end;
         while cur > i_start && self.rms[cur] < floor {
@@ -67,8 +71,8 @@ impl Envelope {
         }
     }
     /// Controlled forward expansion for sustained vowels / shouts on the final word.
-    /// Only expands if acoustic energy is actively vibrating at the word boundary (RMS >= 0.015),
-    /// decays along the vowel envelope above speech floor (>= 0.010), and is capped at +250ms.
+    /// Only expands if acoustic energy is actively vibrating at the word boundary (RMS >= min_vibrate),
+    /// decays along the vowel envelope above speech floor (>= floor), and is capped at +250ms.
     pub fn expand_tail(&self, w: &TimedWord, hi: f64) -> f64 {
         if self.rms.is_empty() || !(hi > w.end) {
             return w.end;
@@ -84,11 +88,12 @@ impl Envelope {
         }
 
         // Only expand if the voice is still actively vibrating / shouting at edge
-        if edge_rms < 0.015 || edge_rms < word_peak * 0.20 {
+        let min_vibrate = (0.008f64).max(word_peak * 0.20);
+        if edge_rms < min_vibrate {
             return edge;
         }
 
-        let floor = (0.010f64).max(word_peak * 0.15);
+        let floor = (0.006f64).max(word_peak * 0.15);
         let limit_t = hi.min(edge + 0.250);
         let stop = (((limit_t - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len());
 

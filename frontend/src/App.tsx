@@ -531,7 +531,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
                 <div className="flex flex-wrap gap-1">
                   {[
                     { label: "Дефолт", val: "" },
-                    { label: "Дубляж", val: "--device cuda --compute_type float16 --vad_filter True --vad_method silero_v4_fw --word_timestamps True --condition_on_previous_text False --beam_size 5 --temperature 0 --batched" },
+                    { label: "Дубляж", val: "--device cuda --compute_type float16 --vad_filter True --vad_method silero_v5_fw --ff_speechnorm --word_timestamps True --hallucination_silence_threshold 1.0 --condition_on_previous_text False --beam_size 5 --temperature 0" },
                     { label: "Субтитры", val: "--standard --batched" },
                     { label: "Скорость", val: "--batched" },
                     { label: "Анти-галлюцинации", val: "--vad_filter True --vad_method silero_v5_fw --condition_on_previous_text False --beam_size 1 --temperature 0 --hallucination_silence_threshold 2 --batched" }

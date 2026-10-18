@@ -247,18 +247,9 @@ impl Aligner {
             let prev_end = if i > 0 { inputs[i - 1].end } else { 0.0 };
             let next_start = if i + 1 < inputs.len() { inputs[i + 1].start } else { duration };
 
-            // Проверяем наличие мертвой тишины перед репликой:
-            // если перед s.start тишина (RMS < 0.0025), отступ минимальный (50 мс),
-            // чтобы Qwen3 не прилипал к сэмплу 0 тишины на коротких словах (Oi. и др.)
-            let silence_check_start = (s.start - 0.35).max(prev_end);
-            let is_silent_before = envelope.max_rms(silence_check_start, s.start) < 0.0025;
-
-            let pad_left = if is_silent_before {
-                0.05
-            } else {
-                (0.35f64).min((0.10f64).max((s.start - prev_end) * 0.5))
-            };
-            let pad_right = (0.60f64).min((0.15f64).max((next_start - s.end) * 0.7));
+            // Candidate 2: Симметричный акустический запас +-300 мс для надежного захвата краевых фонем
+            let pad_left = 0.30f64;
+            let pad_right = 0.30f64;
 
             let win_start = (s.start - pad_left).max(0.0);
             let win_end = (s.end + pad_right).min(duration);
@@ -412,6 +403,9 @@ impl Aligner {
                         let mut w_end = round_ms(meta.win_start + (w.end_sample as f64 / 16000.0));
 
                         // Гарантируем монотонность и отсутствие нахлёстов между соседними словами
+                        if k == 0 {
+                            w_start = w_start.max(meta.prev_end);
+                        }
                         if w_start < prev_word_end {
                             w_start = prev_word_end;
                         }
@@ -420,6 +414,12 @@ impl Aligner {
                         }
                         w_start = w_start.min(duration);
                         w_end = w_end.min(duration);
+                        if k + 1 == raw_words.len() {
+                            w_end = w_end.min(meta.next_start);
+                            if w_start > w_end {
+                                w_start = w_end;
+                            }
+                        }
                         prev_word_end = w_end;
 
                         let score = w.confidence.unwrap_or(1.0).clamp(0.0, 1.0);

@@ -259,7 +259,14 @@ pub fn segment_words_with_diarization(
             //    предыдущее слово завершило законченное предложение (.!?…). Слитная речь защищена
             //    от ложного разрыва на запятых и клаузах из-за единичных флуктуаций классификатора.
             let next_last = Some(w.word.as_str());
-            let is_speaker_change = *spk != cur_spk && (gap >= 0.20 || ends_sentence(&last.word, next_last));
+            let is_sent_end = ends_sentence(&last.word, next_last);
+            let mut is_speaker_change = *spk != cur_spk && (gap >= 0.20 || is_sent_end);
+            if is_speaker_change && is_sent_end {
+                let foreign_ov = diar_index.turn_overlap(last.start, last.end, *spk);
+                if foreign_ov < 0.350 {
+                    is_speaker_change = false;
+                }
+            }
 
             // 3. Жёлтая зона (12–15с): мягкий разрыв по клаузе/VAD/паузе
             let is_soft_split = dur >= SEG_IDEAL_DUR

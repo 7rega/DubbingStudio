@@ -96,6 +96,27 @@ impl DiarIndex {
             .map(|(spk, _)| spk)
     }
 
+    /// Суммарное перекрытие интервала [start, end) с turn'ами целевого спикера `target_spk`.
+    pub fn turn_overlap(&self, start: f64, end: f64, target_spk: i32) -> f64 {
+        if self.turns.is_empty() || end <= start {
+            return 0.0;
+        }
+        let from = self.first_candidate(start);
+        let mut total = 0.0;
+        for t in &self.turns[from..] {
+            if t.start >= end {
+                break;
+            }
+            if t.speaker == target_spk {
+                let ov = end.min(t.end) - start.max(t.start);
+                if ov > 0.0 {
+                    total += ov;
+                }
+            }
+        }
+        total
+    }
+
     /// Ближайший спикер по центру реплики — фолбэк для реплик без перекрытия (fill_nearest).
     pub fn nearest(&self, start: f64, end: f64) -> Option<i32> {
         if self.turns.is_empty() {

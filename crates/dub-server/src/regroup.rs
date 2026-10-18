@@ -190,7 +190,8 @@ pub fn split_segments(segments: &[Segment], env: &Envelope) -> (Vec<Segment>, Ve
                     || ws.last().unwrap().end - ws[j+1].start < SPLIT_MIN_PART { continue; }
                 let rms = env.max_rms(ws[j].end + 0.05, ws[j+1].start - 0.05);
                 let peak = env.max_rms(ws[j].start, ws[j].end).min(env.max_rms(ws[j+1].start, ws[j+1].end));
-                if peak <= 0.0 || rms >= SPLIT_ABS || rms >= peak * SPLIT_RATIO { continue; }
+                let silence_limit = (peak * SPLIT_RATIO).min(SPLIT_ABS).max(0.003);
+                if peak <= 0.0 || rms >= silence_limit { continue; }
                 let mid = (ws[j].end + ws[j+1].start) / 2.0;
                 // Acoustic padding belongs to each new edge, bounded by silence ownership.
                 let end = env.expand(&ws[j], false, s.start, mid).max(ws[j].end).min(mid);
