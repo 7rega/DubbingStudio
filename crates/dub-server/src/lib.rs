@@ -182,6 +182,8 @@ pub fn verify_captions_e2e(
         vision: models::vision_enabled(&mroot),
         auto_align: false,
         regroup: false,
+        skip_translate: false,
+        dub_mix_mode: None,
     };
     let sel = models::load_selection(&mroot);
     let (mt_model, mmproj) = models::resolve_mt(&mroot, &sel);
@@ -1906,6 +1908,8 @@ async fn analyze_project(
         auto_align: qget("auto_align", "0") == "1",
         // Пересборка (авто-сплит) только вместе с auto_align: нужны выровненные слова.
         regroup: qget("auto_align", "0") == "1" && qget("regroup", "0") == "1",
+        skip_translate: qget("skip_translate", "0") == "1",
+        dub_mix_mode: q.get("dub_mix_mode").cloned(),
     };
     if args.auto_align {
         if let Err(e) = alignment::preflight(&st.models_root) {

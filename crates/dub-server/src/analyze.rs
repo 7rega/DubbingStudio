@@ -290,6 +290,10 @@ pub struct AnalyzeArgs {
     /// НЕ выполняется никогда (нужно решение пользователя на слух) — лишь пишутся предложения в extra.
     /// Эффективна только при auto_align (нужны выровненные слова).
     pub regroup: bool,
+    /// Пропустить стадию машинного перевода (Gemma) — подготовка проекта под ручную или агентную адаптацию.
+    pub skip_translate: bool,
+    /// Режим сведения звука: "master_mute" / "with_effects" (с эффектами) или "separated" / "classic" (классический).
+    pub dub_mix_mode: Option<String>,
 }
 
 /// Пути к моделям/входу для одной джобы analyze.
@@ -972,6 +976,13 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     };
     proj.mode = mode;
     proj.tgt_lang = args.tgt_lang.clone();
+    if let Some(ref m) = args.dub_mix_mode {
+        proj.audio.dub_mix_mode = if m == "master_mute" || m == "effects" || m == "with_effects" {
+            "master_mute".to_string()
+        } else {
+            "separated".to_string()
+        };
+    }
     // Язык оригинала (для метки 2-й дорожки при keep_original_track). "auto" не детектится типизированно —
     // храним как есть; render маппит непустой не-auto код через iso639, иначе "und". Инвариант extra=allow.
     proj.meta.extra.insert("src_lang".into(), Value::String(args.src_lang.clone()));
@@ -1011,17 +1022,25 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
         }
     }
     bench.stage("translate");
-    let _ = crate::translate::stage(args, paths, &mut proj, &asr_wav, meta.height, meta.duration, progress);
-    let translate_key = cache::hash_stage(&[
-        TRANSLATE_VER,
-        &transcript_fp,
-        &proj.tgt_lang,
-        &proj.mode,
-        &args.rewrite,
-        if args.import_translated { "imp1" } else { "imp0" },
-        if args.vision { "vis1" } else { "vis0" },
-    ]);
-    cache.write_stage(&paths.work_dir, "translate", &translate_key, &[]);
+    if args.skip_translate {
+        emit(progress, "translate", "перевод пропущен (подготовка для адаптации агентом)");
+        for s in &mut proj.segments {
+            s.tgt_text.clear();
+            s.extra.insert("translation_pending".into(), Value::Bool(true));
+        }
+    } else {
+        let _ = crate::translate::stage(args, paths, &mut proj, &asr_wav, meta.height, meta.duration, progress);
+        let translate_key = cache::hash_stage(&[
+            TRANSLATE_VER,
+            &transcript_fp,
+            &proj.tgt_lang,
+            &proj.mode,
+            &args.rewrite,
+            if args.import_translated { "imp1" } else { "imp0" },
+            if args.vision { "vis1" } else { "vis0" },
+        ]);
+        cache.write_stage(&paths.work_dir, "translate", &translate_key, &[]);
+    }
 
     // 7) OCR-стадия (раунд 4): детекция вшитого текста -> блюр-боксы субтитр-полосы + уточнение sub_y.
     //    Порт pipeline.run ocr_detect + compose.analyze_layout. Fail-safe: сбой OCR не валит analyze

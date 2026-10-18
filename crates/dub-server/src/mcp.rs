@@ -491,6 +491,105 @@ async fn wait_for(args: &Value) -> Result<Value, String> {
     }
 }
 
+/// Prepares a project for agent translation and dubbing: runs audio separation, ASR,
+/// speaker diarization, and timing alignment. Skips Gemma LLM translation and OCR.
+/// Configures project mode ('dub' or 'voiceover') and dub_mix_mode ('classic' or 'with_effects').
+async fn prepare_project(args: &Value) -> Result<Value, String> {
+    let path_opt = args.get("path").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+    let pid_opt = args.get("pid").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+
+    let pid = match (path_opt, pid_opt) {
+        (_, Some(p)) => p.to_string(),
+        (Some(p), None) => {
+            let (status, made) = call_route(Call {
+                method: Method::POST,
+                path: "/projects/from-path".into(),
+                payload: Payload::Json(json!({ "path": p, "key": "prepare", "tool": "project_prepare" })),
+            }).await?;
+            if !status.is_success() {
+                return Err(format!("Could not create project for {p}: {made}"));
+            }
+            let val: Value = serde_json::from_str(&made).map_err(|e| e.to_string())?;
+            val["project_id"].as_str().map(str::to_string).ok_or_else(|| format!("No project_id returned: {made}"))?
+        }
+        (None, None) => return Err("Either 'path' (to a video file) or 'pid' (project ID) must be provided.".into()),
+    };
+
+    let tgt_lang = args.get("tgt_lang").and_then(Value::as_str).unwrap_or("ru");
+    let mode = args.get("mode").and_then(Value::as_str).unwrap_or("dub");
+    let dub_mix_mode = args.get("dub_mix_mode").and_then(Value::as_str).unwrap_or("classic");
+    let src_lang = args.get("src_lang").and_then(Value::as_str).unwrap_or("auto");
+    let seconds = args.get("seconds").and_then(Value::as_u64).unwrap_or(45).clamp(0, WAIT_LONGEST);
+
+    let tail = query(&[
+        ("tgt_lang", Some(tgt_lang.to_string())),
+        ("mode", Some(mode.to_string())),
+        ("dub_mix_mode", Some(dub_mix_mode.to_string())),
+        ("src_lang", Some(src_lang.to_string())),
+        ("skip_translate", Some("1".to_string())),
+        ("detect", Some("0".to_string())),
+        ("casting", Some("0".to_string())),
+        ("subs", Some("translate".to_string())),
+        ("burn", Some("1".to_string())),
+    ]);
+
+    let analyze_path = format!("/projects/{}/analyze{tail}", segment(&pid));
+    let (status, resp_text) = call_route(Call {
+        method: Method::POST,
+        path: analyze_path,
+        payload: Payload::Json(json!({})),
+    }).await?;
+
+    if !status.is_success() {
+        return Err(format!("Failed to start preparation for project {pid}: {status} {resp_text}"));
+    }
+
+    let resp: Value = serde_json::from_str(&resp_text).map_err(|e| e.to_string())?;
+    let job_id = resp.get("job_id").and_then(Value::as_str).ok_or_else(|| format!("No job_id in analyze response: {resp_text}"))?;
+
+    if seconds == 0 {
+        return Ok(json!({
+            "done": false,
+            "project_id": pid,
+            "job_id": job_id,
+            "mode": mode,
+            "dub_mix_mode": dub_mix_mode,
+            "note": "Preparation started; call studio_wait with job_id to wait."
+        }));
+    }
+
+    let wait_res = wait_for(&json!({ "job_id": job_id, "seconds": seconds })).await?;
+    let is_done = wait_res.get("done").and_then(Value::as_bool).unwrap_or(false);
+
+    if !is_done {
+        return Ok(json!({
+            "done": false,
+            "project_id": pid,
+            "job_id": job_id,
+            "mode": mode,
+            "dub_mix_mode": dub_mix_mode,
+            "state": wait_res.get("state"),
+            "note": "Preparation is still running; call studio_wait with job_id to keep waiting."
+        }));
+    }
+
+    let project = fetch(&format!("/projects/{}", segment(&pid))).await?;
+    let segments = project.get("segments").cloned().unwrap_or(json!([]));
+    let segments_count = segments.as_array().map(|a| a.len()).unwrap_or(0);
+
+    Ok(json!({
+        "done": true,
+        "project_id": pid,
+        "job_id": job_id,
+        "mode": mode,
+        "dub_mix_mode": dub_mix_mode,
+        "tgt_lang": tgt_lang,
+        "segments_count": segments_count,
+        "segments": segments,
+        "note": "Preparation complete! Lines are ready for agent adaptation. Use segment_update to set tgt_text, then project_dub_audio or project_render."
+    }))
+}
+
 const QUEUED_BEHIND_JOBS: &[&str] = &[];
 
 async fn graphics_card_free() -> Result<(), String> {
@@ -503,7 +602,7 @@ async fn graphics_card_free() -> Result<(), String> {
 fn annotations(name: &str) -> Value {
     const READS: &[&str] = &["_get", "_status", "_list", "_transcript"];
     const CHANGES: &[&str] = &[
-        "create", "update", "split", "merge", "regen", "render", "dub_audio", "export_lang", "analyze",
+        "create", "update", "split", "merge", "regen", "render", "dub_audio", "export_lang", "analyze", "prepare",
         "open", "seek", "select", "play", "pause", "undo", "redo", "notify", "click", "type", "press_key", "scroll",
     ];
     const READ_NAMES: &[&str] = &["studio_wait", "project_transcript", "ui_screenshot", "ui_read_page"];
@@ -849,6 +948,31 @@ fn tools() -> &'static [Tool] {
                         ("align_subs", given(args, "align_subs")),
                     ]);
                     post(format!("{path}{tail}"), json!({}))
+                },
+            },
+            Tool {
+                name: "project_prepare",
+                description: "Prepare a video for agent translation and dubbing: runs audio separation, speech recognition (ASR), speaker diarization, and timing alignment. Skips the built-in Gemma LLM translation and OCR. Configures the project mode ('dub' or 'voiceover') and dub_mix_mode ('classic' with clean background or 'with_effects' keeping original screams/sighs/combat noises in speech pauses). Leaves lines ready for the agent to adapt and translate. Answers project_id, job_id, and if finished, the list of segments with their timestamps and original text. Provide path (to create and prepare in one step) or pid (for an existing project).",
+                schema: || {
+                    object(
+                        json!({
+                            "path": { "type": "string", "description": "video or audio file path on this computer (to create and prepare in one call)" },
+                            "pid": pid(),
+                            "tgt_lang": { "type": "string", "description": "target language code to dub into (default: 'ru')" },
+                            "mode": { "type": "string", "enum": ["dub", "voiceover"], "description": "'dub' (full replacement, default) or 'voiceover' (original sound ducked in background)" },
+                            "dub_mix_mode": { "type": "string", "enum": ["classic", "with_effects"], "description": "'classic' (separated background, default) or 'with_effects' (preserves original screams/sighs/combat noises in pauses between speech)" },
+                            "src_lang": { "type": "string", "description": "source language code (default 'auto')" },
+                            "seconds": { "type": "integer", "description": "seconds to wait for preparation to complete (default 45, max 55; 0 to return job_id immediately)" },
+                        }),
+                        &[],
+                    )
+                },
+                call: |args| {
+                    if args.get("path").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).is_none()
+                        && args.get("pid").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).is_none() {
+                        return Err("Either 'path' (to a video file) or 'pid' (project ID) must be provided.".into());
+                    }
+                    composite("prepare")
                 },
             },
             Tool {
@@ -1301,6 +1425,10 @@ pub async fn handle(headers: HeaderMap, body: axum::body::Bytes) -> Response {
                     Ok(state) => tool_json(id, state),
                     Err(problem) => answer(problem, true),
                 },
+                Ok(call) if call.path == "composite:prepare" => match prepare_project(&args).await {
+                    Ok(result) => tool_json(id, result),
+                    Err(problem) => answer(problem, true),
+                },
                 Ok(call) if call.path.starts_with(atomic::PREFIX) => match atomic::run(name, &args).await {
                     Ok(result) => tool_json(id, result),
                     Err(problem) => answer(problem, true),
@@ -1617,6 +1745,7 @@ mod tests {
     const COMPOSITE_ROUTES: &[(&str, &[(&str, &str)])] = &[
         ("composite:status", &[("GET", "/jobs"), ("GET", "/setup/status")]),
         ("composite:wait", &[("GET", "/jobs/x1"), ("GET", "/jobs"), ("GET", "/setup/status")]),
+        ("composite:prepare", &[("POST", "/projects/from-path"), ("POST", "/projects/x1/analyze"), ("GET", "/jobs/x1"), ("GET", "/projects/x1")]),
     ];
 
     /// Arguments for every property of a tool, and one set more for each other
@@ -1787,6 +1916,8 @@ mod tests {
         assert_eq!((call.method, call.path.as_str()), (Method::POST, "/projects/p1/dub-audio"));
         let call = (find("project_render").call)(&json!({ "pid": "p1" })).unwrap();
         assert_eq!((call.method, call.path.as_str()), (Method::POST, "/projects/p1/render"));
+        let call = (find("project_prepare").call)(&json!({ "pid": "p1", "tgt_lang": "ru", "mode": "dub", "dub_mix_mode": "with_effects" })).unwrap();
+        assert_eq!(call.path, "composite:prepare");
     }
 
     #[test]
@@ -1798,7 +1929,7 @@ mod tests {
 
     #[test]
     fn a_tool_that_changes_something_is_not_read_only() {
-        for name in ["project_create", "segment_update", "project_dub_audio", "dub_file"] {
+        for name in ["project_create", "project_prepare", "segment_update", "project_dub_audio", "dub_file"] {
             assert_eq!(annotations(name)["readOnlyHint"], false, "{name}");
         }
         for name in ["studio_status", "studio_wait", "project_get", "project_transcript", "projects_list", "ui_screenshot", "ui_read_page"] {

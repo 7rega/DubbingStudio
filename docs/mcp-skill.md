@@ -42,7 +42,7 @@ connected and the address to paste.
 
 - **Start with `studio_status`.** It tells what runs now, what finished last, and whether
   the required models are there.
-- **Long work is a job**: `project_analyze`, `project_dub_audio`, `project_render`,
+- **Long work is a job**: `project_analyze`, `project_prepare`, `project_dub_audio`, `project_render`,
   `project_export_lang`, `project_retranslate`, `project_remix`, `segment_shorten`,
   `project_resume`, `voices_download_pack`, `glossary_extract`, and a download by link
   (`project_create_from_url`, whose `fetch.id` is waited for the same way). Each answers a
@@ -147,6 +147,13 @@ choose or correct. They combine: `transcribe_file`, then `project_get` with its
 5. `project_render`; `studio_wait` with its `job_id`.
 6. `project_frame` at a moment with speech to see the burned-in subtitles.
 7. `project_save_output` into the folder the user wants; tell them the path.
+
+**Agent-driven adaptation (prepare without Gemma/OCR, adapt with vision, voice)**
+
+1. `project_prepare` with `path` (or `pid`), `tgt_lang` (e.g. "ru"), `mode` ("dub" or "voiceover"), and `dub_mix_mode` ("classic" or "with_effects"). This runs separation, speech recognition (ASR), and diarization without running Gemma or OCR. If `seconds` is provided, it waits up to that long and returns `segments` directly (otherwise `studio_wait` with `job_id`).
+2. Read the lines (`src_text` and timing). For lines where context or speaker gender is ambiguous, call `project_frame` at that moment to inspect the scene.
+3. Adapt the translation to fit the timing/CPS and natural tone. Update each line with `segment_update` (or split/merge with `segment_split` / `segments_merge`).
+4. Voice the project with `project_dub_audio` or `project_render`; `studio_wait` with `job_id`.
 
 **Dub a video from a link**
 
