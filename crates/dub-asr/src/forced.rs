@@ -247,9 +247,12 @@ impl Aligner {
             let prev_end = if i > 0 { inputs[i - 1].end } else { 0.0 };
             let next_start = if i + 1 < inputs.len() { inputs[i + 1].start } else { duration };
 
-            // Candidate 2: Симметричный акустический запас +-300 мс для надежного захвата краевых фонем
-            let pad_left = 0.30f64;
-            let pad_right = 0.30f64;
+            // Адаптивный акустический запас:
+            // Для коротких возгласов (1 слово) даем 100мс отступа, чтобы модель не размазывала слово по тишине.
+            // Для остальных реплик (>= 2 слов) даем 300мс для надежного захвата краевых фонем.
+            let is_single_word = s.text.split_whitespace().count() <= 1;
+            let pad_left = if is_single_word { 0.10f64 } else { 0.30f64 };
+            let pad_right = if is_single_word { 0.10f64 } else { 0.30f64 };
 
             let win_start = (s.start - pad_left).max(0.0);
             let win_end = (s.end + pad_right).min(duration);
@@ -431,14 +434,21 @@ impl Aligner {
                         });
                     }
 
-                    // Акустическое уточнение (безопасный Guarded Expand -20мс / +30мс без подрезки):
-                    // 1) Старт первого слова: расширение влево до 20мс в тишину (с защитным буфером до prev_end)
+                    // Акустическое уточнение (защита от мертвой тишины + Guarded Expand):
+                    // 1) Старт первого слова: если слово началось в мертвой тишине (например, на коротких выкриках "Oi!"),
+                    // подтягиваем его к акустическому началу:
+                    let trimmed_start = envelope.trim_start_silence(timed_words[0].start, timed_words[0].end);
+                    timed_words[0].start = trimmed_start;
+
                     let lo_start = meta.prev_end.max(0.0);
                     let adj_start = envelope.smart_trim_expand_start(timed_words[0].start, timed_words[0].end, lo_start);
                     timed_words[0].start = adj_start;
 
-                    // 2) Конец последнего слова: расширение вправо до 30мс в тишину (с защитным буфером до next_start)
+                    // 2) Конец последнего слова: если слово затянулось в тишину, подтягиваем его к акустическому концу:
                     let last_idx = timed_words.len() - 1;
+                    let trimmed_end = envelope.trim_end_silence(timed_words[last_idx].start, timed_words[last_idx].end);
+                    timed_words[last_idx].end = trimmed_end;
+
                     let hi_end = meta.next_start.min(duration).max(timed_words[last_idx].end);
                     let adj_end = envelope.smart_trim_expand_end(timed_words[last_idx].start, timed_words[last_idx].end, hi_end);
                     timed_words[last_idx].end = adj_end.max(timed_words[last_idx].start).min(hi_end);
@@ -472,28 +482,34 @@ impl Aligner {
             progress(step + 1, total_requests);
         }
 
-        // 7. Коррекция граничных акустических запасов между соседними сегментами (для исключения микронахлёстов)
+        // 7. Разрешение микронахлёстов между соседними предложениями
         for i in 1..inputs.len() {
             if outcomes[i - 1].aligned.is_some() && outcomes[i].aligned.is_some() {
                 let p_end = outcomes[i - 1].aligned.as_ref().unwrap().end;
                 let c_start = outcomes[i].aligned.as_ref().unwrap().start;
                 if p_end > c_start && inputs[i - 1].end <= inputs[i].start {
-                    let p_last_w = outcomes[i - 1].aligned.as_ref().unwrap().words.last().unwrap().end;
-                    let c_first_w = outcomes[i].aligned.as_ref().unwrap().words.first().unwrap().start;
-                    if p_last_w <= c_first_w {
-                        let mid = round_ms((p_last_w + c_first_w) / 2.0);
+                    let overlap = p_end - c_start;
+                    // Если нахлёст умеренный (<= 250 мс), делим границу пополам (midpoint) без сброса выравнивания
+                    if overlap <= 0.250 {
+                        let mid = round_ms((p_end + c_start) / 2.0);
                         if let Some(a_prev) = outcomes[i - 1].aligned.as_mut() {
-                            a_prev.end = mid.max(p_last_w);
+                            a_prev.end = mid;
+                            if let Some(last_w) = a_prev.words.last_mut() {
+                                last_w.end = mid.max(last_w.start);
+                            }
                         }
                         if let Some(a_cur) = outcomes[i].aligned.as_mut() {
-                            a_cur.start = mid.min(c_first_w);
+                            a_cur.start = mid;
+                            if let Some(first_w) = a_cur.words.first_mut() {
+                                first_w.start = mid.min(first_w.end);
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Разрешение оставшихся нахлёстов (если слова физически накладываются)
+        // Разрешение оставшихся грубых нахлёстов (> 250 мс), если таковые остались
         loop {
             let mut reject = Vec::new();
             for i in 1..inputs.len() {

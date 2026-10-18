@@ -193,12 +193,13 @@ impl Envelope {
         None
     }
 
-    /// Безопасное микро-расширение начала фразы наружу (Zero-Trim & Guarded Expand <= 20мс).
+    /// Безопасное микро-расширение начала фразы наружу (Zero-Trim & Guarded Expand <= 20мс в тишину, до 180мс при наличии голоса).
     /// Никогда не срезает границу внутрь (zero trim), сохраняя 100% хронометража.
-    /// Расширяет влево до 20 мс в свободную тишину, оставляя защитный буфер >= 30 мс до предыдущей фразы.
-    pub fn smart_trim_expand_start(&self, start: f64, _end: f64, lo: f64) -> f64 {
+    /// Расширяет влево до 20 мс в свободную тишину (атака согласных),
+    /// а при наличии активной вибрации/гортанного звука (RMS >= floor) сканирует влево до 180 мс.
+    /// Оставляет защитный буфер >= 30 мс до предыдущей фразы.
+    pub fn smart_trim_expand_start(&self, start: f64, end: f64, lo: f64) -> f64 {
         let safety_buffer: f64 = 0.030;
-        let max_expand: f64 = 0.020;
         let gap_left = start - lo;
 
         if gap_left <= safety_buffer {
@@ -206,9 +207,27 @@ impl Envelope {
             return start;
         }
 
-        let avail = gap_left - safety_buffer;
-        let expand = max_expand.min(avail);
-        round_ms((start - expand).max(lo))
+        let min_bound = (lo + safety_buffer).max(start - 0.180);
+        let word_peak = self.max_rms(start, end);
+        let floor = (0.0030f64).max(word_peak * 0.10);
+
+        // Базовый безопасный отступ 20мс в тишину (для атаки согласных)
+        let mut best_start = (start - 0.020).max(min_bound);
+
+        // Если в свободной паузе перед словом фиксируется голос (рык, выкрик, гортанная атака),
+        // продолжаем расширение влево до 180мс, пока RMS выше порога
+        if !self.rms.is_empty() {
+            let i_cur = (((best_start - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len());
+            let i_min = (((min_bound - 0.005).max(0.0) / 0.005).round() as usize).min(self.rms.len());
+
+            let mut idx = i_cur;
+            while idx > i_min && self.rms[idx - 1] >= floor {
+                idx -= 1;
+                best_start = (idx as f64 * 0.005 + 0.005).max(min_bound);
+            }
+        }
+
+        round_ms(best_start)
     }
 
     /// Безопасное микро-расширение конца фразы наружу (Zero-Trim & Guarded Expand <= 30мс).
@@ -317,5 +336,22 @@ mod tests {
         // Tight space (end = 1.0, hi = 1.02, gap = 20ms <= 30ms buffer) -> locked at 1.0s
         let locked = env.smart_trim_expand_end(0.5, 1.0, 1.02);
         assert!((locked - 1.0).abs() < 0.001, "expected locked at 1.0s, got {locked}");
+    }
+
+    #[test]
+    fn smart_trim_expand_start_captures_growl() {
+        let mut audio = vec![0.0f32; 32000];
+        // Word from 1.0s to 1.5s (samples 16000..24000)
+        for i in 16000..24000 {
+            audio[i] = (0.10 * ((i as f64) * 0.5).sin()) as f32;
+        }
+        // Guttural growl from 0.88s to 1.0s (samples 14080..16000)
+        for i in 14080..16000 {
+            audio[i] = (0.05 * ((i as f64) * 0.5).sin()) as f32;
+        }
+        let env = Envelope::new(&audio);
+        let expanded = env.smart_trim_expand_start(1.0, 1.5, 0.5);
+        assert!(expanded <= 0.90, "expected start to expand into growl <= 0.90s, got {expanded}");
+        assert!(expanded >= 0.86, "expected start to not overrun growl, got {expanded}");
     }
 }

@@ -23,7 +23,7 @@ use serde::Deserialize;
 use crate::segment::{segment_words, segment_words_with_diarization, Segment, Word, SEG_MAX_DUR};
 use crate::{AsrEngine, AsrError, SpeakerSegment, Turn};
 
-pub const QWEN_MAX_GAP: f64 = 0.50;
+pub const QWEN_MAX_GAP: f64 = 0.80;
 
 #[derive(Clone, Debug)]
 pub struct Qwen3Asr {
