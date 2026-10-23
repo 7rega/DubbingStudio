@@ -11,7 +11,7 @@ pub const COMPONENT: &str = "alignment-q8_0";
 pub const MODEL_FILE_NAME: &str = "qwen3-forced-aligner-0.6b-q8_0.gguf";
 pub const MODEL_SUBDIR: &str = "alignment";
 pub const MODEL_REL_PATH: &str = "models/alignment/qwen3-forced-aligner-0.6b-q8_0.gguf";
-pub const MODEL_SIZE: u64 = 1_129_966_496;
+pub const MODEL_SIZE: u64 = 1_129_969_856;
 pub const MODEL_URL: &str = "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-ForcedAligner-0.6B-GGUF/qwen3-forced-aligner-0.6b-q8_0.gguf?download=true";
 
 pub fn resolve_model_file(models_root: &Path) -> Option<PathBuf> {

@@ -207,12 +207,12 @@ pub fn manifest() -> Vec<Component> {
             purpose: "Синтез дубляжа и клон голоса (TTS)",
             requirement: Requirement::Required,
             delivery: Delivery::Download,
-            size: 5_106_797_492,
+            size: 5_106_802_430,
             files: &[
                 FileSpec {
                     url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Higgs-Audio-v3-TTS-4B-GGUF/higgs-audio-v3-tts-4b-q8_0.gguf?download=true",
                     dest_rel: "models/higgs-q8_0/q8_0.gguf",
-                    size: 5_095_354_048,
+                    size: 5_095_359_136,
                     extract: Extract::None,
                 },
                 FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/config.json", dest_rel: "models/higgs-q8_0/config.json", size: 2_755, extract: Extract::None },
@@ -222,11 +222,11 @@ pub fn manifest() -> Vec<Component> {
                 FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/higgs_audio_v2_tokenizer_config.json", dest_rel: "models/higgs-q8_0/higgs_audio_v2_tokenizer_config.json", size: 2_251, extract: Extract::None },
             ],
             markers: &[
-                Marker { rel: "models/higgs-q8_0/q8_0.gguf", expect: 5_095_354_048 },
+                Marker { rel: "models/higgs-q8_0/q8_0.gguf", expect: 5_095_359_136 },
                 Marker { rel: "models/higgs-q8_0/config.json", expect: 2_755 },
                 Marker { rel: "models/higgs-q8_0/tokenizer.json", expect: 11_433_924 },
             ],
-            external_url: None,
+            external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
         },
         Component {
             id: "higgs-engine",
@@ -247,16 +247,16 @@ pub fn manifest() -> Vec<Component> {
             purpose: "Мультиязычный синтез и клон голоса (48 кГц, 30 языков)",
             requirement: Requirement::Optional,
             delivery: Delivery::Download,
-            size: 2_955_000_480,
+            size: 2_955_007_488,
             files: &[
                 FileSpec {
                     url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/VoxCPM2-GGUF/voxcpm2-q8_0.gguf?download=true",
                     dest_rel: "models/voxcpm2/voxcpm2-q8_0.gguf",
-                    size: 2_955_000_480,
+                    size: 2_955_007_488,
                     extract: Extract::None,
                 },
             ],
-            markers: &[Marker { rel: "models/voxcpm2/voxcpm2-q8_0.gguf", expect: 2_955_000_480 }],
+            markers: &[Marker { rel: "models/voxcpm2/voxcpm2-q8_0.gguf", expect: 2_955_007_488 }],
             external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
         },
         Component {
@@ -265,16 +265,16 @@ pub fn manifest() -> Vec<Component> {
             purpose: "Полноточная модель озвучки и клонирования голоса (максимальное качество)",
             requirement: Requirement::Optional,
             delivery: Delivery::Download,
-            size: 4_772_288_288,
+            size: 4_772_295_296,
             files: &[
                 FileSpec {
                     url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/VoxCPM2-GGUF/voxcpm2-bf16.gguf?download=true",
                     dest_rel: "models/voxcpm2/voxcpm2-bf16.gguf",
-                    size: 4_772_288_288,
+                    size: 4_772_295_296,
                     extract: Extract::None,
                 },
             ],
-            markers: &[Marker { rel: "models/voxcpm2/voxcpm2-bf16.gguf", expect: 4_772_288_288 }],
+            markers: &[Marker { rel: "models/voxcpm2/voxcpm2-bf16.gguf", expect: 4_772_295_296 }],
             external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
         },
         Component {
@@ -283,16 +283,16 @@ pub fn manifest() -> Vec<Component> {
             purpose: "Нативный C++ движок озвучки нового поколения (audio.cpp CUDA 13.3)",
             requirement: Requirement::Optional,
             delivery: Delivery::Download,
-            size: 848_271_790,
+            size: 851_294_792,
             files: &[
                 FileSpec {
-                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.0/audio-v0.9.0-bin-windows-x64-cuda13.3.zip",
+                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.2-drama3-base-small/audio-v0.9.2-drama3-base-small-bin-windows-x64-cuda13.3.zip",
                     dest_rel: "tools/audiocpp/_bin.zip",
-                    size: 272_814_336,
+                    size: 275_837_338,
                     extract: Extract::ZipTree,
                 },
                 FileSpec {
-                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.0/audio-v0.9.0-cudart-windows-x64-cuda13.3.zip",
+                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.2-drama3-base-small/audio-v0.9.2-drama3-base-small-cudart-windows-x64-cuda13.3.zip",
                     dest_rel: "tools/audiocpp/_cudart.zip",
                     size: 575_457_454,
                     extract: Extract::ZipTree,
@@ -446,12 +446,12 @@ pub fn manifest() -> Vec<Component> {
             purpose: "Синтез дубляжа и клон голоса (TTS) — полная точность BF16",
             requirement: Requirement::Optional,
             delivery: Delivery::Download,
-            size: 8_513_031_092,
+            size: 8_513_026_660,
             files: &[
                 FileSpec {
                     url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Higgs-Audio-v3-TTS-4B-GGUF/higgs-audio-v3-tts-4b-bf16.gguf?download=true",
                     dest_rel: "models/higgs-bf16/bf16.gguf",
-                    size: 8_501_587_648,
+                    size: 8_501_592_736,
                     extract: Extract::None,
                 },
                 FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/config.json", dest_rel: "models/higgs-bf16/config.json", size: 0, extract: Extract::None },
@@ -460,8 +460,8 @@ pub fn manifest() -> Vec<Component> {
                 FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/tokenizer_config.json", dest_rel: "models/higgs-bf16/tokenizer_config.json", size: 0, extract: Extract::None },
                 FileSpec { url: "https://huggingface.co/drbaph/Higgs-Audio-v3-Studio/resolve/main/models/higgs-q8_0/higgs_audio_v2_tokenizer_config.json", dest_rel: "models/higgs-bf16/higgs_audio_v2_tokenizer_config.json", size: 0, extract: Extract::None },
             ],
-            markers: &[Marker { rel: "models/higgs-bf16/bf16.gguf", expect: 8_501_587_648 }, Marker { rel: "models/higgs-bf16/tokenizer.json", expect: 0 }],
-            external_url: None,
+            markers: &[Marker { rel: "models/higgs-bf16/bf16.gguf", expect: 8_501_592_736 }, Marker { rel: "models/higgs-bf16/tokenizer.json", expect: 0 }],
+            external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
         },
         // Альтернативный квант ASR: fp32 (точнее, тяжелее int8). Отдельная папка (fp32 приоритетнее int8).
         Component {
@@ -661,16 +661,16 @@ pub fn manifest() -> Vec<Component> {
             purpose: "Точное мультиязычное распознавание речи без галлюцинаций (audio.cpp GGUF)",
             requirement: Requirement::Optional,
             delivery: Delivery::Download,
-            size: 2_473_010_048,
+            size: 2_473_017_600,
             files: &[
                 FileSpec {
                     url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf?download=true",
                     dest_rel: "models/qwen3/qwen3-asr-1.7b-q8_0.gguf",
-                    size: 2_473_010_048,
+                    size: 2_473_017_600,
                     extract: Extract::None,
                 },
             ],
-            markers: &[Marker { rel: "models/qwen3/qwen3-asr-1.7b-q8_0.gguf", expect: 2_473_010_048 }],
+            markers: &[Marker { rel: "models/qwen3/qwen3-asr-1.7b-q8_0.gguf", expect: 2_473_017_600 }],
             external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
         },
         Component {
