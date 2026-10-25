@@ -13,6 +13,7 @@ use dub_core::glossary::{contains_in_translation, normalize, GlossaryEntry};
 use dub_llm::{strip_think, ChatClient, Endpoint, LlmError, Message, Sampling, StructuredOutput};
 use serde_json::{json, Map, Value};
 
+use crate::seg::Gender;
 use crate::TranslateError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,6 +229,10 @@ pub(crate) enum Reject {
     Loop(String),
     /// Нет обязательного по глоссарию текста.
     Term(String),
+    /// Говорящий о себе в роде другого пола («я сказала» у мужчины).
+    Gender(String),
+    /// Слово исходника латиницей осталось непереведённым в нелатинском переводе.
+    Latin(String),
 }
 
 impl Reject {
@@ -247,6 +252,8 @@ impl Reject {
             Reject::TooLong { got, max } => format!("слишком длинно ({got} > {max})"),
             Reject::Loop(g) => format!("зацикливание «{g}»"),
             Reject::Term(t) => format!("нет термина глоссария «{t}»"),
+            Reject::Gender(w) => format!("род говорящего о себе: «{w}»"),
+            Reject::Latin(w) => format!("слово «{w}» осталось латиницей"),
         }
     }
 }
@@ -265,6 +272,20 @@ pub(crate) struct LineCheck<'a> {
     pub glossary: &'a [GlossaryEntry],
     /// Творческий ремикс: содержание заменяется, глоссарий не требуется.
     pub rewrite: bool,
+    /// Пол говорящего, против которого проверяется род его слов о себе; None — не проверять.
+    pub gender: Option<Gender>,
+    /// Проверять оставленные латиницей слова исходника.
+    pub latin: bool,
+}
+
+/// Какие проверки перевода включил пользователь (кроме обязательных: пусто, эхо, алфавит, длина, петля,
+/// глоссарий).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TextChecks {
+    /// Род слов говорящего о себе против его пола (русский).
+    pub gender: bool,
+    /// Оставленные латиницей слова исходника при нелатинском целевом языке.
+    pub latin: bool,
 }
 
 /// Иероглифы, кана и хангыль весят как два символа: одна такая буква несёт слог.
@@ -368,6 +389,63 @@ fn untranslated_reason(src: &str, tgt: &str, tgt_lang: &str, glossary: &[Glossar
     None
 }
 
+/// Слово ответа латиницей, которое не имя и не бренд: те остаются в исходнике с заглавной буквой
+/// («Wi-Fi», «iPhone», «Google»); числа и термины «не переводить» тоже не в счёт.
+fn leftover_latin(out: &str, src: &str, glossary: &[GlossaryEntry]) -> Option<String> {
+    let src_words = words_lower(src);
+    let kept = kept_as_is(out, src, glossary);
+    out.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .zip(kept)
+        .find(|(w, k)| {
+            !k && w.chars().any(|c| c.is_ascii_alphabetic())
+                && !(w.chars().any(char::is_uppercase) && src_words.contains(&normalize(w)))
+        })
+        .map(|(w, _)| w.to_string())
+}
+
+/// Слова, которые между «я» и формой о себе не меняют рода: «я уже сказала», «я ведь был».
+const RU_FILLERS: &[&str] = &[
+    "не", "уже", "тоже", "также", "ещё", "еще", "бы", "же", "ведь", "так", "только", "просто", "всё", "все",
+    "правда", "точно", "никогда", "всегда", "сегодня", "вчера", "раньше", "давно", "наконец", "опять", "снова",
+    "и", "вот", "даже", "сам", "сама", "лично", "честно",
+];
+const RU_FEM_ADJ: &[&str] = &[
+    "рада", "готова", "должна", "уверена", "пьяна", "одна", "согласна", "счастлива", "права", "больна",
+    "занята", "благодарна", "виновата", "обязана", "свободна", "голодна", "устала",
+];
+const RU_MASC_ADJ: &[&str] = &[
+    "рад", "готов", "должен", "уверен", "пьян", "один", "согласен", "счастлив", "прав", "болен", "занят",
+    "благодарен", "виноват", "обязан", "свободен", "голоден", "устал",
+];
+
+/// Форма говорящего о себе в роде другого пола: «я» (через частицы) и прошедшее время или краткое
+/// прилагательное. Пока только русский.
+fn other_gender_form(out: &str, g: Gender, lang: &str) -> Option<String> {
+    if lang.split(['-', '_']).next().unwrap_or(lang).to_ascii_lowercase() != "ru" {
+        return None;
+    }
+    let words: Vec<String> = out.split(|c: char| !c.is_alphabetic()).filter(|w| !w.is_empty()).map(|w| w.to_lowercase()).collect();
+    for (i, w) in words.iter().enumerate() {
+        if w != "я" {
+            continue;
+        }
+        let Some(form) = words[i + 1..].iter().find(|x| !RU_FILLERS.contains(&x.as_str())) else { continue };
+        let n = form.chars().count();
+        let feminine = RU_FEM_ADJ.contains(&form.as_str()) || (n >= 4 && (form.ends_with("ла") || form.ends_with("лась")));
+        let masculine = RU_MASC_ADJ.contains(&form.as_str())
+            || (n >= 3 && (form.ends_with("лся") || ["ал", "ел", "ил", "ол", "ул", "ыл", "ял", "ёл"].iter().any(|e| form.ends_with(e))));
+        let wrong = match g {
+            Gender::Male => feminine,
+            Gender::Female => masculine && !feminine,
+        };
+        if wrong {
+            return Some(format!("я {form}"));
+        }
+    }
+    None
+}
+
 impl LineCheck<'_> {
     /// Проверить строку ответа; cut — строку оборвал лимит токенов (см. cut_line).
     pub fn check(&self, out: Option<&str>, cut: bool) -> Result<(), Reject> {
@@ -404,6 +482,16 @@ impl LineCheck<'_> {
                 }
             }
         }
+        if self.latin && tgt_expects_non_latin(self.tgt_lang) {
+            if let Some(w) = leftover_latin(out, self.src, self.glossary) {
+                return Err(Reject::Latin(w));
+            }
+        }
+        if let Some(g) = self.gender {
+            if let Some(w) = other_gender_form(out, g, self.tgt_lang) {
+                return Err(Reject::Gender(w));
+            }
+        }
         Ok(())
     }
 }
@@ -427,7 +515,7 @@ mod tests {
     }
 
     fn check<'a>(src: &'a str, budget: Option<usize>, lang: &'a str, glossary: &'a [GlossaryEntry]) -> LineCheck<'a> {
-        LineCheck { src, budget, tgt_lang: lang, glossary, rewrite: false }
+        LineCheck { src, budget, tgt_lang: lang, glossary, rewrite: false, gender: None, latin: true }
     }
 
     #[test]
@@ -516,7 +604,7 @@ mod tests {
     #[test]
     fn a_rewrite_needs_no_glossary_term() {
         let g = [entry("Hogwarts", "Хогвартс", false)];
-        let c = LineCheck { src: "Welcome to Hogwarts", budget: Some(30), tgt_lang: "ru", glossary: &g, rewrite: true };
+        let c = LineCheck { src: "Welcome to Hogwarts", budget: Some(30), tgt_lang: "ru", glossary: &g, rewrite: true, gender: None, latin: true };
         assert_eq!(c.check(Some("Пицца уже в пути"), false), Ok(()));
     }
 

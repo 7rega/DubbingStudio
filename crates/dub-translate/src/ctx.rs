@@ -11,8 +11,8 @@ use serde_json::Value;
 use dub_core::GlossaryEntry;
 use dub_llm::{strip_think, ChatClient, Message, Part, Sampling};
 
-use crate::contract::{label, rule as contract_rule, Answer, Contract, Format, LineCheck};
-use crate::seg::Seg;
+use crate::contract::{label, rule as contract_rule, Answer, Contract, Format, LineCheck, TextChecks};
+use crate::seg::{Gender, Seg};
 use crate::vision;
 use crate::TranslateError;
 
@@ -50,6 +50,8 @@ pub struct CtxConfig {
     pub style: String,
     /// Глоссарий проекта (и сериала); перевод берёт из него glossary::for_translation.
     pub glossary: Vec<GlossaryEntry>,
+    /// Включённые пользователем проверки строк.
+    pub checks: TextChecks,
 }
 
 /// run — единый проход. rewrite=Some(instr) -> творческий ре-дубляж; None -> точный перевод.
@@ -130,6 +132,9 @@ pub fn run(
     let mut budgets: Vec<Option<usize>> = segs.iter().map(|s| s.budget(&cfg.tgt_lang)).collect();
     budgets.extend(std::iter::repeat_n(None, title_texts.len()));
 
+    let mut genders: Vec<Option<Gender>> = segs.iter().map(|s| s.gender).collect();
+    genders.extend(std::iter::repeat_n(None, title_texts.len()));
+
     let mut ctx = String::new();
     if let Some(sc) = extra["scene_context"].as_str() {
         if !sc.is_empty() {
@@ -145,8 +150,8 @@ pub fn run(
     // Батч-перевод длинного скрипта (#82): чанки по бюджету + скользящий контекст + глоссарий.
     // Возвращает by_n = {глобальный_N -> перевод} — тот же контракт, что раньше давал единый вызов.
     let glossary = dub_core::glossary::for_translation(&cfg.glossary, &cfg.tgt_lang);
-    let job = Job { llm, contract, tgt: &tgt, tgt_code: &cfg.tgt_lang, rewrite, style: &cfg.style, glossary };
-    let by_n = translate_lines(&job, &line_texts, &budgets, &ctx, &mut log)?;
+    let job = Job { llm, contract, tgt: &tgt, tgt_code: &cfg.tgt_lang, rewrite, style: &cfg.style, glossary, checks: cfg.checks };
+    let by_n = translate_lines(&job, &line_texts, &budgets, &genders, &ctx, &mut log)?;
 
     for (i, s) in segs.iter_mut().enumerate() {
         let t = by_n.get(&(i + 1)).cloned().unwrap_or_default();
@@ -214,6 +219,7 @@ struct Job<'a> {
     style: &'a str,
     /// Глоссарий цели, ручные записи раньше.
     glossary: Vec<GlossaryEntry>,
+    checks: TextChecks,
 }
 
 /// Перевести все строки пакетами со скользящим контекстом и глоссарием; каждая строка ответа проверяется
@@ -223,6 +229,7 @@ fn translate_lines(
     job: &Job,
     line_texts: &[String],
     budgets: &[Option<usize>],
+    genders: &[Option<Gender>],
     ctx: &str,
     log: &mut impl FnMut(&str),
 ) -> Result<std::collections::HashMap<usize, String>, TranslateError> {
@@ -280,6 +287,7 @@ fn translate_lines(
     let budget_rule = " After each number, a parenthesis like (\u{2264}45) gives a soft character limit for that \
 line — stay within it: if it doesn't fit, drop filler words and repetitions, keep the meaning, invent nothing. \
 Do NOT copy the (\u{2264}NN) marker into your output.";
+    let g_rule = crate::translate::gender_rule(genders);
     let style_c = crate::translate::style_clause(job.style);
     let gloss_rule = if glossary.is_empty() { "" } else { crate::gloss::RULE };
     let names_c = crate::gloss::names_clause(&names);
@@ -292,12 +300,12 @@ Do NOT copy the (\u{2264}NN) marker into your output.";
                 "You are a creative scriptwriter writing a BRAND-NEW voice-over script in {tgt} for this video. \
 IGNORE the literal meaning of the source lines — they are ONLY a rhythm/length template. Write a completely NEW \
 script whose CONTENT follows this instruction: \"{instr}\". Every line must fit the instruction, NOT translate the \
-source. Keep the SAME number of lines and each line about the SAME LENGTH (it will be dubbed to fit the timing).{budget_rule}{style_c}{names_c}{gloss_rule} \
+source. Keep the SAME number of lines and each line about the SAME LENGTH (it will be dubbed to fit the timing).{budget_rule}{g_rule}{style_c}{names_c}{gloss_rule} \
 {rule} Use the scene/audio context below for tone.\n\n{ctx}"
             ),
             None => format!(
                 "Translate EACH numbered line into natural, spoken {tgt} for dubbing — keep the order and the \
-numbering, match tone/slang/intent.{budget_rule}{style_c}{names_c}{gloss_rule} {rule} Use ALL the context below and with the lines \
+numbering, match tone/slang/intent.{budget_rule}{g_rule}{style_c}{names_c}{gloss_rule} {rule} Use ALL the context below and with the lines \
 (what the words alone don't convey).\n\n{ctx}"
             ),
         }
@@ -311,8 +319,8 @@ numbering, match tone/slang/intent.{budget_rule}{style_c}{names_c}{gloss_rule} {
         let numbered = |fmt: Format| {
             idx.iter()
                 .enumerate()
-                .map(|(k, &gi)| match budgets.get(gi).copied().flatten() {
-                    Some(lim) => format!("{}. (\u{2264}{lim}) {}", label(fmt, k + 1, idx.len()), line_texts[gi]),
+                .map(|(k, &gi)| match crate::translate::line_head(budgets.get(gi).copied().flatten(), genders.get(gi).copied().flatten()) {
+                    Some(head) => format!("{}. {head} {}", label(fmt, k + 1, idx.len()), line_texts[gi]),
                     None => format!("{}. {}", label(fmt, k + 1, idx.len()), line_texts[gi]),
                 })
                 .collect::<Vec<_>>()
@@ -353,8 +361,16 @@ numbering, match tone/slang/intent.{budget_rule}{style_c}{names_c}{gloss_rule} {
         Ok(answer)
     };
     let check = |gi: usize, line: Option<&str>, cut: bool| {
-        LineCheck { src: &line_texts[gi], budget: budgets[gi], tgt_lang: job.tgt_code, glossary, rewrite: job.rewrite.is_some() }
-            .check(line, cut)
+        LineCheck {
+            src: &line_texts[gi],
+            budget: budgets[gi],
+            tgt_lang: job.tgt_code,
+            glossary,
+            rewrite: job.rewrite.is_some(),
+            gender: genders[gi].filter(|_| job.checks.gender),
+            latin: job.checks.latin,
+        }
+        .check(line, cut)
     };
     let chunks: Vec<Vec<usize>> = bounds.iter().map(|&(a, b)| (a..b).collect()).collect();
     let out = crate::batch::drive(chunks, &mut ask, &check, &|gi| gi + 1, &mut |m: &str| (log_cell.borrow_mut())(m))?;
@@ -526,10 +542,10 @@ mod tests {
         let server = serve(vec![reply(r#"{"1":"Привет, Гарри","2":"Hello there"}"#), reply(r#"{"1":"Ну привет"}"#)]);
         let llm = ChatClient::new(server.base()).unwrap();
         let glossary = vec![GlossaryEntry { term: "Harry".into(), translation: "Гарри".into(), ..GlossaryEntry::default() }];
-        let job = Job { llm: &llm, contract: &Contract::for_client(&llm), tgt: "Russian", tgt_code: "ru", rewrite: None, style: "", glossary };
+        let job = Job { llm: &llm, contract: &Contract::for_client(&llm), tgt: "Russian", tgt_code: "ru", rewrite: None, style: "", glossary, checks: TextChecks::default() };
         let lines: Vec<String> = vec!["Hi, Harry".into(), "Hello there".into()];
         let mut log: Vec<String> = Vec::new();
-        let by_n = translate_lines(&job, &lines, &[Some(14), Some(14)], "=== VISUAL SCENE ===\nA castle\n\n", &mut |m: &str| log.push(m.to_string())).unwrap();
+        let by_n = translate_lines(&job, &lines, &[Some(14), Some(14)], &[None, None], "=== VISUAL SCENE ===\nA castle\n\n", &mut |m: &str| log.push(m.to_string())).unwrap();
         assert_eq!(by_n[&1], "Привет, Гарри");
         assert_eq!(by_n[&2], "Ну привет");
         let (a, b) = (body_json(&server.request(0)), body_json(&server.request(1)));
@@ -547,8 +563,8 @@ mod tests {
         let server = serve(vec![reply(r#"{"1":"Harry ест пиццу"}"#)]);
         let llm = ChatClient::new(server.base()).unwrap();
         let glossary = vec![GlossaryEntry { term: "Harry".into(), translation: "Гарри".into(), ..GlossaryEntry::default() }];
-        let job = Job { llm: &llm, contract: &Contract::for_client(&llm), tgt: "Russian", tgt_code: "ru", rewrite: Some("about pizza"), style: "", glossary };
-        let by_n = translate_lines(&job, &["Hi, Harry".into()], &[Some(30)], "", &mut |_: &str| {}).unwrap();
+        let job = Job { llm: &llm, contract: &Contract::for_client(&llm), tgt: "Russian", tgt_code: "ru", rewrite: Some("about pizza"), style: "", glossary, checks: TextChecks::default() };
+        let by_n = translate_lines(&job, &["Hi, Harry".into()], &[Some(30)], &[None], "", &mut |_: &str| {}).unwrap();
         assert_eq!(by_n[&1], "Harry ест пиццу", "no term lock");
         let body = body_json(&server.request(0));
         let all = format!("{}{}", body["messages"][0]["content"], body["messages"][1]["content"]);

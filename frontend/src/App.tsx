@@ -2603,9 +2603,8 @@ function useMediaHotkeys(opts: {
   setVol?: (v: number) => void;
   onNextSeg?: () => void;
   onPrevSeg?: () => void;
-  onLoopSeg?: () => void;
 }) {
-  const { enabled, duration, scrubRef, seek, togglePlay, previewRef, setHelp, blocked, vol, setVol, onNextSeg, onPrevSeg, onLoopSeg } = opts;
+  const { enabled, duration, scrubRef, seek, togglePlay, previewRef, setHelp, blocked, vol, setVol, onNextSeg, onPrevSeg } = opts;
   const lastNonZeroVolRef = useRef(1);
 
   useEffect(() => {
@@ -2716,12 +2715,6 @@ function useMediaHotkeys(opts: {
         return;
       }
 
-      if (hk.matchesAction(e, "timeline.loopSegment")) {
-        e.preventDefault();
-        onLoopSeg?.();
-        return;
-      }
-
       if (hk.matchesAction(e, "timeline.zoomIn")) {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("dub:timeline-zoom", { detail: { delta: 15 } }));
@@ -2760,7 +2753,7 @@ function useMediaHotkeys(opts: {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [enabled, duration, seek, togglePlay, previewRef, setHelp, blocked, vol, setVol, scrubRef, onNextSeg, onPrevSeg, onLoopSeg]);
+  }, [enabled, duration, seek, togglePlay, previewRef, setHelp, blocked, vol, setVol, scrubRef, onNextSeg, onPrevSeg]);
 
   // Ctrl+колесо над контейнером превью -> перемотка (шаг ~1с/тик). passive:false обязателен для preventDefault.
   useEffect(() => {
@@ -3114,8 +3107,6 @@ function MultiTrackTimeline({
   setProject,
   trackState,
   setTrackState,
-  loopSegId,
-  setLoopSegId: _setLoopSegId,
   dubRev,
   activeTtsEngine: _activeTtsEngine,
   isHighTemp = false,
@@ -3130,8 +3121,6 @@ function MultiTrackTimeline({
   setProject: (p: Project) => void;
   trackState: { dub: boolean; bgm: boolean; vocals: boolean };
   setTrackState: React.Dispatch<React.SetStateAction<{ dub: boolean; bgm: boolean; vocals: boolean }>>;
-  loopSegId: string | null;
-  setLoopSegId?: (id: string | null) => void;
   dubRev?: number;
   activeTtsEngine?: string;
   isHighTemp?: boolean;
@@ -3303,11 +3292,10 @@ function MultiTrackTimeline({
       return (
         (seg.end >= viewStartT && seg.start <= viewEndT) ||
         seg.id === draggingSeg?.id ||
-        seg.id === loopSegId ||
         (scrub >= seg.start && scrub <= seg.end)
       );
     });
-  }, [segments, timelineScrollLeft, timelineClientWidth, zoom, total, draggingSeg?.id, loopSegId, scrub]);
+  }, [segments, timelineScrollLeft, timelineClientWidth, zoom, total, draggingSeg?.id, scrub]);
 
   useEffect(() => {
     let active = true;
@@ -3896,7 +3884,6 @@ function MultiTrackTimeline({
                 const isActive = scrub >= seg.start && scrub <= seg.end;
                 const spkNum = parseInt(seg.speaker ?? "0", 10) || 0;
                 const spkClass = SPK_BG_COLORS[spkNum % SPK_BG_COLORS.length];
-                const isLoop = loopSegId === seg.id;
                 const isCompact = widthPx < 55;
                 const isTiny = widthPx < 30;
                 const lane = segmentLanes[seg.id] ?? 0;
@@ -3986,7 +3973,7 @@ function MultiTrackTimeline({
                     title={blockTitle}
                     className={`group/seg absolute h-[36px] rounded-md flex items-center justify-between text-[11px] cursor-grab active:cursor-grabbing transition-all overflow-hidden ${spkClass} ${borderStyleClass} ${shadowStyleClass} ${
                       isActive ? "ring-2 ring-[var(--color-accent)] brightness-125 z-10 scale-[1.01]" : ""
-                    } ${isLoop ? "ring-2 ring-amber-400" : ""}`}
+                    }`}
                   >
                     {/* Left Trim Handle (sleek micro-handle on hover) */}
                     <div
@@ -4943,7 +4930,6 @@ function Editor() {
   // Track states (Dub, BGM, Vocals toggle)
   const [trackState, setTrackState] = useState<{ dub: boolean; bgm: boolean; vocals: boolean }>({ dub: true, bgm: true, vocals: false });
   const playSpeed = 1.0;
-  const [loopSegId, setLoopSegId] = useState<string | null>(null);
   const soloAudioRef = useRef<HTMLAudioElement | null>(null);
   const [soloPlayingId, setSoloPlayingId] = useState<string | null>(null);
 
@@ -5813,21 +5799,12 @@ function Editor() {
     }
   }, [p.segments]);
 
-  const toggleLoopSegment = useCallback(() => {
-    const cur = scrubRef.current;
-    const active = p.segments.find((s) => cur >= s.start && cur <= s.end);
-    if (active) {
-      playSeg(active);
-    }
-  }, [p.segments]);
-
   useMediaHotkeys({
     enabled: true, duration: p.meta.duration || 0, scrubRef, seek: onSeek,
     togglePlay: playFull, previewRef, setHelp: setShowHelp, vol, setVol: setVolK,
     blocked: blockedRef,   // стабильная ссылка — не пересоздаёт listeners каждый рендер
     onNextSeg: jumpNextSegment,
     onPrevSeg: jumpPrevSegment,
-    onLoopSeg: toggleLoopSegment,
   });
   async function restoreHistory(direction: "undo" | "redo") {
     if (projectOperation.current || useStore.getState().rendering || document.querySelector(".glass-scrim")) return;
@@ -6733,8 +6710,6 @@ function Editor() {
                 setProject={setProject}
                 trackState={trackState}
                 setTrackState={setTrackState}
-                loopSegId={loopSegId}
-                setLoopSegId={setLoopSegId}
                 dubRev={dubRev}
                 activeTtsEngine={activeTtsEngine}
                 isHighTemp={isHiggsServer}

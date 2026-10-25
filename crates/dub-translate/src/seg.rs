@@ -2,6 +2,23 @@
 //! speaker}, которым оперируют translate.py / ctx_translate.py. Отдельно от dub_core::Segment, чтобы
 //! стадия перевода не зависела от полной модели Project (маппинг делает сервер).
 
+/// Пол говорящего реплики — для грамматического рода его слов о себе.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gender {
+    Male,
+    Female,
+}
+
+impl Gender {
+    /// Слово для промпта переводчику.
+    pub fn word(self) -> &'static str {
+        match self {
+            Gender::Male => "male",
+            Gender::Female => "female",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Seg {
     pub text: String,   // исходный текст (ASR) — s["text"]
@@ -12,6 +29,8 @@ pub struct Seg {
     /// Темп речи голоса этой реплики (символов/с, dub_core::fit) для бюджета длины перевода; None —
     /// табличный темп целевого языка.
     pub cps: Option<f64>,
+    /// Пол говорящего; None — неизвестен или подсказка выключена.
+    pub gender: Option<Gender>,
 }
 
 impl Seg {
@@ -30,6 +49,7 @@ impl Seg {
             end: 0.0,
             speaker,
             cps: None,
+            gender: None,
         }
     }
 }

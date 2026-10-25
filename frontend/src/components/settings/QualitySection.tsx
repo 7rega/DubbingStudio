@@ -5,11 +5,14 @@ import {
   AudioLines,
   Captions,
   Clock,
+  Languages,
   Mic2,
   Scissors,
   Sparkles,
+  SpellCheck,
   Star,
   Timer,
+  VenusAndMars,
   Volume2,
   Wand2,
 } from "lucide-react";
@@ -22,6 +25,9 @@ export default function QualitySection() {
   const [qcAsr, setQcAsr] = useState(false);
   const [qcDur, setQcDur] = useState(true);
   const [multitake, setMultitake] = useState(false);
+  const [trGender, setTrGender] = useState(true);
+  const [trGenderCheck, setTrGenderCheck] = useState(true);
+  const [trLatin, setTrLatin] = useState(true);
   const [speechRateOn, setSpeechRateOn] = useState(true);
   const [emoRefOn, setEmoRefOn] = useState(true);
   const [emoRefClean, setEmoRefClean] = useState(false);
@@ -43,6 +49,9 @@ export default function QualitySection() {
         setQcAsr(s.qc_asr === "1");
         setQcDur(s.qc_duration !== "0");
         setMultitake(s.multitake === "1");
+        setTrGender(s.tr_gender !== "0");
+        setTrGenderCheck(s.tr_gender_check !== "0");
+        setTrLatin(s.tr_latin !== "0");
         setSpeechRateOn(s.speech_rate_on !== "0");
         setEmoRefOn(s.emo_ref_on !== "0");
         setEmoRefClean(s.emo_ref_clean === "1");
@@ -105,6 +114,56 @@ export default function QualitySection() {
             on={multitake}
             busy={busyKey === "multitake"}
             onToggle={() => toggle("multitake", multitake, setMultitake)}
+          />
+        </div>
+      </section>
+
+      {/* 2. Перевод (Gemma MT) */}
+      <section>
+        <div className={groupTitle}>{t("qc.groupTranslation", "Перевод (Gemma MT)")}</div>
+        <div className={groupCard}>
+          <SettingSwitch
+            icon={VenusAndMars}
+            label={t("qc.trGender.label", "Пол говорящего для переводчика")}
+            hint={t("qc.trGender.hint", "переводчик знает, мужчина или женщина говорит строку")}
+            tip={t("qc.trGender.tip")}
+            on={trGender}
+            busy={busyKey === "tr_gender"}
+            onToggle={() => toggle("tr_gender", trGender, setTrGender)}
+          />
+          <AnimatePresence initial={false}>
+            {trGender && (
+              <motion.div
+                key="tr-gender-check-wrapper"
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                className="overflow-hidden !border-t-0"
+              >
+                <div className="border-t border-white/[0.06]">
+                  <SettingSwitch
+                    icon={SpellCheck}
+                    label={t("qc.trGenderCheck.label", "Проверять «я сказал / сказала»")}
+                    hint={t("qc.trGenderCheck.hint", "строка с формой другого пола уходит на переспрос (русский)")}
+                    tip={t("qc.trGenderCheck.tip")}
+                    on={trGenderCheck}
+                    nested
+                    busy={busyKey === "tr_gender_check"}
+                    onToggle={() => toggle("tr_gender_check", trGenderCheck, setTrGenderCheck)}
+                  />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <SettingSwitch
+            icon={Languages}
+            label={t("qc.trLatin.label", "Не оставлять английские слова")}
+            hint={t("qc.trLatin.hint", "для языков не на латинице: слово исходника латиницей уходит на переспрос")}
+            tip={t("qc.trLatin.tip")}
+            on={trLatin}
+            busy={busyKey === "tr_latin"}
+            onToggle={() => toggle("tr_latin", trLatin, setTrLatin)}
           />
         </div>
       </section>

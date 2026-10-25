@@ -1029,7 +1029,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
             s.extra.insert("translation_pending".into(), Value::Bool(true));
         }
     } else {
-        let _ = crate::translate::stage(args, paths, &mut proj, &asr_wav, meta.height, meta.duration, progress);
+        crate::translate::stage(args, paths, &mut proj, &asr_wav, meta.height, meta.duration, progress)?;
         let translate_key = cache::hash_stage(&[
             TRANSLATE_VER,
             &transcript_fp,

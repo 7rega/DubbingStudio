@@ -116,13 +116,6 @@ export const DEFAULT_HOTKEYS: HotkeyDefinition[] = [
     description: "Отдаление дорожек таймлайна (-15 px/s)",
     defaultCombo: { code: "Minus", ctrl: true },
   },
-  {
-    id: "timeline.loopSegment",
-    category: "timeline",
-    name: "Зациклить сегмент (Loop)",
-    description: "Повторять текущую фразу по кругу для контроля дубляжа",
-    defaultCombo: { code: "KeyL" },
-  },
 
   // 🎛️ РЕЖИМЫ И ОКНА
   {

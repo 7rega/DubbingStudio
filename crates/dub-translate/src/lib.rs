@@ -14,10 +14,10 @@ mod text_fix;
 mod translate;
 mod vision;
 
-pub use contract::{looks_untranslated, tgt_expects_non_latin, Contract};
+pub use contract::{looks_untranslated, tgt_expects_non_latin, Contract, TextChecks};
 pub use ctx::{run as ctx_run, CtxConfig, CtxResult};
 pub use extract::extract_glossary;
-pub use seg::Seg;
+pub use seg::{Gender, Seg};
 pub use text_fix::{cyrillic_homoglyphs, fix_translation};
 pub use translate::{rewrite as flat_rewrite, run as flat_run, run_with as flat_run_with, FlatOpts};
 pub use vision::{analyze_layout, classify_content_type, is_counter, scene_context, Layout, FONTS};

@@ -831,9 +831,25 @@
   },
   "qc": {
     "groupQc": "Quality Control & Checks (QC)",
+    "groupTranslation": "Translation (Gemma MT)",
     "groupVoice": "Speech Tempo & Emotion",
     "groupSound": "Sound Design & Mastering",
     "groupDiag": "Diagnostics",
+    "trGender": {
+      "label": "Speaker gender for the translator",
+      "hint": "the translator knows whether a man or a woman says the line",
+      "tip": "The speaker's gender comes from the pitch of several of their longest lines; an unsure measure gives no hint. It matters for languages with grammatical gender (in Russian a man and a woman say \"I said\" differently; French \"pret / prete\")."
+    },
+    "trGenderCheck": {
+      "label": "Check \"I said\" forms",
+      "hint": "a line in the other gender's form is asked again (Russian)",
+      "tip": "When the speaker speaks of themselves in the other gender, the line is asked again. If it stays wrong after every attempt, it is kept with a note in the log."
+    },
+    "trLatin": {
+      "label": "Leave no English words",
+      "hint": "for non-Latin languages: a source word left in Latin is asked again",
+      "tip": "Names and brands (capitalised in the source: Google, iPhone, Wi-Fi), numbers and \"keep\" glossary terms stay. The voice model reads a left English word with an accent."
+    },
     "asrTitle": "Transcript Verification via ASR (QC)",
     "asrDesc": "Automatic transcription check via Whisper ASR",
     "durationTitle": "Phrase Duration Control (Stretch QC)",

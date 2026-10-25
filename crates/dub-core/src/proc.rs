@@ -43,6 +43,29 @@ pub struct ChildGuard {
     pid: u32,
 }
 
+/// ffmpeg первым из каталога tools/ffmpeg / ffmpeg или из PATH процесса.
+pub fn ffmpeg() -> std::path::PathBuf {
+    tool("ffmpeg")
+}
+
+/// ffprobe первым из каталога tools/ffmpeg / ffmpeg или из PATH процесса.
+pub fn ffprobe() -> std::path::PathBuf {
+    tool("ffprobe")
+}
+
+fn tool(name: &str) -> std::path::PathBuf {
+    let file = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+    for dir in ["tools/ffmpeg", "ffmpeg"] {
+        let p = std::path::PathBuf::from(dir).join(&file);
+        if p.is_file() {
+            return p;
+        }
+    }
+    std::env::var_os("PATH")
+        .and_then(|paths| std::env::split_paths(&paths).map(|dir| dir.join(&file)).find(|path| path.is_file()))
+        .unwrap_or_else(|| std::path::PathBuf::from(file))
+}
+
 pub fn track(pid: u32) -> ChildGuard {
     if let Some(h) = HOOK.get() {
         h(pid, true);

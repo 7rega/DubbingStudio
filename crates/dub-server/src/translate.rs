@@ -7,7 +7,7 @@
 
 use dub_core::{Brand, GlossaryEntry, Project, SubStyle};
 use dub_llm::ChatClient;
-use dub_translate::{classify_content_type, ctx_run, looks_untranslated, CtxConfig, FlatOpts, Seg};
+use dub_translate::{classify_content_type, ctx_run, looks_untranslated, CtxConfig, FlatOpts, Gender, Seg, TextChecks};
 use serde_json::Value;
 
 use crate::analyze::{AnalyzeArgs, AnalyzePaths, Progress};
@@ -143,15 +143,18 @@ pub fn stage(
     // Seg-вью для dub-translate (text/speaker). speaker -> i64 (питон speaker=0 по умолчанию). Темп речи
     // языка для бюджета длины перевода.
     let cps = dub_core::fit::table_cps(&proj.tgt_lang);
+    let (checks, genders) = line_checks(&paths.models_root, &paths.work_dir, proj);
     let mut segs: Vec<Seg> = proj
         .segments
         .iter()
-        .map(|s| {
+        .zip(genders)
+        .map(|(s, gender)| {
             let spk = crate::analyze::speaker_to_i64(s.speaker.as_deref());
             let mut seg = Seg::new(s.src_text.clone(), spk);
             seg.start = s.start;
             seg.end = s.end;
             seg.cps = Some(cps);
+            seg.gender = gender;
             seg
         })
         .collect();
@@ -171,6 +174,7 @@ pub fn stage(
         // Стиль перевода (#112): из проекта. Тем же путём, что rewrite попадает в ctx_run.
         style: proj.audio.translate_style.clone(),
         glossary: proj.glossary.clone(),
+        checks,
     };
 
     if pair.vision().is_some() {
@@ -188,7 +192,7 @@ pub fn stage(
     // (tgt≈src ИЛИ латиница при нелатинском tgt), доперевести точечно flat_run — пока LLM ещё жив.
     let glossary = dub_core::glossary::for_translation(&proj.glossary, &proj.tgt_lang);
     if res.is_ok() {
-        ensure_translation_coverage(client, &contract, &mut segs, &args.src_lang, &proj.tgt_lang, &glossary, progress);
+        ensure_translation_coverage(client, &contract, &mut segs, &args.src_lang, &proj.tgt_lang, &glossary, checks, progress);
     }
     drop(pair); // глушим свою Gemma (освобождаем VRAM перед TTS/берном); удалённые провайдеры — no-op
 
@@ -231,6 +235,41 @@ pub fn stage(
         "перевод готов: {}/{} строк, тайтлов={}",
         spoken.len() - untranslated, spoken.len(), proj.captions.titles.len()));
     Ok(())
+}
+
+/// Проверки строк перевода из настроек и пол говорящего каждой реплики `proj` (по порядку реплик; None —
+/// неизвестен или подсказка переводчику выключена).
+pub(crate) fn line_checks(
+    models_root: &std::path::Path,
+    work_dir: &std::path::Path,
+    proj: &Project,
+) -> (TextChecks, Vec<Option<Gender>>) {
+    let sel = crate::models::load_selection(models_root);
+    let tr_gender = sel.get("tr_gender").and_then(Value::as_str) != Some("0");
+    let tr_gender_check = tr_gender && (sel.get("tr_gender_check").and_then(Value::as_str) != Some("0"));
+    let tr_latin = sel.get("tr_latin").and_then(Value::as_str) != Some("0");
+    let checks = TextChecks {
+        gender: tr_gender_check,
+        latin: tr_latin,
+    };
+    if !tr_gender {
+        return (checks, vec![None; proj.segments.len()]);
+    }
+    let speaker = |s: &dub_core::Segment| s.speaker.clone().unwrap_or_else(|| "0".into());
+    let mut spks: Vec<String> = proj.segments.iter().map(speaker).collect();
+    spks.sort();
+    spks.dedup();
+    let by_spk = crate::casting::speaker_genders_wd(work_dir, proj, &spks);
+    let genders = proj
+        .segments
+        .iter()
+        .map(|s| match by_spk.get(&speaker(s)).map(String::as_str) {
+            Some("male") => Some(Gender::Male),
+            Some("female") => Some(Gender::Female),
+            _ => None,
+        })
+        .collect();
+    (checks, genders)
 }
 
 /// Строка журнала джобы о строках, оставшихся на исходном языке после перевода; None — переведены все.
@@ -295,6 +334,7 @@ fn ensure_translation_coverage(
     src: &str,
     tgt_lang: &str,
     glossary: &[GlossaryEntry],
+    checks: TextChecks,
     progress: &Progress,
 ) {
     let bad: Vec<usize> = segs
@@ -315,10 +355,11 @@ fn ensure_translation_coverage(
                 g.start = segs[i].start;
                 g.end = segs[i].end;
                 g.cps = segs[i].cps;
+                g.gender = segs[i].gender;
                 g
             })
             .collect();
-        let opts = FlatOpts { src, tgt: tgt_lang, spoken: true, style: "", glossary, contract };
+        let opts = FlatOpts { src, tgt: tgt_lang, spoken: true, style: "", glossary, contract, checks };
         if let Err(e) = dub_translate::flat_run_with(client, &mut sub, &opts, &mut |m: &str| emit(progress, "translate", m)) {
             emit(progress, "translate", &format!("покрытие перевода: доперевод не удался ({e})"));
             break;
