@@ -16,6 +16,7 @@ dub-ocr = { path = "../dub-ocr" }
 dub-faces = { path = "../dub-faces" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 audiocpp = { path = "../audiocpp" }
+drama = { path = "../drama" }
 hound = "3"
 axum = { version = "0.8", features = ["multipart"] }
 tower = "0.5"
@@ -49,3 +50,7 @@ rfd = "0.15"
 # content-addressable per-stage кэш (analyze::cache): лёгкий, чистый хэш без C-зависимостей.
 # Префикс-хэш длинных wav (первые+последние N байт + размер) — быстрый ключ инвалидации стадий.
 blake3 = "1"
+
+[target.'cfg(not(windows))'.dependencies]
+libc = "0.2"
+

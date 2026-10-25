@@ -68,7 +68,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub use jobs::JobQueue;
 
-pub type TtsCache = Arc<Mutex<Option<(render::EngineKey, Arc<audiocpp::AudiocppEngine>)>>>;
+pub type TtsCache = Arc<Mutex<Option<(render::EngineKey, Arc<render::TtsEngine>)>>>;
 static GLOBAL_TTS_CACHE: OnceLock<TtsCache> = OnceLock::new();
 
 pub type AudiocppServerHandle = Arc<Mutex<audiocpp::AudiocppServer>>;
@@ -81,6 +81,7 @@ pub fn global_audiocpp_server() -> &'static Mutex<Option<AudiocppServerHandle>> 
 /// Принудительно завершить все фоновые сайдкар-серверы (audiocpp, llama и др.) и освободить VRAM.
 /// Вызывается при закрытии приложения, смене проекта или аварийном сбросе.
 pub fn shutdown_all_servers() {
+    evict_tts_cache();
     let global = global_audiocpp_server();
     if let Ok(mut guard) = global.lock() {
         if let Some(srv_arc) = guard.take() {
@@ -123,12 +124,12 @@ async fn set_window_title(Json(body): Json<Value>) -> Json<Value> {
     Json(json!({ "ok": true }))
 }
 
-/// Принудительно выгрузить Higgs TTS из VRAM/RAM (для взаимного вытеснения перед стартом LLM/Vision).
+/// Принудительно выгрузить TTS (Higgs/Drama) из VRAM/RAM (для взаимного вытеснения перед стартом LLM/Vision).
 pub fn evict_tts_cache() {
     if let Some(cache) = GLOBAL_TTS_CACHE.get() {
         if let Ok(mut lock) = cache.lock() {
             if lock.is_some() {
-                eprintln!("[memory] Выгружаем Higgs TTS из VRAM/RAM для освобождения памяти");
+                eprintln!("[memory] Выгружаем TTS из VRAM/RAM для освобождения памяти");
                 *lock = None;
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
@@ -256,7 +257,7 @@ pub struct AppState {
     pub setup_cancel: Arc<std::sync::atomic::AtomicBool>,
     /// Менеджер фоновой загрузки моделей и компонентов.
     pub downloads: Arc<downloads::Downloads>,
-    pub tts_cache: Arc<Mutex<Option<(render::EngineKey, Arc<audiocpp::AudiocppEngine>)>>>,
+    pub tts_cache: TtsCache,
 }
 
 /// Корень моделей: env DUBENGINE_MODELS_ROOT, иначе <repo_root>/models.
@@ -750,10 +751,22 @@ fn ensure_job_components(
         if missing("audiocpp-engine") {
             need.push("audiocpp-engine".to_string());
         }
-        let quant = models::pick(&sel, "voxcpm2_quant").or_else(|| models::pick(&sel, "tts")).unwrap_or("q8_0");
+        let quant = models::pick(&sel, "voxcpm2_quant")
+            .or_else(|| models::pick(&sel, "tts").filter(|&q| q != models::DRAMA_TTS))
+            .unwrap_or("q8_0");
         let model_comp = if quant == "bf16" { "voxcpm2-bf16" } else { "voxcpm2" };
         if missing(model_comp) {
             need.push(model_comp.to_string());
+        }
+    }
+
+    // TTS Drama 3: движок drama-engine + модель drama3
+    if tts_engine == "drama3" {
+        if missing("drama-engine") {
+            need.push("drama-engine".to_string());
+        }
+        if missing("drama3") {
+            need.push("drama3".to_string());
         }
     }
 

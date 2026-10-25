@@ -94,6 +94,12 @@ pub fn pick<'a>(sel: &'a Value, engine: &str) -> Option<&'a str> {
     sel.get(engine).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
 }
 
+pub const DRAMA_TTS: &str = "drama3";
+pub const DRAMA_MIN_LIMIT_GB: u32 = 5;
+const DRAMA_MIN_VRAM: u64 = 6 * 1024 * 1024 * 1024;
+const DRAMA_FULL_VRAM: u64 = 23 * 1024 * 1024 * 1024;
+const DRAMA_MIN_RAM: u64 = 30 * 1024 * 1024 * 1024;
+
 /// Отобразить id компонента манифеста -> список (slot, значение) для записи выбора при скачивании.
 /// Пусто — компонент не является переключаемым вариантом модели (движок/рантайм/OCR и т.п.).
 /// ASR-варианты пишут ДВА слота: движок (asr_engine) + вариант этого движка (asr-квант / whisper-модель),
@@ -106,6 +112,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "higgs-q4_k_m" => vec![("tts_engine", "higgs".into()), ("higgs_quant", "q4_k_m".into())],
         "voxcpm2" => vec![("tts_engine", "voxcpm2".into()), ("voxcpm2_quant", "q8_0".into())],
         "voxcpm2-bf16" => vec![("tts_engine", "voxcpm2".into()), ("voxcpm2_quant", "bf16".into())],
+        "drama3" => vec![("tts_engine", "drama3".into())],
         "parakeet" => vec![("asr_engine", "parakeet".into()), ("asr", "int8".into())],
         "parakeet-fp32" => vec![("asr_engine", "parakeet".into()), ("asr", "fp32".into())],
         "parakeet-ultra" => vec![("asr_engine", "parakeet".into()), ("asr", "ultra".into())],
@@ -154,6 +161,7 @@ pub fn is_selection_key(key: &str) -> bool {
             | "breath_on"       // "1" -> авто-вставка легких вдохов в паузах между фразами; "0" -> выкл
             | "speech_rate_on"  // "1" -> адаптация темпа генерации TTS под длину текста/слота; "0" -> дефолт темп
             | "emo_ref_on"      // "1" -> эмоциональный референс сцены (перенос эмоций из оригинального вокала); "0" -> выкл
+            | "drama_vram_gb"   // ограничение VRAM для Drama 3, ГБ; "0" (по умолчанию) — авто
             | "auto_shorten"    // "1" (по умолчанию) -> не влезшие в слот фразы рендер сокращает через LLM и озвучивает заново
             // Проверки качества перевода (Gemma MT):
             | "tr_gender"       // "1" (по умолчанию) -> подсказывать пол спикера модели
@@ -211,6 +219,7 @@ pub fn is_selection_key(key: &str) -> bool {
 pub fn is_selection_value(key: &str, value: &str) -> bool {
     match key {
         "llm_provider" | "vision_provider" => LlmBackend::parse(value).is_some(),
+        "drama_vram_gb" => value.parse::<u32>().is_ok_and(|gb| gb == 0 || (DRAMA_MIN_LIMIT_GB..=256).contains(&gb)),
         _ => true,
     }
 }
@@ -343,24 +352,27 @@ pub fn higgs_max_tokens(mroot: &Path) -> Option<u32> {
     }
 }
 
-/// Выбранный TTS-движок: "higgs" (дефолт) или "voxcpm2".
+/// Выбранный TTS-движок: "higgs" (дефолт), "voxcpm2" или "drama3".
 pub fn resolve_tts_engine(sel: &Value) -> &'static str {
     match pick(sel, "tts_engine") {
         Some("voxcpm2") => "voxcpm2",
+        Some("drama3") => "drama3",
         _ => "higgs",
     }
 }
 
 /// VoxCPM2 TTS: models/voxcpm2/voxcpm2-{q8_0,bf16}.gguf. Возврат (путь к .gguf, квант).
 pub fn resolve_voxcpm2(mroot: &Path, sel: &Value) -> Option<(PathBuf, String)> {
-    let quant = pick(sel, "voxcpm2_quant").or_else(|| pick(sel, "tts")).unwrap_or("q8_0");
+    let quant = pick(sel, "voxcpm2_quant")
+        .or_else(|| pick(sel, "tts").filter(|&q| q != DRAMA_TTS && q != "higgs"))
+        .unwrap_or("q8_0");
     let model_path = audiocpp::resolve_voxcpm2_path(mroot, quant)?;
     Some((model_path, quant.to_string()))
 }
 
 /// Выбранный режим исполнения Higgs: "server" (по умолчанию, audiocpp_server) или "dll" (audiocpp_engine.dll).
 pub fn resolve_higgs_execution(sel: &Value) -> &'static str {
-    if let Some(q) = pick(sel, "higgs_quant").or_else(|| pick(sel, "tts")) {
+    if let Some(q) = pick(sel, "higgs_quant").or_else(|| pick(sel, "tts").filter(|&q| q != DRAMA_TTS)) {
         if q == "q6_k" || q == "q4_k_m" {
             return "dll";
         }
@@ -911,7 +923,7 @@ pub fn build_engine(choice: &AsrChoice) -> Box<dyn dub_asr::AsrEngine> {
     }
 }
 
-/// Higgs TTS: папки higgs-{q8_0,q6_k,q4_k_m}, внутри файл {q}.gguf. Возврат (каталог, квант-строка
+/// Higgs TTS: папки higgs-{q8_0,bf16,q6_k,q4_k_m}, внутри файл {q}.gguf. Возврат (каталог, квант-строка
 /// для audiocpp load_model). Env DUB_STUDIO_HIGGS_MODEL (портатив) имеет приоритет.
 pub fn resolve_tts(mroot: &Path, sel: &Value) -> (PathBuf, String) {
     if let Ok(env) = std::env::var("DUB_STUDIO_HIGGS_MODEL") {
@@ -926,17 +938,56 @@ pub fn resolve_tts(mroot: &Path, sel: &Value) -> (PathBuf, String) {
     }
     let has = |q: &str| mroot.join(format!("higgs-{q}")).join(format!("{q}.gguf")).is_file();
     let ret = |q: &str| (mroot.join(format!("higgs-{q}")), q.to_string());
-    if let Some(q) = pick(sel, "higgs_quant").or_else(|| pick(sel, "tts")) {
+    if let Some(q) = pick(sel, "higgs_quant").or_else(|| pick(sel, "tts").filter(|&q| q != DRAMA_TTS && q != "voxcpm2")) {
         if has(q) {
             return ret(q);
         }
     }
-    for q in ["q8_0", "q6_k", "q4_k_m"] {
+    for q in ["q8_0", "bf16", "q6_k", "q4_k_m"] {
         if has(q) {
             return ret(q);
         }
     }
     ret("q8_0") // дефолт-fallback (может ещё не быть скачан)
+}
+
+/// Лимит видеопамяти под веса и кэш экспертов Drama 3, МБ. 0 — автовыбор движка: вся модель, если влезает
+/// в свободную память, иначе свободная без резерва (256 МБ–1 ГБ). Свой лимит меньше модели кладёт экспертов в RAM.
+pub fn drama_vram_limit_mb(mroot: &Path) -> u32 {
+    pick(&load_selection(mroot), "drama_vram_gb").and_then(|v| v.parse::<u32>().ok()).map_or(0, |gb| gb.saturating_mul(1024))
+}
+
+/// Есть ли полные веса Drama 3 на диске (последний слой файла весов и DLL).
+pub fn drama_installed(mroot: &Path) -> bool {
+    mroot.join(DRAMA_TTS).join("layer39.safetensors").is_file() && drama_dll(mroot).is_file()
+}
+
+pub fn drama_dll(mroot: &Path) -> PathBuf {
+    mroot.join("drama-engine").join(if cfg!(windows) { "drama_engine.dll" } else { "libdrama_engine.so" })
+}
+
+/// Причина неготовности Drama 3 на этом железе до запуска: None — есть NVIDIA с CUDA 13 и не меньше DRAMA_MIN_VRAM,
+/// а если модель не помещается целиком в видеопамять (или лимит ниже DRAMA_FULL_VRAM), оперативной
+/// памяти не меньше DRAMA_MIN_RAM.
+pub fn drama_unavailable(mroot: &Path) -> Option<String> {
+    let gpu = crate::hw::gpu_report();
+    let card = gpu.summary().unwrap_or_else(|| "-".to_string());
+    if !gpu.cuda13_ok {
+        return Some(format!("Для Drama 3 нужна видеокарта NVIDIA с поддержкой CUDA 13 (ваша: {card})"));
+    }
+    let gb = |bytes: u64| format!("{:.0}", bytes as f64 / (1u64 << 30) as f64);
+    let vram = crate::hw::total_vram();
+    if vram < DRAMA_MIN_VRAM {
+        return Some(format!("Для Drama 3 нужно не меньше 6 ГБ видеопамяти (ваша карта {card}: {} ГБ)", gb(vram)));
+    }
+    let limit = drama_vram_limit_mb(mroot) as u64 * (1 << 20);
+    if vram < DRAMA_FULL_VRAM || (limit > 0 && limit < DRAMA_FULL_VRAM) {
+        let ram = crate::hw::total_ram();
+        if ram < DRAMA_MIN_RAM {
+            return Some(format!("Для работы экспертов Drama 3 в оперативной памяти нужно не меньше 32 ГБ RAM (на этом ПК: {} ГБ)", gb(ram)));
+        }
+    }
+    None
 }
 
 /// Roformer сепарация: models/bsroformer/voc_fv6-{Q8_0,Q5_0,Q4_0}.gguf (все в одном каталоге).
@@ -1048,11 +1099,27 @@ mod asr_variant_tests {
     fn tts_and_diar_components_map_to_their_slots() {
         assert_eq!(component_selection("voxcpm2"), vec![("tts_engine", "voxcpm2".to_string()), ("voxcpm2_quant", "q8_0".to_string())]);
         assert_eq!(component_selection("voxcpm2-bf16"), vec![("tts_engine", "voxcpm2".to_string()), ("voxcpm2_quant", "bf16".to_string())]);
+        assert_eq!(component_selection("drama3"), vec![("tts_engine", "drama3".to_string())]);
         assert_eq!(component_selection("higgs-bf16"), vec![("tts_engine", "higgs".to_string()), ("higgs_quant", "bf16".to_string())]);
         assert_eq!(component_selection("sortformer"), vec![("diar_model", "sortformer".to_string())]);
         assert_eq!(component_selection("nemotron-bf16"), vec![("diar_model", "nemotron-bf16".to_string())]);
         assert_eq!(component_selection("nemotron-q8_0"), vec![("diar_model", "nemotron-q8_0".to_string())]);
         assert_eq!(component_selection("qwen3-asr"), vec![("asr_engine", "qwen3".to_string())]);
+    }
+
+    #[test]
+    fn resolve_tts_ignores_drama3_and_resolves_higgs() {
+        let root = std::env::temp_dir().join(format!("dub-higgs-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let hdir = root.join("higgs-q8_0");
+        std::fs::create_dir_all(&hdir).unwrap();
+        std::fs::write(hdir.join("q8_0.gguf"), b"x").unwrap();
+
+        let sel = serde_json::json!({ "tts": "drama3", "tts_engine": "higgs" });
+        let (dir, quant) = resolve_tts(&root, &sel);
+        assert_eq!(quant, "q8_0");
+        assert_eq!(dir, hdir);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     struct TmpModels(PathBuf);
@@ -1206,9 +1273,10 @@ mod secret_tests {
     fn secrets_are_not_selection_slots() {
         assert!(!is_selection_key("or_key") && !is_selection_key("proxy_url") && !is_selection_key("srv_key"));
         assert!(is_selection_key("or_llm_on") && is_selection_key("llm_provider") && is_selection_key("srv_url"));
-        assert!(is_selection_key("tts_engine") && is_selection_key("higgs_quant") && is_selection_key("voxcpm2_quant") && is_selection_key("higgs_execution") && is_selection_key("sep_mode") && is_selection_key("diar_model") && is_selection_key("mcp_on"));
+        assert!(is_selection_key("tts_engine") && is_selection_key("higgs_quant") && is_selection_key("voxcpm2_quant") && is_selection_key("higgs_execution") && is_selection_key("drama_vram_gb") && is_selection_key("sep_mode") && is_selection_key("diar_model") && is_selection_key("mcp_on"));
         assert!(!is_selection_key("proxy_on") && !is_selection_key("proxy_mode"), "the proxy changes only through its form");
         assert!(is_selection_value("vision_provider", "server") && !is_selection_value("llm_provider", "ollama"));
+        assert!(is_selection_value("drama_vram_gb", "0") && is_selection_value("drama_vram_gb", "6") && !is_selection_value("drama_vram_gb", "4"));
     }
 }
 

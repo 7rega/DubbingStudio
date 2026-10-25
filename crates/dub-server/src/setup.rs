@@ -173,6 +173,85 @@ const REDIST_WHISPER_CUDNN: &str = "https://developer.download.nvidia.com/comput
 // Страница драйверов NVIDIA (кнопка «Открыть сайт» — драйвер DLL-кой не ставится).
 pub const NVIDIA_DRIVER_URL: &str = "https://www.nvidia.com/Download/index.aspx";
 
+#[cfg(windows)]
+pub const DRAMA_ENGINE: FileSpec = FileSpec {
+    url: "https://github.com/timoncool/drama-rs/releases/download/engine-0.1.3/drama_engine.dll",
+    dest_rel: "models/drama-engine/drama_engine.dll",
+    size: 32_075_264,
+    extract: Extract::None,
+};
+#[cfg(not(windows))]
+pub const DRAMA_ENGINE: FileSpec = FileSpec {
+    url: "https://github.com/timoncool/drama-rs/releases/download/engine-0.1.3/libdrama_engine.so",
+    dest_rel: "models/drama-engine/libdrama_engine.so",
+    size: 32_642_032,
+    extract: Extract::None,
+};
+
+/// Fish Audio Drama 3: веса apiplant/drama-q4 (квантование Q4 для слоёв, кодек и глобулы).
+/// Всего ~23 ГБ (40 слоёв safetensors + кодек + движок).
+pub const DRAMA3_FILES: &[FileSpec] = &[
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/.gitattributes", dest_rel: "models/drama3/.gitattributes", size: 1_570, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/LICENSE", dest_rel: "models/drama3/LICENSE", size: 19_685, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/NOTICE", dest_rel: "models/drama3/NOTICE", size: 1_121, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/README.md", dest_rel: "models/drama3/README.md", size: 3_137, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/codec.safetensors", dest_rel: "models/drama3/codec.safetensors", size: 837_939_684, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/drama.json", dest_rel: "models/drama3/drama.json", size: 5_307, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/globals.safetensors", dest_rel: "models/drama3/globals.safetensors", size: 1_050_177_916, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer00.safetensors", dest_rel: "models/drama3/layer00.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer01.safetensors", dest_rel: "models/drama3/layer01.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer02.safetensors", dest_rel: "models/drama3/layer02.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer03.safetensors", dest_rel: "models/drama3/layer03.safetensors", size: 484_941_240, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer04.safetensors", dest_rel: "models/drama3/layer04.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer05.safetensors", dest_rel: "models/drama3/layer05.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer06.safetensors", dest_rel: "models/drama3/layer06.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer07.safetensors", dest_rel: "models/drama3/layer07.safetensors", size: 484_941_240, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer08.safetensors", dest_rel: "models/drama3/layer08.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer09.safetensors", dest_rel: "models/drama3/layer09.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer10.safetensors", dest_rel: "models/drama3/layer10.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer11.safetensors", dest_rel: "models/drama3/layer11.safetensors", size: 484_941_240, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer12.safetensors", dest_rel: "models/drama3/layer12.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer13.safetensors", dest_rel: "models/drama3/layer13.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer14.safetensors", dest_rel: "models/drama3/layer14.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer15.safetensors", dest_rel: "models/drama3/layer15.safetensors", size: 484_941_240, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer16.safetensors", dest_rel: "models/drama3/layer16.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer17.safetensors", dest_rel: "models/drama3/layer17.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer18.safetensors", dest_rel: "models/drama3/layer18.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer19.safetensors", dest_rel: "models/drama3/layer19.safetensors", size: 484_941_240, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer20.safetensors", dest_rel: "models/drama3/layer20.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer21.safetensors", dest_rel: "models/drama3/layer21.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer22.safetensors", dest_rel: "models/drama3/layer22.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer23.safetensors", dest_rel: "models/drama3/layer23.safetensors", size: 484_941_240, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer24.safetensors", dest_rel: "models/drama3/layer24.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer25.safetensors", dest_rel: "models/drama3/layer25.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer26.safetensors", dest_rel: "models/drama3/layer26.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer27.safetensors", dest_rel: "models/drama3/layer27.safetensors", size: 484_941_240, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer28.safetensors", dest_rel: "models/drama3/layer28.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer29.safetensors", dest_rel: "models/drama3/layer29.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer30.safetensors", dest_rel: "models/drama3/layer30.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer31.safetensors", dest_rel: "models/drama3/layer31.safetensors", size: 484_941_240, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer32.safetensors", dest_rel: "models/drama3/layer32.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer33.safetensors", dest_rel: "models/drama3/layer33.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer34.safetensors", dest_rel: "models/drama3/layer34.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer35.safetensors", dest_rel: "models/drama3/layer35.safetensors", size: 484_941_240, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer36.safetensors", dest_rel: "models/drama3/layer36.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer37.safetensors", dest_rel: "models/drama3/layer37.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer38.safetensors", dest_rel: "models/drama3/layer38.safetensors", size: 491_594_072, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/layer39.safetensors", dest_rel: "models/drama3/layer39.safetensors", size: 484_941_240, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/tokenizer.json", dest_rel: "models/drama3/tokenizer.json", size: 20_791_070, extract: Extract::None },
+    FileSpec { url: "https://huggingface.co/apiplant/drama-q4/resolve/1fce9bd21d46a0311294aebfad19f994df90902f/tower.safetensors", dest_rel: "models/drama3/tower.safetensors", size: 1_432_245_128, extract: Extract::None },
+    DRAMA_ENGINE,
+];
+
+pub const DRAMA3_WEIGHTS: u64 = 22_938_419_178;
+
+pub const DRAMA3_MARKERS: &[Marker] = &[
+    Marker { rel: "models/drama3/layer39.safetensors", expect: 484_941_240 },
+    Marker { rel: "models/drama3/tokenizer.json", expect: 20_791_070 },
+    Marker { rel: DRAMA_ENGINE.dest_rel, expect: DRAMA_ENGINE.size },
+];
+
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  МАНИФЕСТ
 // ═══════════════════════════════════════════════════════════════════════════
@@ -321,6 +400,17 @@ pub fn manifest() -> Vec<Component> {
             ],
             markers: &[Marker { rel: "tools/audiocpp/assets/framework/models/silero_vad/silero_vad_16k.safetensors", expect: 1_239_748 }],
             external_url: Some("https://github.com/snakers4/silero-vad"),
+        },
+        Component {
+            id: "drama3",
+            name: "Fish Audio Drama 3 (Q4)",
+            purpose: "Озвучка перевода голосами актеров оригинала (дополнительный движок для видеокарт от 6 ГБ; до 24 ГБ требует 32 ГБ RAM)",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: DRAMA3_WEIGHTS + DRAMA_ENGINE.size,
+            files: DRAMA3_FILES,
+            markers: DRAMA3_MARKERS,
+            external_url: Some("https://huggingface.co/apiplant/drama-q4"),
         },
         Component {
             id: "gemma",
@@ -1013,6 +1103,7 @@ fn vram_estimate(id: &str) -> u64 {
         "roformer-q4" => gb(0.4),
         "voxcpm2" => gb(3.2),
         "voxcpm2-bf16" => gb(5.0),
+        "drama3" => gb(5.0),
         _ => 0,
     }
 }

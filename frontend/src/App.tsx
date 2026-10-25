@@ -101,7 +101,7 @@ const activeVariantId = (ids: string[], sel: Selection): string | undefined =>
     const m = VARIANT_SLOT[id];
     if (!m) return false;
     if (sel[m[0]] === m[1]) return true;
-    if ((m[0] === "higgs_quant" || m[0] === "voxcpm2_quant") && !sel[m[0]] && sel["tts"] === m[1]) return true;
+    if ((m[0] === "higgs_quant" || m[0] === "voxcpm2_quant") && !sel[m[0]] && sel["tts"] === m[1] && sel["tts"] !== "drama3") return true;
     return false;
   });
 
@@ -322,6 +322,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
           {[
             { id: "higgs", label: "Higgs Audio v3", cloud: false },
             { id: "voxcpm2", label: "VoxCPM2", cloud: false },
+            { id: "drama3", label: "Fish Audio Drama 3", cloud: false },
             { id: "openrouter", label: "OpenRouter", cloud: true },
           ].map((e) => {
             const ttsCloud = selv("or_tts_on") === "1";
@@ -341,6 +342,15 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
                     try {
                       await api.setSelection("or_tts_on", "0");
                       await api.setSelection("tts_engine", e.id);
+                      if (e.id === "higgs") {
+                        const hq = selv("higgs_quant") || (selv("tts") !== "drama3" ? selv("tts") : "") || "q8_0";
+                        await api.setSelection("tts", hq);
+                        await api.setSelection("higgs_quant", hq);
+                      } else if (e.id === "voxcpm2") {
+                        const vq = selv("voxcpm2_quant") || (selv("tts") !== "drama3" ? selv("tts") : "") || "q8_0";
+                        await api.setSelection("tts", vq);
+                        await api.setSelection("voxcpm2_quant", vq);
+                      }
                       loadCap();
                     } catch (er) {
                       setErr(er instanceof Error ? er.message : String(er));
@@ -379,6 +389,38 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
           <>
             <VariantPicker base="VoxCPM2 (audio.cpp)" ids={["voxcpm2", "voxcpm2-bf16"]} />
             {rowOf("audiocpp-engine")}
+          </>
+        ) : (selv("tts_engine") === "drama3") ? (
+          <>
+            {rowOf("drama3")}
+            <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08] space-y-2">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-medium text-[var(--color-text)]">{t("settings.dramaVram")}</div>
+                  <div className="mono text-[10px] text-[var(--color-muted)]">
+                    {t("settings.dramaVramHint")}
+                  </div>
+                </div>
+                <select
+                  value={selv("drama_vram_gb") || "0"}
+                  onChange={(e) => {
+                    api.setSelection("drama_vram_gb", e.target.value)
+                      .then(loadCap)
+                      .catch((er) => setErr(er instanceof Error ? er.message : String(er)));
+                  }}
+                  className="shrink-0 bg-[#12141a] border border-white/[0.12] text-[var(--color-text)] rounded-lg px-2.5 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none"
+                >
+                  <option value="0">{t("settings.dramaVramAuto")}</option>
+                  <option value="6">6 ГБ</option>
+                  <option value="8">8 ГБ</option>
+                  <option value="10">10 ГБ</option>
+                  <option value="12">12 ГБ</option>
+                  <option value="16">16 ГБ</option>
+                  <option value="20">20 ГБ</option>
+                  <option value="24">24 ГБ</option>
+                </select>
+              </div>
+            </div>
           </>
         ) : (
           <>
@@ -4831,8 +4873,8 @@ function Editor() {
       const exec = slot(c.selection, "higgs_execution");
       if (exec) setHiggsExecution(exec);
       const quant = engine === "voxcpm2"
-        ? (slot(c.selection, "voxcpm2_quant") ?? slot(c.selection, "tts"))
-        : (slot(c.selection, "higgs_quant") ?? slot(c.selection, "tts"));
+        ? (slot(c.selection, "voxcpm2_quant") ?? (slot(c.selection, "tts") !== "drama3" ? slot(c.selection, "tts") : undefined) ?? "q8_0")
+        : (slot(c.selection, "higgs_quant") ?? (slot(c.selection, "tts") !== "drama3" ? slot(c.selection, "tts") : undefined) ?? "q8_0");
       if (quant) setTtsQuant(quant);
     }).catch(() => {});
   }, []);

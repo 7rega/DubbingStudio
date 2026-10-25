@@ -1,0 +1,10 @@
+[package]
+name = "drama"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FFI-обвязка над drama_engine.dll (Fish Audio Drama 3 TTS, форк timoncool/drama-rs)"
+
+[dependencies]
+libloading = "0.9"
+thiserror = { workspace = true }

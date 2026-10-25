@@ -78,10 +78,10 @@ pub struct RenderPaths {
     pub bench: bool,           // пер-стадийный бенчмарк (галка настроек, ВЫКЛ по умолчанию)
     pub ref_secs: f64,         // длина реф-клипа клона голоса, сек (настройка «Экономия RAM», дефолт 12.0)
     pub models_root: PathBuf,  // каталог моделей (active.json) — читаем настройки облачного TTS OpenRouter
-    pub tts_cache: Arc<Mutex<Option<(EngineKey, Arc<AudiocppEngine>)>>>,
+    pub tts_cache: Arc<Mutex<Option<(EngineKey, Arc<TtsEngine>)>>>,
     pub audiocpp_bin: PathBuf, // путь к audiocpp_server(.exe)
     pub voxcpm2_dir: PathBuf,  // каталог моделей voxcpm2
-    pub tts_engine: String,    // "higgs" | "voxcpm2"
+    pub tts_engine: String,    // "higgs" | "voxcpm2" | "drama3"
     pub voxcpm2_quant: String, // "q8_0" | "bf16"
     pub higgs_execution: String, // "server" | "dll"
     pub cancel_token: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -372,6 +372,75 @@ const GUARD_GRACE_SECS: u64 = 60;
 /// гонка), а ОБРЫВАЕТ рендер. Единственный воркер разблокируется (ошибка), состояние движка не портим.
 const ENGINE_STUCK: &str = "ENGINE_STUCK";
 
+/// Движок озвучки дубляжа: Higgs Audio v3 или Fish Audio Drama 3.
+pub enum TtsEngine {
+    Higgs(AudiocppEngine),
+    Drama(drama::DramaEngine),
+}
+
+impl TtsEngine {
+    pub fn voice_clone(
+        &self,
+        text: &str,
+        ref_wav: &str,
+        ref_text: Option<&str>,
+        opts: &str,
+    ) -> Result<(Vec<f32>, i32), String> {
+        match self {
+            TtsEngine::Higgs(e) => e
+                .voice_clone(text, ref_wav, ref_text, opts)
+                .map_err(|err| err.to_string()),
+            TtsEngine::Drama(e) => {
+                let ref_text = ref_text
+                    .filter(|t| !t.trim().is_empty())
+                    .ok_or_else(|| "Drama 3 требует текст референса для клонирования (ref_text)".to_string())?;
+                let audio = e
+                    .speak(text, Path::new(ref_wav), ref_text, &drama_params(opts))
+                    .map_err(|err| match err {
+                        drama::DramaError::Cancelled => crate::setup::CANCELLED.to_string(),
+                        other => other.to_string(),
+                    })?;
+                Ok((audio, e.sample_rate() as i32))
+            }
+        }
+    }
+
+    pub fn cancel(&self) {
+        match self {
+            TtsEngine::Higgs(e) => e.cancel(),
+            TtsEngine::Drama(e) => e.cancel(),
+        }
+    }
+}
+
+/// Параметры Drama 3 из JSON опций: seed, max_new (21.5 к/с) и температура.
+fn drama_params(opts: &str) -> drama::Params {
+    let v: serde_json::Value = serde_json::from_str(opts).unwrap_or_default();
+    let seed = v.get("seed").and_then(|s| s.as_u64()).unwrap_or_else(|| uuid::Uuid::new_v4().as_u64_pair().0);
+    let tokens = v.get("max_new_tokens").and_then(|t| t.as_u64()).unwrap_or(2048) as f64;
+    let max_new = ((tokens * drama::FRAMES_PER_SECOND * 2.0 / (75.0 * 1.5)).ceil() as u32).clamp(64, 2048);
+    let temperature = v.get("temperature").and_then(|t| t.as_f64()).map_or(1.0, |t| (0.7 + t).min(1.0)) as f32;
+    drama::Params { temperature, seed, max_new, ..Default::default() }
+}
+
+const DRAMA_MAX_LEN: u32 = 2048;
+
+fn load_drama(paths: &RenderPaths) -> Result<drama::DramaEngine, String> {
+    if let Some(why) = crate::models::drama_unavailable(&paths.models_root) {
+        return Err(why);
+    }
+    let dll = crate::models::drama_dll(&paths.models_root);
+    if !crate::models::drama_installed(&paths.models_root) {
+        return Err("Drama 3 выбрана, но не скачана до конца: скачайте её в «Модели» или выберите другую модель".to_string());
+    }
+    let cuda_dirs = [paths.models_root.join("cuda-runtime"), paths.models_root.join("higgs-engine")];
+    let lib_dirs: Vec<&Path> = cuda_dirs.iter().map(PathBuf::as_path).collect();
+    let drama_dir = paths.models_root.join("drama3");
+    let vram_limit = crate::models::drama_vram_limit_mb(&paths.models_root);
+    drama::DramaEngine::load_limited(&dll, &lib_dirs, &drama_dir, DRAMA_MAX_LEN, vram_limit)
+        .map_err(|e| format!("загрузка Drama 3: {e}"))
+}
+
 /// voice_clone с ЖЁСТКИМ таймаутом. Higgs (прекомпил-DLL) СТОХАСТИЧЕСКИ виснет на редких сегментах; in-process
 /// FFI не убить, но есть C-ABI `cancel()`. Гоним синтез в отдельном потоке с таймаутом. По таймауту: cancel()
 /// + ЖДЁМ grace, пока поток реально ВЫЙДЕТ из DLL (нельзя трогать движок конкурентно — single-caller контракт).
@@ -379,7 +448,7 @@ const ENGINE_STUCK: &str = "ENGINE_STUCK";
 /// обрывает рендер (НЕ гоняет движок параллельно с зависшим потоком). Так воркер не блокируется навечно и
 /// не ловит гонку FFI.
 fn voice_clone_guarded(
-    engine: &Arc<AudiocppEngine>,
+    engine: &Arc<TtsEngine>,
     text: &str,
     ref_wav: &str,
     ref_text: Option<&str>,
@@ -395,9 +464,7 @@ fn voice_clone_guarded(
         opts.to_string(),
     );
     std::thread::spawn(move || {
-        let r = eng
-            .voice_clone(&t, &rw, rt.as_deref(), &op)
-            .map_err(|e| e.to_string());
+        let r = eng.voice_clone(&t, &rw, rt.as_deref(), &op);
         let _ = tx.send(r); // получателя уже нет по таймауту — send вернёт Err, не паникуем
     });
     match rx.recv_timeout(timeout) {
@@ -582,6 +649,16 @@ pub fn build_tts_input(
         "higgs" => {
             // Для Higgs Audio v3 сохраняем валидные управляющие теги (<|...|>) для эмоций и стилей
             raw_tgt.trim().to_string()
+        }
+        "drama3" => {
+            // Для Fish Audio Drama 3 сохраняем интонационные теги ([laughs], <whisper> и др.),
+            // убирая управляющие теги Higgs (<|...|>)
+            let s = raw_tgt.trim();
+            if s.contains("<|") {
+                clean_speech_text(s)
+            } else {
+                s.to_string()
+            }
         }
         _ => {
             // Для других движков оставляем чистый текст
@@ -1236,7 +1313,7 @@ fn build_dub(
             && paths.higgs_quant != "q4_k_m");
 
     let mut vox_server: Option<Arc<Mutex<AudiocppServer>>> = None;
-    let engine: Option<Arc<AudiocppEngine>> = if dirty_count == 0 {
+    let engine: Option<Arc<TtsEngine>> = if dirty_count == 0 {
         None
     } else if cloud_tts_on {
         emit(progress, "tts", "TTS через облако (OpenRouter) — локальные движки не загружаем");
@@ -1322,6 +1399,34 @@ fn build_dub(
 
         vox_server = Some(srv_handle);
         None
+    } else if paths.tts_engine == "drama3" {
+        let key = EngineKey {
+            dll: crate::models::drama_dll(&paths.models_root),
+            model_root: paths.models_root.join("drama3"),
+            backend: "cuda".to_string(),
+            device: paths.higgs_device,
+            threads: paths.higgs_threads,
+            quant: "drama3".to_string(),
+        };
+        let mut cache = paths.tts_cache.lock().unwrap();
+        if let Some((ref cached_key, ref eng)) = *cache {
+            if cached_key == &key {
+                emit(progress, "tts", "Drama 3 TTS: используем уже загруженную модель из кэша");
+                Some(eng.clone())
+            } else {
+                emit(progress, "tts", "Drama 3 TTS: параметры изменились, выгружаем старую модель...");
+                *cache = None;
+                emit(progress, "tts", "Drama 3 TTS: загружаем модель в память/VRAM...");
+                let e = Arc::new(TtsEngine::Drama(load_drama(paths)?));
+                *cache = Some((key, e.clone()));
+                Some(e)
+            }
+        } else {
+            emit(progress, "tts", "Drama 3 TTS: загружаем модель в память/VRAM...");
+            let e = Arc::new(TtsEngine::Drama(load_drama(paths)?));
+            *cache = Some((key, e.clone()));
+            Some(e)
+        }
     } else {
         if paths.tts_engine == "higgs" && paths.higgs_execution == "server" && (paths.higgs_quant == "q6_k" || paths.higgs_quant == "q4_k_m") {
             emit(progress, "tts", &format!("Higgs {}: кванты Q4/Q6 поддерживаются только через DLL (переключение на audiocpp_engine.dll)...", paths.higgs_quant));
@@ -1342,9 +1447,7 @@ fn build_dub(
             } else {
                 emit(progress, "tts", "Higgs TTS: параметры изменились, выгружаем старую модель...");
                 *cache = None; // выгружаем старую
-                let e = Arc::new(
-                    AudiocppEngine::load(&paths.higgs_dll).map_err(|e| format!("загрузка Higgs DLL: {e}"))?,
-                );
+                let e = AudiocppEngine::load(&paths.higgs_dll).map_err(|e| format!("загрузка Higgs DLL: {e}"))?;
                 emit(progress, "tts", "Higgs TTS: загружаем новую модель...");
                 e.load_model(
                     &paths.higgs_model_root,
@@ -1354,14 +1457,13 @@ fn build_dub(
                     Some(paths.higgs_quant.as_str()),
                 )
                 .map_err(|e| format!("Higgs load_model: {e}"))?;
-                *cache = Some((key, e.clone()));
-                Some(e)
+                let e_arc = Arc::new(TtsEngine::Higgs(e));
+                *cache = Some((key, e_arc.clone()));
+                Some(e_arc)
             }
         } else {
             emit(progress, "tts", "Higgs TTS: загружаем модель в память/VRAM...");
-            let e = Arc::new(
-                AudiocppEngine::load(&paths.higgs_dll).map_err(|e| format!("загрузка Higgs DLL: {e}"))?,
-            );
+            let e = AudiocppEngine::load(&paths.higgs_dll).map_err(|e| format!("загрузка Higgs DLL: {e}"))?;
             e.load_model(
                 &paths.higgs_model_root,
                 &paths.higgs_backend,
@@ -1370,8 +1472,9 @@ fn build_dub(
                 Some(paths.higgs_quant.as_str()),
             )
             .map_err(|e| format!("Higgs load_model: {e}"))?;
-            *cache = Some((key, e.clone()));
-            Some(e)
+            let e_arc = Arc::new(TtsEngine::Higgs(e));
+            *cache = Some((key, e_arc.clone()));
+            Some(e_arc)
         }
     };
 
@@ -1944,8 +2047,25 @@ fn build_dub(
                         }
                     }
                 } else {
-                    let eng = engine.as_ref().expect("локальный Higgs (не облако)");
-                    match voice_clone_guarded(eng, tgt, &rw.to_string_lossy(), rt, &opts, vc_to) {
+                    let drama_no_text = paths.tts_engine == "drama3" && rt.is_none_or(|t| t.trim().is_empty());
+                    if drama_no_text {
+                        media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
+                        kept_original = true;
+                        emit(progress, "tts", &format!(
+                            "⚠ фраза #{}: для Drama 3 нужен текст оригинальной речи (ref_text) — оставлен оригинал",
+                            fi + 1
+                        ));
+                        break (Vec::new(), 24_000);
+                    }
+                    let eng = engine.as_ref().expect("локальный TTS (не облако)");
+                    let drama_text;
+                    let synth_input = if paths.tts_engine == "drama3" {
+                        drama_text = build_tts_input("drama3", tgt, "");
+                        &drama_text
+                    } else {
+                        tgt
+                    };
+                    match voice_clone_guarded(eng, synth_input, &rw.to_string_lossy(), rt, &opts, vc_to) {
                         Ok(v) => v,
                         Err(e) if e.starts_with(ENGINE_STUCK) => {
                             emit(progress, "tts", &format!(
@@ -4055,6 +4175,27 @@ mod tests {
             build_tts_input("higgs", "  Обычный текст.  ", ""),
             "Обычный текст."
         );
+
+        // Drama 3: сохраняются интонационные теги ([laughs], <whisper>)
+        assert_eq!(
+            build_tts_input("drama3", "[laughs] Привет мир!", ""),
+            "[laughs] Привет мир!"
+        );
+        assert_eq!(
+            build_tts_input("drama3", "<whisper>тихий шепот</whisper>", ""),
+            "<whisper>тихий шепот</whisper>"
+        );
+    }
+
+    #[test]
+    fn test_drama_params() {
+        let first = r#"{"temperature":0.30,"max_new_tokens":365}"#;
+        assert_ne!(drama_params(first).seed, drama_params(first).seed, "regenerating a line must give a new take");
+        let seeded = r#"{"temperature":0.10,"max_new_tokens":365,"seed":2002}"#;
+        assert_eq!(drama_params(seeded).seed, 2002);
+        assert_eq!(drama_params(seeded).max_new, 140);
+        assert!((drama_params(seeded).temperature - 0.8).abs() < 1e-6);
+        assert!((drama_params(first).temperature - 1.0).abs() < 1e-6);
     }
 
     #[test]
