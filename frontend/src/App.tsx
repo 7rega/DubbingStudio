@@ -4843,6 +4843,7 @@ function Editor() {
   const [showCastModal, setShowCastModal] = useState(false);
   const [showHiggsModal, setShowHiggsModal] = useState(false);
   const [showVoxModal, setShowVoxModal] = useState(false);
+  const [showDramaModal, setShowDramaModal] = useState(false);
   const [subsViewMode, setSubsViewMode] = useState<"cards" | "table">("cards");
   const [actorPickerState, setActorPickerState] = useState<{ targetIds: string[]; x: number; y: number } | null>(null);
   const [actorInputDraft, setActorInputDraft] = useState("");
@@ -7662,7 +7663,7 @@ function Editor() {
                     <Sliders size={12} className="text-[var(--color-accent)]" />
                     {t("voice.ttsModelSettings", "Настройки моделей синтеза")}
                   </div>
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <div className="grid grid-cols-3 gap-1.5">
                     {/* Кнопка Higgs Audio v3 */}
                     <button
                       type="button"
@@ -7704,6 +7705,30 @@ function Editor() {
                       </div>
                       <div className="text-[9px] text-[var(--color-muted)] truncate w-full mt-0.5">
                         {p.audio.vox_prompt ? p.audio.vox_prompt : `${p.audio.vox_steps ?? 20}ш • CFG ${(p.audio.vox_cfg ?? 1.6).toFixed(1)}`}
+                      </div>
+                    </button>
+
+                    {/* Кнопка Drama 3 */}
+                    <button
+                      type="button"
+                      onClick={() => setShowDramaModal(true)}
+                      className={`flex flex-col items-start p-2 rounded-lg border text-left transition-all ${
+                        activeTtsEngine === "drama3"
+                          ? "bg-[var(--color-accent)]/10 border-[var(--color-accent)] text-[var(--color-text)] shadow-sm"
+                          : "bg-[var(--color-surface)] border-[var(--color-border)] hover:border-[var(--color-muted)] text-[var(--color-text)]"
+                      }`}
+                      title={t("voice.dramaModalTitle", "Fish Audio Drama 3 — настройки")}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-[11px] font-semibold truncate flex items-center gap-1">
+                          🎭 Drama 3
+                        </span>
+                        <Settings2 size={11} className={activeTtsEngine === "drama3" ? "text-[var(--color-accent)]" : "text-[var(--color-muted)]"} />
+                      </div>
+                      <div className="text-[9px] text-[var(--color-muted)] truncate w-full mt-0.5">
+                        {p.audio.drama_prompt
+                          ? `${p.audio.drama_prompt}${p.audio.drama_audio_only ? " • AO" : ""}`
+                          : `t: ${(p.audio.drama_temp ?? 1.0).toFixed(2)}${p.audio.drama_seed != null ? " • сид" : ""}${p.audio.drama_audio_only ? " • AO" : ""}`}
                       </div>
                     </button>
                   </div>
@@ -8320,6 +8345,16 @@ function Editor() {
             setShowVoxModal(false);
           }}
           onClose={() => setShowVoxModal(false)}
+        />
+      )}
+      {showDramaModal && (
+        <DramaSettingsModal
+          p={p}
+          onSave={async (settings) => {
+            await branch("tts_settings", settings);
+            setShowDramaModal(false);
+          }}
+          onClose={() => setShowDramaModal(false)}
         />
       )}
     </div>
@@ -9046,6 +9081,219 @@ function VoxCPM2Modal({
                 {t("voice.seedRandomHint", "Каждая генерация даёт уникальную интонацию")}
               </div>
             )}
+          </div>
+        </div>
+
+        {/* Подвал */}
+        <div className="px-5 py-3 border-t border-[var(--color-border)]/70 bg-[var(--color-surface-2)]/30 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          >
+            {t("common.cancel", "Отмена")}
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {saving ? <Loader2 size={13} className="animate-spin" /> : null}
+            <span>{t("common.save", "Сохранить")}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Модальное окно настроек Fish Audio Drama 3
+function DramaSettingsModal({
+  p,
+  onSave,
+  onClose,
+}: {
+  p: Project;
+  onSave: (settings: {
+    drama_prompt: string;
+    drama_temp: number;
+    drama_seed: number | null;
+    drama_audio_only: boolean;
+  }) => Promise<void>;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [prompt, setPrompt] = useState(p.audio.drama_prompt ?? "");
+  const [temp, setTemp] = useState<number>(p.audio.drama_temp ?? 1.0);
+  const [seedFixed, setSeedFixed] = useState<boolean>(p.audio.drama_seed != null);
+  const [seed, setSeed] = useState<number>(p.audio.drama_seed ?? 42);
+  const [audioOnly, setAudioOnly] = useState<boolean>(p.audio.drama_audio_only ?? false);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave({
+        drama_prompt: prompt.trim(),
+        drama_temp: temp,
+        drama_seed: seedFixed ? seed : null,
+        drama_audio_only: audioOnly,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const generateSeed = () => {
+    setSeed(Math.floor(Math.random() * 1000000) + 1);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative w-full max-w-lg flex flex-col rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        {/* Шапка */}
+        <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--color-border)]/70">
+          <div className="flex items-start gap-3">
+            <span className="text-2xl leading-none">🎭</span>
+            <div>
+              <h2 className="text-base font-semibold text-[var(--color-text)] leading-tight">
+                {t("voice.dramaModalTitle", "Fish Audio Drama 3")}
+              </h2>
+              <div className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-relaxed">
+                {t("voice.dramaModalSubtitle", "Параметры инференса, эмоциональные промпты и температура")}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-[var(--color-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Тело настроек */}
+        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+          {/* Глобальный промпт */}
+          <div>
+            <div className="flex items-center justify-between text-[11px] mb-1">
+              <label className="font-medium text-[var(--color-text)]">
+                {t("voice.dramaPromptLabel", "Глобальный промпт стиля/эмоций")}
+              </label>
+              {prompt ? (
+                <button
+                  type="button"
+                  onClick={() => setPrompt("")}
+                  className="text-[10px] text-[var(--color-muted)] hover:text-[var(--color-text)] transition-colors"
+                >
+                  {t("common.clear", "Очистить")}
+                </button>
+              ) : null}
+            </div>
+            <input
+              type="text"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder={t("voice.dramaPromptPlaceholder", "например: [whisper], [laughs], [sigh]...")}
+              className="w-full bg-[var(--color-surface-2)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-xs text-[var(--color-text)] placeholder-[var(--color-muted)]/60 focus:border-[var(--color-accent)] outline-none transition-colors"
+            />
+            <div className="text-[10px] text-[var(--color-muted)] leading-snug mt-1">
+              {t("voice.dramaPromptHint", "Интонационные теги ([whisper], [sigh], [screaming]), подставляемые в начало всех реплик проекта.")}
+            </div>
+          </div>
+
+          {/* Температура сэмплинга */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {t("voice.dramaTempLabel", "Температура сэмплинга")}
+              </span>
+              <div className="flex items-center gap-2">
+                {Math.abs(temp - 1.0) > 0.001 && (
+                  <button
+                    type="button"
+                    onClick={() => setTemp(1.0)}
+                    className="text-[10px] text-[var(--color-accent)] hover:underline"
+                  >
+                    {t("voice.dramaTempReset", "Сбросить к 1.00")}
+                  </button>
+                )}
+                <span className="mono text-xs font-semibold px-2 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)]">
+                  {temp.toFixed(2)}
+                </span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={0.10}
+              max={1.50}
+              step={0.05}
+              value={temp}
+              onChange={(e) => setTemp(parseFloat(e.target.value))}
+              className="w-full accent-[var(--color-accent)] cursor-pointer"
+            />
+            <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+              {t("voice.dramaTempHint", "Дефолт модели: 1.00. Рабочий диапазон 0.10–1.50 с шагом 0.05. Более высокая температура добавляет экспрессии, низкая — стабильности.")}
+            </div>
+          </div>
+
+          {/* Фиксация сида */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 text-xs font-medium text-[var(--color-text)] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={seedFixed}
+                  onChange={(e) => setSeedFixed(e.target.checked)}
+                  className="accent-[var(--color-accent)] w-3.5 h-3.5 rounded"
+                />
+                <span>{t("voice.seedFixed", "Зафиксировать сид")}</span>
+              </label>
+            </div>
+            {seedFixed ? (
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="number"
+                  min={0}
+                  max={2147483647}
+                  value={seed}
+                  onChange={(e) => setSeed(parseInt(e.target.value, 10) || 0)}
+                  className="flex-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-xs font-mono text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={generateSeed}
+                  className="px-2.5 py-1.5 rounded-lg text-xs bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors flex items-center gap-1 font-medium"
+                  title={t("voice.seedGenerate", "Сгенерировать случайный сид")}
+                >
+                  <span>🎲</span>
+                </button>
+              </div>
+            ) : (
+              <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+                {t("voice.seedRandomHint", "Каждая генерация даёт уникальную интонацию")}
+              </div>
+            )}
+          </div>
+
+          {/* Режим Audio-Only (игнорирование текста референса) */}
+          <div className="p-3 rounded-xl bg-[var(--color-surface-2)]/60 border border-[var(--color-border)]/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 text-xs font-medium text-[var(--color-text)] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={audioOnly}
+                  onChange={(e) => setAudioOnly(e.target.checked)}
+                  className="accent-[var(--color-accent)] w-3.5 h-3.5 rounded"
+                />
+                <span>{t("voice.dramaAudioOnlyLabel", "Режим только аудио (Audio-Only)")}</span>
+              </label>
+            </div>
+            <div className="text-[10px] text-[var(--color-muted)] leading-snug">
+              {t("voice.dramaAudioOnlyHint", "Игнорировать распознанный текст оригинала при клонировании. Модель опирается исключительно на акустику голоса без привязки к транскрипту. Позволяет озвучивать вручную добавленные фразы и защищает от сбоев распознавания.")}
+            </div>
           </div>
         </div>
 

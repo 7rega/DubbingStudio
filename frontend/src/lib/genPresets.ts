@@ -20,7 +20,7 @@ export interface GenPresetSubs {
 }
 
 export interface GenPresetTts {
-  engine?: string; // "higgs" | "voxcpm2"
+  engine?: string; // "higgs" | "voxcpm2" | "drama3"
   higgs_temp?: number | null;
   higgs_seed?: number | null;
   higgs_max_tokens?: string;
@@ -28,6 +28,10 @@ export interface GenPresetTts {
   vox_steps?: number;
   vox_cfg?: number;
   vox_seed?: number | null;
+  drama_prompt?: string;
+  drama_temp?: number | null;
+  drama_seed?: number | null;
+  drama_audio_only?: boolean;
 }
 
 export interface GenPresetAudio {
@@ -164,6 +168,10 @@ export function extractPresetFromProject(
       vox_steps: p.audio?.vox_steps ?? 20,
       vox_cfg: p.audio?.vox_cfg ?? 1.6,
       vox_seed: p.audio?.vox_seed ?? null,
+      drama_prompt: p.audio?.drama_prompt ?? "",
+      drama_temp: p.audio?.drama_temp ?? null,
+      drama_seed: p.audio?.drama_seed ?? null,
+      drama_audio_only: p.audio?.drama_audio_only ?? false,
     },
     audio: {
       voice_gain_db: p.audio?.voice_gain_db ?? 0,
@@ -212,6 +220,10 @@ export function applyPresetToProject(p: Project, preset: GenPreset): Project {
     vox_steps: preset.tts.vox_steps !== undefined ? preset.tts.vox_steps : p.audio.vox_steps,
     vox_cfg: preset.tts.vox_cfg !== undefined ? preset.tts.vox_cfg : p.audio.vox_cfg,
     vox_seed: preset.tts.vox_seed !== undefined ? preset.tts.vox_seed : p.audio.vox_seed,
+    drama_prompt: preset.tts.drama_prompt !== undefined ? preset.tts.drama_prompt : p.audio.drama_prompt,
+    drama_temp: preset.tts.drama_temp !== undefined ? preset.tts.drama_temp : p.audio.drama_temp,
+    drama_seed: preset.tts.drama_seed !== undefined ? preset.tts.drama_seed : p.audio.drama_seed,
+    drama_audio_only: preset.tts.drama_audio_only !== undefined ? preset.tts.drama_audio_only : p.audio.drama_audio_only,
     voice_gain_db: preset.audio.voice_gain_db !== undefined ? preset.audio.voice_gain_db : p.audio.voice_gain_db,
     music_gain_db: preset.audio.music_gain_db !== undefined ? preset.audio.music_gain_db : p.audio.music_gain_db,
     gain_db: preset.audio.gain_db !== undefined ? preset.audio.gain_db : p.audio.gain_db,
@@ -259,6 +271,10 @@ export function isProjectMatchingPreset(p: Project, preset: GenPreset): boolean 
   if (preset.tts.vox_steps !== undefined && (preset.tts.vox_steps ?? 20) !== (p.audio?.vox_steps ?? 20)) return false;
   if (preset.tts.vox_cfg !== undefined && Math.abs((preset.tts.vox_cfg ?? 1.6) - (p.audio?.vox_cfg ?? 1.6)) > 0.01) return false;
   if (preset.tts.vox_seed !== undefined && (preset.tts.vox_seed ?? null) !== (p.audio?.vox_seed ?? null)) return false;
+  if (preset.tts.drama_prompt !== undefined && (preset.tts.drama_prompt || "") !== (p.audio?.drama_prompt || "")) return false;
+  if (preset.tts.drama_temp !== undefined && (preset.tts.drama_temp ?? null) !== (p.audio?.drama_temp ?? null)) return false;
+  if (preset.tts.drama_seed !== undefined && (preset.tts.drama_seed ?? null) !== (p.audio?.drama_seed ?? null)) return false;
+  if (preset.tts.drama_audio_only !== undefined && (preset.tts.drama_audio_only ?? false) !== (p.audio?.drama_audio_only ?? false)) return false;
 
   // Проверка аудиомикса
   if (preset.audio.voice_gain_db !== undefined && Math.abs((preset.audio.voice_gain_db ?? 0) - (p.audio?.voice_gain_db ?? 0)) > 0.1) return false;
@@ -287,6 +303,10 @@ export async function applyPresetToBackend(
       vox_steps: preset.tts.vox_steps,
       vox_cfg: preset.tts.vox_cfg,
       vox_seed: preset.tts.vox_seed,
+      drama_prompt: preset.tts.drama_prompt,
+      drama_temp: preset.tts.drama_temp,
+      drama_seed: preset.tts.drama_seed,
+      drama_audio_only: preset.tts.drama_audio_only,
       gen_preset: preset.name,
     });
 

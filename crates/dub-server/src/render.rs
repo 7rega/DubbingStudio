@@ -391,11 +391,12 @@ impl TtsEngine {
                 .voice_clone(text, ref_wav, ref_text, opts)
                 .map_err(|err| err.to_string()),
             TtsEngine::Drama(e) => {
-                let ref_text = ref_text
-                    .filter(|t| !t.trim().is_empty())
-                    .ok_or_else(|| "Drama 3 требует текст референса для клонирования (ref_text)".to_string())?;
+                let effective_ref_text = ref_text
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or(".");
                 let audio = e
-                    .speak(text, Path::new(ref_wav), ref_text, &drama_params(opts))
+                    .speak(text, Path::new(ref_wav), effective_ref_text, &drama_params(opts))
                     .map_err(|err| match err {
                         drama::DramaError::Cancelled => crate::setup::CANCELLED.to_string(),
                         other => other.to_string(),
@@ -419,8 +420,19 @@ fn drama_params(opts: &str) -> drama::Params {
     let seed = v.get("seed").and_then(|s| s.as_u64()).unwrap_or_else(|| uuid::Uuid::new_v4().as_u64_pair().0);
     let tokens = v.get("max_new_tokens").and_then(|t| t.as_u64()).unwrap_or(2048) as f64;
     let max_new = ((tokens * drama::FRAMES_PER_SECOND * 2.0 / (75.0 * 1.5)).ceil() as u32).clamp(64, 2048);
-    let temperature = v.get("temperature").and_then(|t| t.as_f64()).map_or(1.0, |t| (0.7 + t).min(1.0)) as f32;
+    let temperature = v.get("temperature").and_then(|t| t.as_f64()).map_or(1.0, |t| t.clamp(0.10, 1.50)) as f32;
     drama::Params { temperature, seed, max_new, ..Default::default() }
+}
+
+/// Вычисляет эффективный текст референса для Drama 3.
+/// Если включен режим Audio-Only (`audio_only = true`), принудительно возвращается акустический маркер `"."`.
+/// Если выключен (`audio_only = false`), возвращается очищенный оригинальный текст, либо fallback `"."` если он пуст.
+pub fn drama_effective_ref_text<'a>(audio_only: bool, raw_ref_text: Option<&'a str>) -> &'a str {
+    if audio_only {
+        "."
+    } else {
+        raw_ref_text.map(str::trim).filter(|t| !t.is_empty()).unwrap_or(".")
+    }
 }
 
 const DRAMA_MAX_LEN: u32 = 2048;
@@ -654,10 +666,16 @@ pub fn build_tts_input(
             // Для Fish Audio Drama 3 сохраняем интонационные теги ([laughs], <whisper> и др.),
             // убирая управляющие теги Higgs (<|...|>)
             let s = raw_tgt.trim();
-            if s.contains("<|") {
+            let clean_text = if s.contains("<|") {
                 clean_speech_text(s)
             } else {
                 s.to_string()
+            };
+            let prompt = global_prompt.trim();
+            if prompt.is_empty() {
+                clean_text
+            } else {
+                format!("{prompt} {clean_text}")
             }
         }
         _ => {
@@ -668,8 +686,10 @@ pub fn build_tts_input(
 }
 
 /// Определяет активный промпт для выбранного TTS-движка с фоллбэком на общий voice_prompt.
-pub fn active_tts_prompt<'a>(_tts_engine: &str, audio: &'a dub_core::Audio) -> &'a str {
-    if !audio.vox_prompt.trim().is_empty() {
+pub fn active_tts_prompt<'a>(tts_engine: &str, audio: &'a dub_core::Audio) -> &'a str {
+    if tts_engine == "drama3" {
+        &audio.drama_prompt
+    } else if !audio.vox_prompt.trim().is_empty() {
         &audio.vox_prompt
     } else {
         &audio.voice_prompt
@@ -709,6 +729,22 @@ pub fn build_speech_options(
         } else {
             None
         };
+        SpeechOptions {
+            temperature: Some(effective_temp),
+            seed,
+            num_inference_steps: None,
+            guidance_scale: None,
+            max_tokens,
+        }
+    } else if tts_engine == "drama3" {
+        let base_temp = custom_temp.or(audio.drama_temp).unwrap_or(1.00);
+        let effective_temp = if seed_offset == 0 {
+            (base_temp.clamp(0.10, 1.50) * 100.0).round() / 100.0
+        } else {
+            let raw = (base_temp * (1.0 + 0.05 * (seed_offset as f64).min(4.0))).clamp(0.10, 1.50);
+            (raw * 100.0).round() / 100.0
+        };
+        let seed = audio.drama_seed.map(|s| s.wrapping_add(seed_offset));
         SpeechOptions {
             temperature: Some(effective_temp),
             seed,
@@ -2020,22 +2056,33 @@ fn build_dub(
                     (&ref_wav, ref_text.as_deref())
                 };
                 let seed = spk_seed_base + attempt as u64;
-                let opts = match attempt {
-                    0 | 3 => format!(
-                        "{{\"temperature\":{base_temp:.2},\"top_p\":0.95,\"top_k\":50{tok_part},\"ras_win_len\":7{base_ras_rep},\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
-                    ),
-                    1 => format!(
-                        "{{\"temperature\":{:.2},\"top_p\":0.95,\"top_k\":50{tok_part},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
-                        (base_temp * 0.85).clamp(0.08, 0.35)
-                    ),
-                    2 => format!(
-                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50{tok_part},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
-                        (base_temp * 0.65).clamp(0.08, 0.25)
-                    ),
-                    _ => format!(
-                        "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50{tok_part},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
-                        (base_temp * 0.75).clamp(0.08, 0.30)
-                    ),
+                let opts = if paths.tts_engine == "drama3" {
+                    let d_temp = custom_temp.or(proj.audio.drama_temp).unwrap_or(1.00);
+                    let eff_d_temp = if attempt == 0 {
+                        d_temp.clamp(0.10, 1.50)
+                    } else {
+                        (d_temp * (1.0 + 0.05 * (attempt as f64).min(4.0))).clamp(0.10, 1.50)
+                    };
+                    let d_seed = proj.audio.drama_seed.map(|s| s.wrapping_add(attempt as u64)).unwrap_or(seed);
+                    format!("{{\"temperature\":{eff_d_temp:.2}{tok_part},\"seed\":{d_seed}}}")
+                } else {
+                    match attempt {
+                        0 | 3 => format!(
+                            "{{\"temperature\":{base_temp:.2},\"top_p\":0.95,\"top_k\":50{tok_part},\"ras_win_len\":7{base_ras_rep},\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
+                        ),
+                        1 => format!(
+                            "{{\"temperature\":{:.2},\"top_p\":0.95,\"top_k\":50{tok_part},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                            (base_temp * 0.85).clamp(0.08, 0.35)
+                        ),
+                        2 => format!(
+                            "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50{tok_part},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                            (base_temp * 0.65).clamp(0.08, 0.25)
+                        ),
+                        _ => format!(
+                            "{{\"temperature\":{:.2},\"top_p\":0.90,\"top_k\":50{tok_part},\"ras_win_len\":7,\"ras_win_max_num_repeat\":1,\"return_audio_in_tokens\":true,\"seed\":{seed}}}",
+                            (base_temp * 0.75).clamp(0.08, 0.30)
+                        ),
+                    }
                 };
                 attempt += 1;
                 // Таймаут ~8× длины слота (флор min_timeout_secs): нормальный синтез быстрее реалтайма, зависание —
@@ -2086,25 +2133,21 @@ fn build_dub(
                         }
                     }
                 } else {
-                    let drama_no_text = paths.tts_engine == "drama3" && rt.is_none_or(|t| t.trim().is_empty());
-                    if drama_no_text {
-                        media::trim(&vocals, &raw, s.start, s.end, 24_000)?;
-                        kept_original = true;
-                        emit(progress, "tts", &format!(
-                            "⚠ фраза #{}: для Drama 3 нужен текст оригинальной речи (ref_text) — оставлен оригинал",
-                            fi + 1
-                        ));
-                        break (Vec::new(), 24_000);
-                    }
                     let eng = engine.as_ref().expect("локальный TTS (не облако)");
                     let drama_text;
                     let synth_input = if paths.tts_engine == "drama3" {
-                        drama_text = build_tts_input("drama3", tgt, "");
+                        let prompt = active_tts_prompt(&paths.tts_engine, &proj.audio);
+                        drama_text = build_tts_input("drama3", tgt, prompt);
                         &drama_text
                     } else {
                         tgt
                     };
-                    match voice_clone_guarded(eng, synth_input, &rw.to_string_lossy(), rt, &opts, vc_to) {
+                    let synth_rt = if paths.tts_engine == "drama3" {
+                        Some(drama_effective_ref_text(proj.audio.drama_audio_only, rt))
+                    } else {
+                        rt
+                    };
+                    match voice_clone_guarded(eng, synth_input, &rw.to_string_lossy(), synth_rt, &opts, vc_to) {
                         Ok(v) => v,
                         Err(e) if e.starts_with(ENGINE_STUCK) => {
                             emit(progress, "tts", &format!(
@@ -2269,9 +2312,16 @@ fn build_dub(
                     } else {
                         if take_i == 1 { 0.25 } else { 0.35 }
                     };
-                    let opts = format!(
-                        "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50{tok_part_mt},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
-                    );
+                    let opts = if paths.tts_engine == "drama3" {
+                        let d_temp = custom_temp.or(proj.audio.drama_temp).unwrap_or(1.00);
+                        let eff_temp = if take_i == 1 { (d_temp * 0.95).clamp(0.10, 1.50) } else { (d_temp * 1.05).clamp(0.10, 1.50) };
+                        let d_seed = proj.audio.drama_seed.map(|s| s.wrapping_add(take_i * 100 + 77)).unwrap_or(seed);
+                        format!("{{\"temperature\":{eff_temp:.2}{tok_part_mt},\"seed\":{d_seed}}}")
+                    } else {
+                        format!(
+                            "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50{tok_part_mt},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
+                        )
+                    };
                     let rt_mt = ref_text_mt.as_deref();
                     let vc_to = Duration::from_secs((((s.end - s.start) * 8.0).ceil() as u64).max(min_timeout_secs));
                     let (samples, sr) = if let Some(ref vox_arc) = vox_server {
@@ -2296,7 +2346,20 @@ fn build_dub(
                         }
                     } else {
                         let eng = engine.as_ref().unwrap();
-                        match voice_clone_guarded(eng, tgt, &ref_wav_mt.to_string_lossy(), rt_mt, &opts, vc_to) {
+                        let drama_text;
+                        let synth_input = if paths.tts_engine == "drama3" {
+                            let prompt = active_tts_prompt(&paths.tts_engine, &proj.audio);
+                            drama_text = build_tts_input("drama3", tgt, prompt);
+                            &drama_text
+                        } else {
+                            tgt
+                        };
+                        let synth_rt = if paths.tts_engine == "drama3" {
+                            Some(drama_effective_ref_text(proj.audio.drama_audio_only, rt_mt))
+                        } else {
+                            rt_mt
+                        };
+                        match voice_clone_guarded(eng, synth_input, &ref_wav_mt.to_string_lossy(), synth_rt, &opts, vc_to) {
                             Ok(v) => v,
                             Err(e) if e.starts_with(ENGINE_STUCK) => {
                                 emit(progress, "tts", &format!(
@@ -2503,7 +2566,21 @@ fn build_dub(
                             }
                         }
                     } else {
-                        match voice_clone_guarded(engine.as_ref().expect("локальный Higgs (QC не для облака)"), tgtq, &rw.to_string_lossy(), rt, &opts, vc_to) {
+                        let eng = engine.as_ref().expect("локальный TTS (QC не для облака)");
+                        let drama_text;
+                        let synth_input = if paths.tts_engine == "drama3" {
+                            let prompt = active_tts_prompt(&paths.tts_engine, &proj.audio);
+                            drama_text = build_tts_input("drama3", tgtq, prompt);
+                            &drama_text
+                        } else {
+                            tgtq
+                        };
+                        let synth_rt = if paths.tts_engine == "drama3" {
+                            Some(drama_effective_ref_text(proj.audio.drama_audio_only, rt))
+                        } else {
+                            rt
+                        };
+                        match voice_clone_guarded(eng, synth_input, &rw.to_string_lossy(), synth_rt, &opts, vc_to) {
                             Ok(v) => v,
                             Err(e) if e.starts_with(ENGINE_STUCK) => {
                                 emit(progress, "tts", &format!(
@@ -4223,7 +4300,7 @@ mod tests {
             "Обычный текст."
         );
 
-        // Drama 3: сохраняются интонационные теги ([laughs], <whisper>)
+        // Drama 3: сохраняются интонационные теги ([laughs], <whisper>) и подставляется глобальный промпт
         assert_eq!(
             build_tts_input("drama3", "[laughs] Привет мир!", ""),
             "[laughs] Привет мир!"
@@ -4232,13 +4309,17 @@ mod tests {
             build_tts_input("drama3", "<whisper>тихий шепот</whisper>", ""),
             "<whisper>тихий шепот</whisper>"
         );
+        assert_eq!(
+            build_tts_input("drama3", "Привет!", "[whisper]"),
+            "[whisper] Привет!"
+        );
     }
 
     #[test]
     fn test_drama_params() {
-        let first = r#"{"temperature":0.30,"max_new_tokens":365}"#;
+        let first = r#"{"temperature":1.00,"max_new_tokens":365}"#;
         assert_ne!(drama_params(first).seed, drama_params(first).seed, "regenerating a line must give a new take");
-        let seeded = r#"{"temperature":0.10,"max_new_tokens":365,"seed":2002}"#;
+        let seeded = r#"{"temperature":0.80,"max_new_tokens":365,"seed":2002}"#;
         assert_eq!(drama_params(seeded).seed, 2002);
         assert_eq!(drama_params(seeded).max_new, 140);
         assert!((drama_params(seeded).temperature - 0.8).abs() < 1e-6);
@@ -4256,6 +4337,8 @@ mod tests {
         // 2. Специфичные промпты приоритетнее
         audio.vox_prompt = "calm".into();
         assert_eq!(active_tts_prompt("voxcpm2", &audio), "calm");
+        audio.drama_prompt = "[whisper]".into();
+        assert_eq!(active_tts_prompt("drama3", &audio), "[whisper]");
 
         // 4. build_speech_options для VoxCPM2
         audio.vox_steps = 25;
@@ -4287,5 +4370,39 @@ mod tests {
         let opts_higgs_custom = build_speech_options("higgs", &audio_higgs, None, 2, None);
         assert_eq!(opts_higgs_custom.seed, Some(7002));
         assert!((opts_higgs_custom.temperature.unwrap() - 0.77).abs() < 1e-4);
+
+        // 6. build_speech_options для Drama 3
+        let mut audio_drama = dub_core::Audio::default();
+        let opts_drama = build_speech_options("drama3", &audio_drama, None, 0, None);
+        assert_eq!(opts_drama.temperature, Some(1.00));
+        assert_eq!(opts_drama.seed, None);
+
+        audio_drama.drama_temp = Some(1.20);
+        audio_drama.drama_seed = Some(5000);
+        let opts_drama_base = build_speech_options("drama3", &audio_drama, None, 0, None);
+        assert_eq!(opts_drama_base.seed, Some(5000));
+        assert!((opts_drama_base.temperature.unwrap() - 1.20).abs() < 1e-4);
+
+        // При ретрае (seed_offset = 3) температура масштабируется: 1.20 * (1.0 + 0.05 * 3) = 1.38
+        let opts_drama_retry = build_speech_options("drama3", &audio_drama, None, 3, None);
+        assert_eq!(opts_drama_retry.seed, Some(5003));
+        assert!((opts_drama_retry.temperature.unwrap() - 1.38).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_drama_effective_ref_text() {
+        // audio_only = true: всегда маркер ".", даже если передан непустой текст
+        assert_eq!(drama_effective_ref_text(true, Some("Привет, мир!")), ".");
+        assert_eq!(drama_effective_ref_text(true, None), ".");
+        assert_eq!(drama_effective_ref_text(true, Some("   ")), ".");
+
+        // audio_only = false: оригинальный текст сохраняется при наличии
+        assert_eq!(drama_effective_ref_text(false, Some("Привет, мир!")), "Привет, мир!");
+        assert_eq!(drama_effective_ref_text(false, Some("   Hello   ")), "Hello");
+
+        // audio_only = false: fallback на маркер ".", если текст пустой или None
+        assert_eq!(drama_effective_ref_text(false, None), ".");
+        assert_eq!(drama_effective_ref_text(false, Some("")), ".");
+        assert_eq!(drama_effective_ref_text(false, Some("   \t\n  ")), ".");
     }
 }

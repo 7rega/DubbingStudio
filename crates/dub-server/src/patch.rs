@@ -403,6 +403,46 @@ fn op_tts_settings(p: &mut Project, edit: &Value) -> PatchResult {
         }
     }
 
+    // Drama 3
+    if let Some(prompt) = edit.get("drama_prompt").and_then(|x| x.as_str()) {
+        let flat: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+        let new_val: String = flat.chars().take(500).collect();
+        if p.audio.drama_prompt != new_val {
+            p.audio.drama_prompt = new_val;
+            changed = true;
+        }
+    }
+    if let Some(temp_val) = edit.get("drama_temp") {
+        let new_temp = if temp_val.is_null() {
+            None
+        } else if let Some(t) = temp_val.as_f64() {
+            Some(t.clamp(0.10, 1.50))
+        } else {
+            None
+        };
+        if p.audio.drama_temp != new_temp {
+            p.audio.drama_temp = new_temp;
+            changed = true;
+        }
+    }
+    if let Some(seed_val) = edit.get("drama_seed") {
+        let new_seed = if seed_val.is_null() {
+            None
+        } else {
+            seed_val.as_u64()
+        };
+        if p.audio.drama_seed != new_seed {
+            p.audio.drama_seed = new_seed;
+            changed = true;
+        }
+    }
+    if let Some(ao) = edit.get("drama_audio_only").and_then(|x| x.as_bool()) {
+        if p.audio.drama_audio_only != ao {
+            p.audio.drama_audio_only = ao;
+            changed = true;
+        }
+    }
+
     if let Some(preset_val) = edit.get("gen_preset") {
         let new_preset = if preset_val.is_null() {
             None

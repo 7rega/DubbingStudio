@@ -121,6 +121,18 @@ pub struct Audio {
     /// Фиксированный сид генерации Higgs Audio v3 (None = случайный сид).
     #[serde(default)]
     pub higgs_seed: Option<u64>,
+    /// Глобальный текстовый промпт стиля/эмоций для Fish Audio Drama 3 (например, "[whisper]", "[laughs]").
+    #[serde(default)]
+    pub drama_prompt: String,
+    /// Индивидуальная температура сэмплинга Drama 3 (дефолт None -> в рантайме 1.00, диапазон 0.10 - 1.50).
+    #[serde(default)]
+    pub drama_temp: Option<f64>,
+    /// Фиксированный сид генерации Drama 3 (None = случайный сид).
+    #[serde(default)]
+    pub drama_seed: Option<u64>,
+    /// Игнорировать оригинальный текст референса для Drama 3 (Audio-Only режим, принудительный маркер ".").
+    #[serde(default)]
+    pub drama_audio_only: bool,
     /// Флаг наличия несведённых изменений (перегенерированных фраз, не запечённых в мастер-трек dub_audio.m4a).
     #[serde(default)]
     pub mix_dirty: bool,
@@ -183,6 +195,10 @@ impl Default for Audio {
             vox_seed: None,
             higgs_temp: None,
             higgs_seed: None,
+            drama_prompt: String::new(),
+            drama_temp: None,
+            drama_seed: None,
+            drama_audio_only: false,
             mix_dirty: false,
             gen_preset: None,
             extra: Extra::new(),
