@@ -124,17 +124,26 @@ async fn set_window_title(Json(body): Json<Value>) -> Json<Value> {
     Json(json!({ "ok": true }))
 }
 
-/// Принудительно выгрузить TTS (Higgs/Drama) из VRAM/RAM (для взаимного вытеснения перед стартом LLM/Vision).
+/// Принудительно выгрузить TTS (Higgs/Drama/VoxCPM2) из VRAM/RAM (для взаимного вытеснения перед стартом LLM/Vision).
 pub fn evict_tts_cache() {
     if let Some(cache) = GLOBAL_TTS_CACHE.get() {
         if let Ok(mut lock) = cache.lock() {
             if lock.is_some() {
                 eprintln!("[memory] Выгружаем TTS из VRAM/RAM для освобождения памяти");
                 *lock = None;
-                std::thread::sleep(std::time::Duration::from_millis(200));
             }
         }
     }
+    let global = global_audiocpp_server();
+    if let Ok(mut guard) = global.lock() {
+        if let Some(srv_arc) = guard.take() {
+            if let Ok(mut srv) = srv_arc.lock() {
+                eprintln!("[memory] Останавливаем audiocpp_server для освобождения VRAM");
+                srv.stop();
+            }
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(150));
 }
 
 /// E2E-верификация caption-композита БЕЗ ASR/Gemma/TTS: берём УЖЕ проанализированный project.json

@@ -1318,15 +1318,19 @@ fn build_dub(
     } else if cloud_tts_on {
         emit(progress, "tts", "TTS через облако (OpenRouter) — локальные движки не загружаем");
         None
-    } else if is_audiocpp_tts {
-        let is_higgs = paths.tts_engine == "higgs";
-        let engine_name = if is_higgs {
-            "Higgs Audio v3"
-        } else {
-            "VoxCPM2"
-        };
-        emit(progress, "tts", &format!("{engine_name} TTS: инициализация аудио-сервера audio.cpp..."));
-        *paths.tts_cache.lock().unwrap() = None;
+    } else {
+        // Гарантированно глушим зависшие процессы локальной LLM перед стартом локального TTS
+        dub_llm::LlamaServer::kill_zombie_processes(&std::path::PathBuf::from("llama-server.exe"));
+
+        if is_audiocpp_tts {
+            let is_higgs = paths.tts_engine == "higgs";
+            let engine_name = if is_higgs {
+                "Higgs Audio v3"
+            } else {
+                "VoxCPM2"
+            };
+            emit(progress, "tts", &format!("{engine_name} TTS: инициализация аудио-сервера audio.cpp..."));
+            *paths.tts_cache.lock().unwrap() = None;
 
         let (model_path, model_family, model_id) = if is_higgs {
             let p = crate::models::resolve_higgs_gguf_path(&paths.higgs_model_root, &paths.higgs_quant)
@@ -1400,6 +1404,15 @@ fn build_dub(
         vox_server = Some(srv_handle);
         None
     } else if paths.tts_engine == "drama3" {
+        // При переходе на Drama 3 останавливаем активный audiocpp_server
+        let global = crate::global_audiocpp_server();
+        if let Ok(mut guard) = global.lock() {
+            if let Some(srv_arc) = guard.take() {
+                if let Ok(mut srv) = srv_arc.lock() {
+                    srv.stop();
+                }
+            }
+        }
         let key = EngineKey {
             dll: crate::models::drama_dll(&paths.models_root),
             model_root: paths.models_root.join("drama3"),
@@ -1428,6 +1441,15 @@ fn build_dub(
             Some(e)
         }
     } else {
+        // При переходе на Higgs DLL останавливаем активный audiocpp_server
+        let global = crate::global_audiocpp_server();
+        if let Ok(mut guard) = global.lock() {
+            if let Some(srv_arc) = guard.take() {
+                if let Ok(mut srv) = srv_arc.lock() {
+                    srv.stop();
+                }
+            }
+        }
         if paths.tts_engine == "higgs" && paths.higgs_execution == "server" && (paths.higgs_quant == "q6_k" || paths.higgs_quant == "q4_k_m") {
             emit(progress, "tts", &format!("Higgs {}: кванты Q4/Q6 поддерживаются только через DLL (переключение на audiocpp_engine.dll)...", paths.higgs_quant));
         }
@@ -1476,7 +1498,8 @@ fn build_dub(
             *cache = Some((key, e_arc.clone()));
             Some(e_arc)
         }
-    };
+    }
+};
 
     // Автокастинг облачных голосов по полу спикера: мужскому спикеру — мужской голос, женскому — женский,
     // разным спикерам — разные. Пол — F0-замер (как в кастинге), голоса модели — динамически из API, пол
