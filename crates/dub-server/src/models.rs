@@ -204,6 +204,7 @@ pub fn is_selection_key(key: &str) -> bool {
             | "auto_cast_on"
             | "vision_on"
             | "pause_squeeze_on"
+            | "rubberband_stretch_on"
             | "vo_lead_in"
             | "dub_reverb_match"
             | "emo_ref_clean"

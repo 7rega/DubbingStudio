@@ -588,6 +588,7 @@ async fn capabilities(State(st): State<AppState>) -> Json<Value> {
             "tts": o.tts_model,
         },
         "ffmpeg": ffmpeg,
+        "rubberband_available": media::check_rubberband_support(),
         "languages": langs,
         "voice_modes": ["clone","autocast","auto","voice"],
         // Выбор ASR: движок (parakeet|whisper), модель Whisper, квант Whisper (compute_type).

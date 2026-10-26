@@ -119,7 +119,7 @@ export const llmProviderOf = (sel: Selection | undefined, stage: "llm" | "vision
   return v === "server" || v === "openrouter" ? v : "local";
 };
 export type Capabilities = {
-  device: string; tts_quant: string; asr_model: string; ffmpeg: boolean;
+  device: string; tts_quant: string; asr_model: string; ffmpeg: boolean; rubberband_available?: boolean;
   languages: string[]; voice_modes: string[]; models?: ModelStack;
   // Выбор ASR-движка (active.json): движок parakeet|whisper + модель/квант Whisper.
   selection?: Selection;

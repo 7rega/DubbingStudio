@@ -1559,6 +1559,22 @@ fn build_dub(
         .and_then(|v| v.as_str())
         .map(|v| v != "0")
         .unwrap_or(true);
+    // Rubberband Time-Stretch: студийный алгоритм подгонки темпа речи (по умолчанию выкл -> стабильный atempo).
+    let rubberband_stretch_on = crate::models::load_selection(&paths.models_root)
+        .get("rubberband_stretch_on")
+        .and_then(|v| v.as_str())
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if rubberband_stretch_on {
+        if !media::check_rubberband_support() {
+            return Err(
+                "Включен «Студийный time-stretch (Rubberband)», но используемый FFmpeg собран без librubberband. \
+                Отключите этот тумблер в настройках («Интонация и темп речи») или обновите сборку FFmpeg."
+                    .into()
+            );
+        }
+        emit(progress, "mix", "подгонка темпа: активен студийный Rubberband (smooth speech mode)");
+    }
     // Speech Rate: динамическая адаптация темпа генерации нейросети под длину текста/слота.
     let speech_rate_on = crate::models::load_selection(&paths.models_root)
         .get("speech_rate_on")
@@ -2345,7 +2361,7 @@ fn build_dub(
                 ));
             }
         }
-        let (fit, d) = fit_to_slot(&raw, target_slot, &fitp, eff_cap, pause_squeeze_on)?;
+        let (fit, d) = fit_to_slot(&raw, target_slot, &fitp, eff_cap, pause_squeeze_on, rubberband_stretch_on)?;
         cursors[lane] = at + d;
         placed.push((at, fit, d, lane, seg_volume));
         // В QC — только реально синтезированное в этом прогоне (кэш уже проверялся в своём прогоне).
@@ -2489,7 +2505,7 @@ fn build_dub(
                         // пере-fit в тот же слот и подмена в placed (позиция at не меняется, длит. обновляем).
                         // Кап = потолок дрейфа (2.0): основной проход мог дрейф-капнуть этот сегмент выше
                         // seg_cap; пересинтез с seg_cap дал бы более ДЛИННЫЙ дубль и порвал синк (#116 [6]).
-                        if let Ok((nf, nd)) = fit_to_slot(raw, *room, fitp, 2.0, pause_squeeze_on) {
+                        if let Ok((nf, nd)) = fit_to_slot(raw, *room, fitp, 2.0, pause_squeeze_on, rubberband_stretch_on) {
                             placed[*pidx].1 = nf;
                             placed[*pidx].2 = nd;
                             fixed = true;
@@ -3168,9 +3184,17 @@ fn build_speech_blocks(spans: &[(f64, f64)]) -> Vec<media::SpeechBlock> {
 /// Ускорить или замедлить дубль под target_dur. factor>1 ускоряет (укорачивает); <1 замедляет
 /// (растягивает). Замедление ограничено MIN_SLOW=0.85 (~15% растяжения), чтобы голос не тянулся
 /// неестественно. `cap` — потолок ускорения (считается у вызова: seg_cap + дрейф-эскалация).
-/// `pause_squeeze` — умное сжатие пауз перед применением atempo.
+/// `pause_squeeze` — умное сжатие пауз перед применением time-stretch.
+/// `use_rubberband` — выбор движка (true: librubberband со сглаженными транзиентами, false: каскадный atempo).
 /// Возвращает путь уложенного файла И его фактическую длительность.
-fn fit_to_slot(seg_wav: &Path, target_dur: f64, work_path: &Path, cap: f64, pause_squeeze: bool) -> Result<(PathBuf, f64), String> {
+fn fit_to_slot(
+    seg_wav: &Path,
+    target_dur: f64,
+    work_path: &Path,
+    cap: f64,
+    pause_squeeze: bool,
+    use_rubberband: bool,
+) -> Result<(PathBuf, f64), String> {
     let actual = media::duration(seg_wav)?;
     if target_dur <= 0.05 || actual <= 0.05 {
         if std::fs::copy(seg_wav, work_path).is_ok() {
@@ -3207,7 +3231,7 @@ fn fit_to_slot(seg_wav: &Path, target_dur: f64, work_path: &Path, cap: f64, paus
         }
         return Ok((seg_wav.to_path_buf(), actual));
     }
-    media::time_stretch(&cur_wav, work_path, factor)?;
+    media::time_stretch(&cur_wav, work_path, factor, use_rubberband)?;
     if cur_wav.as_path() != seg_wav {
         let _ = std::fs::remove_file(&cur_wav);
     }

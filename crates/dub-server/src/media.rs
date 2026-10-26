@@ -261,11 +261,30 @@ fn atempo_chain(factor: f64) -> String {
     parts.join(",")
 }
 
+/// Проверить, поддерживает ли используемый FFmpeg аудиофильтр librubberband.
+pub fn check_rubberband_support() -> bool {
+    let program = dub_core::proc::ffmpeg();
+    let out = cmd_silent(&program)
+        .args(["-h", "filter=rubberband"])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => true,
+        _ => {
+            cmd_silent(FFMPEG)
+                .args(["-h", "filter=rubberband"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+    }
+}
+
 /// factor>1 ускоряет (укорачивает); <1 замедляет.
-/// Первоочередно использует профессиональный алгоритм librubberband с удержанием формант человеческого голоса
-/// (formant=preserved) и защитой атаки согласных звуков (transients=crisp).
-/// При отсутствии librubberband в используемой сборке FFmpeg выполняет безопасный откат на каскадный atempo.
-pub fn time_stretch(src: &Path, dst: &Path, factor: f64) -> Result<(), String> {
+/// При use_rubberband=true использует алгоритм librubberband с мягкими речевыми транзиентами
+/// (transients=smooth:detector=soft:phase=laminar) без вокодерного формантного фильтра.
+/// При use_rubberband=false использует каскадный atempo во временной области (WSOLA).
+/// При ошибке librubberband тихий откат не производится — возвращается понятная ошибка с подсказкой.
+pub fn time_stretch(src: &Path, dst: &Path, factor: f64, use_rubberband: bool) -> Result<(), String> {
     if !factor.is_finite() || factor <= 0.0 {
         return Err(format!("invalid time_stretch factor: {factor}"));
     }
@@ -276,35 +295,47 @@ pub fn time_stretch(src: &Path, dst: &Path, factor: f64) -> Result<(), String> {
         return Ok(());
     }
 
-    // 1. Приоритетный запуск: студийный алгоритм Rubberband (R3 + Formant Preservation)
-    let rb_arg = format!(
-        "rubberband=tempo={:.6}:formant=preserved:transients=crisp:pitchq=quality",
-        factor
-    );
-    let rb_res = run_ff(&[
-        OsStr::new("-y"),
-        OsStr::new("-i"),
-        src.as_os_str(),
-        OsStr::new("-filter:a"),
-        OsStr::new(&rb_arg),
-        dst.as_os_str(),
-    ]);
+    if use_rubberband {
+        // Оптимальные параметры Rubberband для сольной речи:
+        // transients=smooth — сглаживание фазовых переходов на согласных (без кликов и треска);
+        // detector=soft — мягкое детектирование тональных компонент речи;
+        // phase=laminar — сохранение межполосной когерентности гармоник голоса (устраняет металлический фазовый вокодер).
+        let rb_arg = format!(
+            "rubberband=tempo={:.6}:transients=smooth:detector=soft:phase=laminar",
+            factor
+        );
+        let rb_res = run_ff(&[
+            OsStr::new("-y"),
+            OsStr::new("-i"),
+            src.as_os_str(),
+            OsStr::new("-filter:a"),
+            OsStr::new(&rb_arg),
+            dst.as_os_str(),
+        ]);
 
-    if rb_res.is_ok() && dst.is_file() {
-        return Ok(());
+        match rb_res {
+            Ok(_) if dst.is_file() => Ok(()),
+            Ok(_) => Err("FFmpeg завершился успешно, но выходной файл после rubberband не был создан".into()),
+            Err(err) => {
+                let _ = std::fs::remove_file(dst);
+                Err(format!(
+                    "Ошибка time-stretch через librubberband: {err}.\n\
+                    Убедитесь, что установленный FFmpeg собран с поддержкой librubberband, \
+                    или отключите тумблер «Студийный time-stretch (Rubberband)» в настройках («Интонация и темп речи»)."
+                ))
+            }
+        }
+    } else {
+        let chain = atempo_chain(factor);
+        run_ff(&[
+            OsStr::new("-y"),
+            OsStr::new("-i"),
+            src.as_os_str(),
+            OsStr::new("-filter:a"),
+            OsStr::new(&chain),
+            dst.as_os_str(),
+        ])
     }
-
-    // 2. Безопасный откат (Fallback): цепочка atempo для совместимости
-    let _ = std::fs::remove_file(dst);
-    let chain = atempo_chain(factor);
-    run_ff(&[
-        OsStr::new("-y"),
-        OsStr::new("-i"),
-        src.as_os_str(),
-        OsStr::new("-filter:a"),
-        OsStr::new(&chain),
-        dst.as_os_str(),
-    ])
 }
 
 /// Найти ближайший переход через ноль (Zero-Crossing) вокруг `center` в пределах `max_search` сэмплов.
@@ -1742,7 +1773,7 @@ mod pause_squeeze_tests {
     }
 
     #[test]
-    fn test_time_stretch_rubberband_and_fallback() {
+    fn test_time_stretch_atempo_and_rubberband() {
         let spec = hound::WavSpec {
             channels: 1,
             sample_rate: 16_000,
@@ -1750,8 +1781,9 @@ mod pause_squeeze_tests {
             sample_format: hound::SampleFormat::Int,
         };
         let src = std::env::temp_dir().join(format!("test_ts_src_{}.wav", std::process::id()));
-        let dst_fast = std::env::temp_dir().join(format!("test_ts_fast_{}.wav", std::process::id()));
-        let dst_slow = std::env::temp_dir().join(format!("test_ts_slow_{}.wav", std::process::id()));
+        let dst_atempo_fast = std::env::temp_dir().join(format!("test_ts_atempo_fast_{}.wav", std::process::id()));
+        let dst_atempo_slow = std::env::temp_dir().join(format!("test_ts_atempo_slow_{}.wav", std::process::id()));
+        let dst_rb = std::env::temp_dir().join(format!("test_ts_rb_{}.wav", std::process::id()));
         {
             let mut writer = hound::WavWriter::create(&src, spec).unwrap();
             for i in 0..16000 {
@@ -1760,19 +1792,29 @@ mod pause_squeeze_tests {
             }
             writer.finalize().unwrap();
         }
+        // 1. Тест базового atempo (use_rubberband = false)
         // Ускорение в 1.25x -> файл должен стать короче (~0.80 сек = ~12800 сэмплов)
-        if time_stretch(&src, &dst_fast, 1.25).is_ok() && dst_fast.is_file() {
-            let (samples, sr) = crate::wavio::read_mono_f32(&dst_fast).unwrap();
+        if time_stretch(&src, &dst_atempo_fast, 1.25, false).is_ok() && dst_atempo_fast.is_file() {
+            let (samples, sr) = crate::wavio::read_mono_f32(&dst_atempo_fast).unwrap();
             assert_eq!(sr, 16_000);
             assert!(samples.len() >= 12000 && samples.len() <= 13500);
-            let _ = std::fs::remove_file(&dst_fast);
+            let _ = std::fs::remove_file(&dst_atempo_fast);
         }
         // Замедление в 0.85x -> файл должен стать длиннее (~1.17 сек = ~18823 сэмпла)
-        if time_stretch(&src, &dst_slow, 0.85).is_ok() && dst_slow.is_file() {
-            let (samples, sr) = crate::wavio::read_mono_f32(&dst_slow).unwrap();
+        if time_stretch(&src, &dst_atempo_slow, 0.85, false).is_ok() && dst_atempo_slow.is_file() {
+            let (samples, sr) = crate::wavio::read_mono_f32(&dst_atempo_slow).unwrap();
             assert_eq!(sr, 16_000);
             assert!(samples.len() >= 18000 && samples.len() <= 19500);
-            let _ = std::fs::remove_file(&dst_slow);
+            let _ = std::fs::remove_file(&dst_atempo_slow);
+        }
+        // 2. Тест Rubberband (use_rubberband = true) если поддерживается сборкой FFmpeg
+        if check_rubberband_support() {
+            if time_stretch(&src, &dst_rb, 1.25, true).is_ok() && dst_rb.is_file() {
+                let (samples, sr) = crate::wavio::read_mono_f32(&dst_rb).unwrap();
+                assert_eq!(sr, 16_000);
+                assert!(samples.len() >= 12000 && samples.len() <= 13500);
+                let _ = std::fs::remove_file(&dst_rb);
+            }
         }
         let _ = std::fs::remove_file(&src);
     }

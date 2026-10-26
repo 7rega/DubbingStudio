@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AudioLines,
+  AudioWaveform,
   Captions,
   Clock,
   Languages,
@@ -33,6 +34,8 @@ export default function QualitySection() {
   const [emoRefClean, setEmoRefClean] = useState(false);
   const [smartRefTrimOn, setSmartRefTrimOn] = useState(true);
   const [pauseSqueezeOn, setPauseSqueezeOn] = useState(true);
+  const [rubberbandStretchOn, setRubberbandStretchOn] = useState(false);
+  const [rubberbandAvailable, setRubberbandAvailable] = useState<boolean | null>(null);
   const [voLeadIn, setVoLeadIn] = useState(true);
   const [dubReverbMatch, setDubReverbMatch] = useState(true);
   const [bench, setBench] = useState(false);
@@ -57,6 +60,8 @@ export default function QualitySection() {
         setEmoRefClean(s.emo_ref_clean === "1");
         setSmartRefTrimOn(s.smart_ref_trim !== "0");
         setPauseSqueezeOn(s.pause_squeeze_on !== "0");
+        setRubberbandStretchOn(s.rubberband_stretch_on === "1");
+        setRubberbandAvailable(c.rubberband_available ?? false);
         setVoLeadIn(s.vo_lead_in !== "0");
         setDubReverbMatch(s.dub_reverb_match !== "0");
         if (s.auto_cast_on !== undefined) {
@@ -231,6 +236,25 @@ export default function QualitySection() {
             on={pauseSqueezeOn}
             busy={busyKey === "pause_squeeze_on"}
             onToggle={() => toggle("pause_squeeze_on", pauseSqueezeOn, setPauseSqueezeOn)}
+          />
+          <SettingSwitch
+            icon={AudioWaveform}
+            label={t("settings.rubberbandStretch", "Студийный time-stretch (Rubberband)")}
+            hint={t("settings.rubberbandStretchDesc", "высококачественное сжатие и растяжение речи без повтора слогов")}
+            tip={
+              rubberbandAvailable === false
+                ? t(
+                    "settings.rubberbandUnavailableTip",
+                    "Внимание: используемый FFmpeg собран без librubberband. Рекомендуется оставить выключенным."
+                  )
+                : t(
+                    "settings.rubberbandStretchTip",
+                    "Алгоритм Rubberband для плавной подгонки фраз в тайминг. Если выключено — используется стандартный atempo."
+                  )
+            }
+            on={rubberbandStretchOn}
+            busy={busyKey === "rubberband_stretch_on"}
+            onToggle={() => toggle("rubberband_stretch_on", rubberbandStretchOn, setRubberbandStretchOn)}
           />
         </div>
       </section>
