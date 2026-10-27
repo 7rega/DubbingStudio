@@ -326,16 +326,16 @@ pub fn manifest() -> Vec<Component> {
             purpose: "Нативный C++ движок озвучки нового поколения (audio.cpp CUDA 13.3)",
             requirement: Requirement::Optional,
             delivery: Delivery::Download,
-            size: 851_294_792,
+            size: 852_794_068,
             files: &[
                 FileSpec {
-                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.2-drama3-base-small/audio-v0.9.2-drama3-base-small-bin-windows-x64-cuda13.3.zip",
+                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-bin-windows-x64-cuda13.3.zip",
                     dest_rel: "tools/audiocpp/_bin.zip",
-                    size: 275_837_338,
+                    size: 277_336_614,
                     extract: Extract::ZipTree,
                 },
                 FileSpec {
-                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.2-drama3-base-small/audio-v0.9.2-drama3-base-small-cudart-windows-x64-cuda13.3.zip",
+                    url: "https://github.com/0xShug0/audio.cpp/releases/download/v0.9.3/audio-v0.9.3-cudart-windows-x64-cuda13.3.zip",
                     dest_rel: "tools/audiocpp/_cudart.zip",
                     size: 575_457_454,
                     extract: Extract::ZipTree,
