@@ -48,14 +48,14 @@ mod tests {
     #[test]
     fn audio_tts_settings_defaults_and_roundtrips() {
         let p = Project::default();
-        assert_eq!(p.audio.vox_prompt, "");
-        assert_eq!(p.audio.vox_steps, 20);
-        assert_eq!(p.audio.vox_cfg, 1.6);
-        assert_eq!(p.audio.vox_seed, None);
+        assert_eq!(p.audio.higgs_temp, None);
+        assert_eq!(p.audio.higgs_seed, None);
+        assert_eq!(p.audio.drama_prompt, "");
+        assert_eq!(p.audio.drama_temp, None);
+        assert_eq!(p.audio.drama_seed, None);
 
         let j = p.to_json().unwrap();
         let p2 = Project::from_json(&j).unwrap();
-        assert_eq!(p2.audio.vox_steps, 20);
-        assert_eq!(p2.audio.vox_cfg, 1.6);
+        assert_eq!(p2.audio.drama_prompt, "");
     }
 }

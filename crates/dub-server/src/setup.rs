@@ -153,7 +153,7 @@ const GH_ORT_GPU: &str =
     "https://github.com/microsoft/onnxruntime/releases/download/v1.28.2/onnxruntime-win-x64-gpu_cuda13-1.28.2.zip";
 // GitHub: ffmpeg static win64 GPL (BtbN/FFmpeg-Builds) — тот же источник, что install.bat.
 const GH_FFMPEG: &str =
-    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-N-127021-ge0c94b2d1c-win64-gpl.zip";
 // PyPI-wheel'ы NVIDIA CUDA 13 runtime (те же, что Higgs envdeps.rs — байт-в-байт с локальным CUDA 13.3).
 const WHEEL_CUDART: &str = "https://files.pythonhosted.org/packages/d2/27/b53a5e0397842a5c11f0e1a39d4e5b2f22638a4126e83b3c4e196f62c969/nvidia_cuda_runtime-13.3.29-py3-none-win_amd64.whl";
 const WHEEL_CUBLAS: &str = "https://files.pythonhosted.org/packages/08/8f/890a96ea1ff615100296977cce23296052dcb8c114d4e451201ec39df9bf/nvidia_cublas-13.6.0.2-py3-none-win_amd64.whl";
@@ -319,42 +319,6 @@ pub fn manifest() -> Vec<Component> {
             ],
             markers: &[Marker { rel: "models/higgs-engine/audiocpp_engine.dll", expect: 71_727_104 }],
             external_url: None,
-        },
-        Component {
-            id: "voxcpm2",
-            name: "VoxCPM2 (Q8_0, audio.cpp)",
-            purpose: "Мультиязычный синтез и клон голоса (48 кГц, 30 языков)",
-            requirement: Requirement::Optional,
-            delivery: Delivery::Download,
-            size: 2_955_007_488,
-            files: &[
-                FileSpec {
-                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/VoxCPM2-GGUF/voxcpm2-q8_0.gguf?download=true",
-                    dest_rel: "models/voxcpm2/voxcpm2-q8_0.gguf",
-                    size: 2_955_007_488,
-                    extract: Extract::None,
-                },
-            ],
-            markers: &[Marker { rel: "models/voxcpm2/voxcpm2-q8_0.gguf", expect: 2_955_007_488 }],
-            external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
-        },
-        Component {
-            id: "voxcpm2-bf16",
-            name: "VoxCPM2 (BF16, audio.cpp)",
-            purpose: "Полноточная модель озвучки и клонирования голоса (максимальное качество)",
-            requirement: Requirement::Optional,
-            delivery: Delivery::Download,
-            size: 4_772_295_296,
-            files: &[
-                FileSpec {
-                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/VoxCPM2-GGUF/voxcpm2-bf16.gguf?download=true",
-                    dest_rel: "models/voxcpm2/voxcpm2-bf16.gguf",
-                    size: 4_772_295_296,
-                    extract: Extract::None,
-                },
-            ],
-            markers: &[Marker { rel: "models/voxcpm2/voxcpm2-bf16.gguf", expect: 4_772_295_296 }],
-            external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
         },
         Component {
             id: "audiocpp-engine",
@@ -966,7 +930,7 @@ pub fn manifest() -> Vec<Component> {
             purpose: "Декод/энкод видео и аудио (NVENC)",
             requirement: Requirement::Required,
             delivery: Delivery::Download,
-            size: 168_601_393,
+            size: 198_589_424,
             files: &[
                 FileSpec { url: GH_FFMPEG, dest_rel: "tools/ffmpeg/_ffmpeg.zip", size: 0, extract: Extract::ZipPick },
             ],
@@ -1101,8 +1065,6 @@ fn vram_estimate(id: &str) -> u64 {
         "roformer" => gb(0.5),
         "roformer-q5" => gb(0.45),
         "roformer-q4" => gb(0.4),
-        "voxcpm2" => gb(3.2),
-        "voxcpm2-bf16" => gb(5.0),
         "drama3" => gb(5.0),
         _ => 0,
     }
@@ -2148,8 +2110,8 @@ fn extract_zip_pick(zip_path: &Path, dir: &Path) -> Result<(), String> {
     let file = std::fs::File::open(zip_path).map_err(|e| format!("открыть {}: {e}", zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("не zip: {e}"))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("создать {}: {e}", dir.display()))?;
-    // Целевые: onnxruntime.dll (+.pdb не нужен), ffmpeg.exe, ffprobe.exe. Берём по имени листа.
-    const WANT: &[&str] = &["onnxruntime.dll", "ffmpeg.exe", "ffprobe.exe"];
+    // Целевые: onnxruntime.dll (+.pdb не нужен), ffmpeg.exe, ffprobe.exe, ffplay.exe. Берём по имени листа.
+    const WANT: &[&str] = &["onnxruntime.dll", "ffmpeg.exe", "ffprobe.exe", "ffplay.exe"];
     let mut got = 0;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| format!("запись zip: {e}"))?;

@@ -72,8 +72,8 @@ impl AudiocppServerOpts {
         Self {
             bin: bin.into(),
             model_path: model_path.into(),
-            model_family: "voxcpm2".to_string(),
-            model_id: "voxcpm2".to_string(),
+            model_family: "higgs".to_string(),
+            model_id: "higgs".to_string(),
             backend: "cuda".to_string(),
             device: 0,
             threads: 4,
@@ -163,8 +163,7 @@ impl AudiocppClient {
         }
 
         if let Some(sp) = speed {
-            // VoxCPM C++ сессия в audio.cpp не принимает стилевые условия (speed).
-            if sp > 0.0 && !model_id.to_lowercase().contains("voxcpm") {
+            if sp > 0.0 {
                 body.as_object_mut()
                     .unwrap()
                     .insert("speed".to_string(), serde_json::json!(sp));
@@ -187,17 +186,6 @@ impl AudiocppClient {
             }
             if let Some(max_tok) = opt.max_tokens {
                 obj.insert("max_tokens".to_string(), serde_json::json!(max_tok));
-            }
-        }
-
-        // Профиль качества по умолчанию для VoxCPM2 (20 шагов диффузии и CFG 1.6, если не переопределено)
-        if model_id.to_lowercase().contains("voxcpm") {
-            let obj = body.as_object_mut().unwrap();
-            if !obj.contains_key("num_inference_steps") {
-                obj.insert("num_inference_steps".to_string(), serde_json::json!(20));
-            }
-            if !obj.contains_key("guidance_scale") {
-                obj.insert("guidance_scale".to_string(), serde_json::json!(1.6));
             }
         }
 
@@ -313,22 +301,13 @@ impl AudiocppServer {
         let _ = std::fs::create_dir_all(&config_dir);
         let config_path = config_dir.join(format!("server_{port}.json"));
 
-        let mut model_entry = serde_json::json!({
+        let model_entry = serde_json::json!({
             "id": opts.model_id,
             "family": opts.model_family,
             "path": opts.model_path.to_string_lossy().to_string(),
             "task": "tts",
             "mode": "offline"
         });
-        if opts.model_family == "voxcpm2" {
-            model_entry.as_object_mut().unwrap().insert(
-                "default_request_options".to_string(),
-                serde_json::json!({
-                    "num_inference_steps": 20,
-                    "guidance_scale": 1.6
-                }),
-            );
-        }
 
         let cfg = serde_json::json!({
             "host": "127.0.0.1",
@@ -520,28 +499,6 @@ pub fn resolve_audiocpp_cli(tools_or_models_root: &Path) -> PathBuf {
 
     tools_or_models_root.join("tools").join("audiocpp").join(name)
 }
-
-/// Поиск модели VoxCPM2 (q8_0 или bf16).
-pub fn resolve_voxcpm2_path(models_root: &Path, quant: &str) -> Option<PathBuf> {
-    let filename = match quant {
-        "bf16" => "voxcpm2-bf16.gguf",
-        _ => "voxcpm2-q8_0.gguf",
-    };
-
-    let candidates = [
-        models_root.join("voxcpm2").join(filename),
-        models_root.join("models").join("voxcpm2").join(filename),
-        models_root.join(filename),
-    ];
-
-    for c in candidates {
-        if c.exists() {
-            return Some(c);
-        }
-    }
-    None
-}
-
 
 /// Декодер RIFF WAV (PCM16 или Float32) в моно f32 сэмплы + sample_rate.
 pub fn decode_wav_mono_f32(bytes: &[u8]) -> Result<(Vec<f32>, i32), AudiocppServerError> {

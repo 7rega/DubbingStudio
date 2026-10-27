@@ -942,7 +942,8 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     // невозможен — project.json ещё не создан). Фолбэк — перенос из существующего project.json, чтобы
     // стиль, выставленный в редакторе, пережил ре-анализ (там project.json уже есть).
     if !args.translate_style.is_empty() {
-        proj.audio.translate_style = args.translate_style.clone();
+        let flat: String = args.translate_style.split_whitespace().collect::<Vec<_>>().join(" ");
+        proj.audio.translate_style = flat.chars().take(1000).collect();
     } else if let Ok(text) = std::fs::read_to_string(paths.work_dir.join("project.json")) {
         if let Ok(prev) = Project::from_json(&text) {
             proj.audio.translate_style = prev.audio.translate_style;

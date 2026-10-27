@@ -100,21 +100,9 @@ pub struct Audio {
     /// "real" (реальные лица) | "anime" (рисованные). Пусто = не определяли (юзер задал явно/кастинг выкл).
     #[serde(default)]
     pub content_type: String,
-    /// Глобальный промпт стиля/акцента речи для VoxCPM2 (например, "native Russian speaker").
+    /// Глобальный промпт стиля/акцента речи (например, "native Russian speaker").
     #[serde(default)]
     pub voice_prompt: String,
-    /// Индивидуальный промпт манеры/стиля речи для VoxCPM2 (например, "slowly pace, calm tone").
-    #[serde(default)]
-    pub vox_prompt: String,
-    /// Количество шагов диффузии для VoxCPM2 (дефолт 20, диапазон 10 - 50).
-    #[serde(default = "default_vox_steps")]
-    pub vox_steps: u32,
-    /// CFG scale (guidance scale) для VoxCPM2 (дефолт 1.6, диапазон 1.0 - 3.0).
-    #[serde(default = "default_vox_cfg")]
-    pub vox_cfg: f64,
-    /// Фиксированный сид генерации VoxCPM2 (None = случайный сид).
-    #[serde(default)]
-    pub vox_seed: Option<u64>,
     /// Индивидуальная температура сэмплинга Higgs Audio v3 (дефолт None -> в рантайме 0.80).
     #[serde(default)]
     pub higgs_temp: Option<f64>,
@@ -147,14 +135,6 @@ fn default_true() -> bool {
     true
 }
 
-
-fn default_vox_steps() -> u32 {
-    20
-}
-
-fn default_vox_cfg() -> f64 {
-    1.6
-}
 
 fn default_voiceover_gain() -> f64 {
     -12.0
@@ -189,10 +169,6 @@ impl Default for Audio {
             container: default_container(),
             content_type: String::new(),
             voice_prompt: String::new(),
-            vox_prompt: String::new(),
-            vox_steps: default_vox_steps(),
-            vox_cfg: default_vox_cfg(),
-            vox_seed: None,
             higgs_temp: None,
             higgs_seed: None,
             drama_prompt: String::new(),

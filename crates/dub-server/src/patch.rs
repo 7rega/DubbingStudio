@@ -312,21 +312,21 @@ fn op_rewrite(p: &mut Project, edit: &Value) -> PatchResult {
 
 /// translate_style — задать стилевую инструкцию перевода (#112): доп-указание тона/регистра/лексики
 /// («formal», «gen-z slang»). Дополняет перевод (в отличие от rewrite, который ЗАМЕНЯЕТ содержимое).
-/// Текст нормализуем: trim, переводы строк -> пробелы, кап ~500 символов (как inline-инструкция промпта,
+/// Текст нормализуем: trim, переводы строк -> пробелы, кап ~1000 символов (как inline-инструкция промпта,
 /// не абзац). Помечает все сегменты dirty тем же механизмом, что смена режима/rewrite: сам ре-перевод —
 /// GPU-стадия (analyze/vision), PATCH лишь фиксирует намерение (как op_translate). Пустой style снимает
 /// стиль (сохраняем ""). Стиль читает translate::stage из proj.audio.translate_style и вносит в sysmsg.
 fn op_translate_style(p: &mut Project, edit: &Value) -> PatchResult {
     let raw = s(edit, "style").unwrap_or_default();
-    // схлопнуть любые переводы строк/табы в одиночные пробелы, затем trim; кап 500 символов по границам char.
+    // схлопнуть любые переводы строк/табы в одиночные пробелы, затем trim; кап 1000 символов по границам char.
     let flat: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-    p.audio.translate_style = flat.chars().take(500).collect();
+    p.audio.translate_style = flat.chars().take(1000).collect();
     invalidate_all_audio(p);
     p.audio.mix_dirty = true;
     Ok(())
 }
 
-/// voice_prompt — глобальный промпт стиля/акцента речи для VoxCPM2.
+/// voice_prompt — глобальный промпт стиля/акцента речи.
 fn op_voice_prompt(p: &mut Project, edit: &Value) -> PatchResult {
     let raw = s(edit, "prompt").unwrap_or_default();
     let flat: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -338,44 +338,9 @@ fn op_voice_prompt(p: &mut Project, edit: &Value) -> PatchResult {
     Ok(())
 }
 
-/// tts_settings — индивидуальные настройки генерации для моделей VoxCPM2 и Higgs Audio v3.
+/// tts_settings — индивидуальные настройки генерации для моделей Higgs Audio v3 и Drama 3.
 fn op_tts_settings(p: &mut Project, edit: &Value) -> PatchResult {
     let mut changed = false;
-
-    // VoxCPM2
-    if let Some(prompt) = edit.get("vox_prompt").and_then(|x| x.as_str()) {
-        let flat: String = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-        let new_val: String = flat.chars().take(500).collect();
-        if p.audio.vox_prompt != new_val {
-            p.audio.vox_prompt = new_val;
-            changed = true;
-        }
-    }
-    if let Some(steps) = edit.get("vox_steps").and_then(|x| x.as_u64()) {
-        let clamped = (steps as u32).clamp(5, 100);
-        if p.audio.vox_steps != clamped {
-            p.audio.vox_steps = clamped;
-            changed = true;
-        }
-    }
-    if let Some(cfg) = edit.get("vox_cfg").and_then(|x| x.as_f64()) {
-        let clamped = cfg.clamp(0.5, 5.0);
-        if (p.audio.vox_cfg - clamped).abs() > 1e-4 {
-            p.audio.vox_cfg = clamped;
-            changed = true;
-        }
-    }
-    if let Some(seed_val) = edit.get("vox_seed") {
-        let new_seed = if seed_val.is_null() {
-            None
-        } else {
-            seed_val.as_u64()
-        };
-        if p.audio.vox_seed != new_seed {
-            p.audio.vox_seed = new_seed;
-            changed = true;
-        }
-    }
 
     // Higgs Audio v3
     if let Some(temp_val) = edit.get("higgs_temp") {
@@ -1359,10 +1324,10 @@ mod tests {
         apply(&mut p, &json!({"op":"translate_style","style":"  formal,\n very polite  "})).unwrap();
         assert_eq!(p.audio.translate_style, "formal, very polite");
         assert!(p.segments[0].dirty);
-        // кап длины ~500 символов.
-        let long = "a".repeat(700);
+        // кап длины ~1000 символов.
+        let long = "a".repeat(1200);
         apply(&mut p, &json!({"op":"translate_style","style":long})).unwrap();
-        assert_eq!(p.audio.translate_style.chars().count(), 500);
+        assert_eq!(p.audio.translate_style.chars().count(), 1000);
         // пустой style снимает стиль.
         apply(&mut p, &json!({"op":"translate_style","style":"  "})).unwrap();
         assert_eq!(p.audio.translate_style, "");
@@ -1615,26 +1580,15 @@ mod tests {
             ckpt: Some("ck-test".into()),
             ..Default::default()
         });
-        assert_eq!(p.audio.vox_steps, 20);
-        assert_eq!(p.audio.vox_cfg, 1.6);
-        assert_eq!(p.audio.vox_seed, None);
         assert_eq!(p.audio.higgs_temp, None);
         assert_eq!(p.audio.higgs_seed, None);
 
         apply(&mut p, &json!({
             "op": "tts_settings",
-            "vox_prompt": " calm ",
-            "vox_steps": 25,
-            "vox_cfg": 1.8,
-            "vox_seed": 100,
             "higgs_temp": 0.85,
             "higgs_seed": 777
         })).unwrap();
 
-        assert_eq!(p.audio.vox_prompt, "calm");
-        assert_eq!(p.audio.vox_steps, 25);
-        assert_eq!(p.audio.vox_cfg, 1.8);
-        assert_eq!(p.audio.vox_seed, Some(100));
         assert_eq!(p.audio.higgs_temp, Some(0.85));
         assert_eq!(p.audio.higgs_seed, Some(777));
         assert!(p.audio.mix_dirty);

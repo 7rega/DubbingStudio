@@ -84,7 +84,7 @@ fn start_gemma(o: &LlmOpen, with_mmproj: bool) -> Result<LlmProvider, String> {
     if with_mmproj {
         opts = opts.with_mmproj(o.mmproj);
     }
-    // Вытесняем любой запущенный TTS (Drama 3, Higgs, VoxCPM2) из VRAM перед стартом локальной LLM
+    // Вытесняем любой запущенный TTS (Drama 3, Higgs) из VRAM перед стартом локальной LLM
     crate::evict_tts_cache();
 
     let server = LlamaServer::start(&opts).map_err(|e| format!("llama-server: {e}"))?;

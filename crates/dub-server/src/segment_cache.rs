@@ -138,7 +138,7 @@ mod tests {
         let k3 = compute_ckpt(&s, "higgs");
         assert_ne!(k2, k3);
 
-        let k4 = compute_ckpt(&s, "voxcpm2");
+        let k4 = compute_ckpt(&s, "drama3");
         assert_ne!(k3, k4);
     }
 }

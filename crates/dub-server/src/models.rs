@@ -110,8 +110,6 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "higgs-bf16" => vec![("tts_engine", "higgs".into()), ("higgs_quant", "bf16".into())],
         "higgs-q6_k" => vec![("tts_engine", "higgs".into()), ("higgs_quant", "q6_k".into())],
         "higgs-q4_k_m" => vec![("tts_engine", "higgs".into()), ("higgs_quant", "q4_k_m".into())],
-        "voxcpm2" => vec![("tts_engine", "voxcpm2".into()), ("voxcpm2_quant", "q8_0".into())],
-        "voxcpm2-bf16" => vec![("tts_engine", "voxcpm2".into()), ("voxcpm2_quant", "bf16".into())],
         "drama3" => vec![("tts_engine", "drama3".into())],
         "parakeet" => vec![("asr_engine", "parakeet".into()), ("asr", "int8".into())],
         "parakeet-fp32" => vec![("asr_engine", "parakeet".into()), ("asr", "fp32".into())],
@@ -145,7 +143,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
 pub fn is_selection_key(key: &str) -> bool {
     matches!(
         key,
-        "tts" | "higgs_quant" | "voxcpm2_quant" | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device" | "align_model" | "align_lang"
+        "tts" | "higgs_quant" | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device" | "align_model" | "align_lang"
             // Backend КАЖДОЙ локальной стадии независимо (auto|gpu|cpu): любой движок на любой инстанс.
             // gpu = CUDA, cpu = без NVIDIA. sep=сепарация(BSRoformer CUDA/CPU-сборка), diar=диаризация
             // (Sortformer onnx CUDA-EP/CPU), asr=локальный ASR (Parakeet onnx / Whisper CTranslate2).
@@ -353,22 +351,12 @@ pub fn higgs_max_tokens(mroot: &Path) -> Option<u32> {
     }
 }
 
-/// Выбранный TTS-движок: "higgs" (дефолт), "voxcpm2" или "drama3".
+/// Выбранный TTS-движок: "higgs" (дефолт) или "drama3".
 pub fn resolve_tts_engine(sel: &Value) -> &'static str {
     match pick(sel, "tts_engine") {
-        Some("voxcpm2") => "voxcpm2",
         Some("drama3") => "drama3",
         _ => "higgs",
     }
-}
-
-/// VoxCPM2 TTS: models/voxcpm2/voxcpm2-{q8_0,bf16}.gguf. Возврат (путь к .gguf, квант).
-pub fn resolve_voxcpm2(mroot: &Path, sel: &Value) -> Option<(PathBuf, String)> {
-    let quant = pick(sel, "voxcpm2_quant")
-        .or_else(|| pick(sel, "tts").filter(|&q| q != DRAMA_TTS && q != "higgs"))
-        .unwrap_or("q8_0");
-    let model_path = audiocpp::resolve_voxcpm2_path(mroot, quant)?;
-    Some((model_path, quant.to_string()))
 }
 
 /// Выбранный режим исполнения Higgs: "server" (по умолчанию, audiocpp_server) или "dll" (audiocpp_engine.dll).
@@ -939,7 +927,7 @@ pub fn resolve_tts(mroot: &Path, sel: &Value) -> (PathBuf, String) {
     }
     let has = |q: &str| mroot.join(format!("higgs-{q}")).join(format!("{q}.gguf")).is_file();
     let ret = |q: &str| (mroot.join(format!("higgs-{q}")), q.to_string());
-    if let Some(q) = pick(sel, "higgs_quant").or_else(|| pick(sel, "tts").filter(|&q| q != DRAMA_TTS && q != "voxcpm2")) {
+    if let Some(q) = pick(sel, "higgs_quant").or_else(|| pick(sel, "tts").filter(|&q| q != DRAMA_TTS)) {
         if has(q) {
             return ret(q);
         }
@@ -1098,8 +1086,6 @@ mod asr_variant_tests {
 
     #[test]
     fn tts_and_diar_components_map_to_their_slots() {
-        assert_eq!(component_selection("voxcpm2"), vec![("tts_engine", "voxcpm2".to_string()), ("voxcpm2_quant", "q8_0".to_string())]);
-        assert_eq!(component_selection("voxcpm2-bf16"), vec![("tts_engine", "voxcpm2".to_string()), ("voxcpm2_quant", "bf16".to_string())]);
         assert_eq!(component_selection("drama3"), vec![("tts_engine", "drama3".to_string())]);
         assert_eq!(component_selection("higgs-bf16"), vec![("tts_engine", "higgs".to_string()), ("higgs_quant", "bf16".to_string())]);
         assert_eq!(component_selection("sortformer"), vec![("diar_model", "sortformer".to_string())]);
@@ -1274,7 +1260,7 @@ mod secret_tests {
     fn secrets_are_not_selection_slots() {
         assert!(!is_selection_key("or_key") && !is_selection_key("proxy_url") && !is_selection_key("srv_key"));
         assert!(is_selection_key("or_llm_on") && is_selection_key("llm_provider") && is_selection_key("srv_url"));
-        assert!(is_selection_key("tts_engine") && is_selection_key("higgs_quant") && is_selection_key("voxcpm2_quant") && is_selection_key("higgs_execution") && is_selection_key("drama_vram_gb") && is_selection_key("sep_mode") && is_selection_key("diar_model") && is_selection_key("mcp_on"));
+        assert!(is_selection_key("tts_engine") && is_selection_key("higgs_quant") && is_selection_key("higgs_execution") && is_selection_key("drama_vram_gb") && is_selection_key("sep_mode") && is_selection_key("diar_model") && is_selection_key("mcp_on"));
         assert!(!is_selection_key("proxy_on") && !is_selection_key("proxy_mode"), "the proxy changes only through its form");
         assert!(is_selection_value("vision_provider", "server") && !is_selection_value("llm_provider", "ollama"));
         assert!(is_selection_value("drama_vram_gb", "0") && is_selection_value("drama_vram_gb", "6") && !is_selection_value("drama_vram_gb", "4"));

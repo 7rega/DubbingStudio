@@ -209,7 +209,7 @@ export default function GenPresetBar({
             </button>
           </div>
           <div className="text-[10px] text-[var(--color-muted)] leading-tight">
-            Сохраняет стиль субтитров, параметры TTS ({activeTtsEngine === "voxcpm2" ? "VoxCPM2" : "Higgs v3"}) и ползунки звука.
+            Сохраняет стиль субтитров, параметры TTS ({activeTtsEngine === "drama3" ? "Fish Drama 3" : "Higgs v3"}) и ползунки звука.
           </div>
         </div>
       )}

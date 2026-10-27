@@ -20,14 +20,10 @@ export interface GenPresetSubs {
 }
 
 export interface GenPresetTts {
-  engine?: string; // "higgs" | "voxcpm2" | "drama3"
+  engine?: string; // "higgs" | "drama3"
   higgs_temp?: number | null;
   higgs_seed?: number | null;
   higgs_max_tokens?: string;
-  vox_prompt?: string;
-  vox_steps?: number;
-  vox_cfg?: number;
-  vox_seed?: number | null;
   drama_prompt?: string;
   drama_temp?: number | null;
   drama_seed?: number | null;
@@ -164,10 +160,6 @@ export function extractPresetFromProject(
       engine: activeTtsEngine ?? "higgs",
       higgs_temp: p.audio?.higgs_temp ?? null,
       higgs_seed: p.audio?.higgs_seed ?? null,
-      vox_prompt: p.audio?.vox_prompt ?? "",
-      vox_steps: p.audio?.vox_steps ?? 20,
-      vox_cfg: p.audio?.vox_cfg ?? 1.6,
-      vox_seed: p.audio?.vox_seed ?? null,
       drama_prompt: p.audio?.drama_prompt ?? "",
       drama_temp: p.audio?.drama_temp ?? null,
       drama_seed: p.audio?.drama_seed ?? null,
@@ -216,10 +208,6 @@ export function applyPresetToProject(p: Project, preset: GenPreset): Project {
     gen_preset: preset.name,
     higgs_temp: preset.tts.higgs_temp !== undefined ? preset.tts.higgs_temp : p.audio.higgs_temp,
     higgs_seed: preset.tts.higgs_seed !== undefined ? preset.tts.higgs_seed : p.audio.higgs_seed,
-    vox_prompt: preset.tts.vox_prompt !== undefined ? preset.tts.vox_prompt : p.audio.vox_prompt,
-    vox_steps: preset.tts.vox_steps !== undefined ? preset.tts.vox_steps : p.audio.vox_steps,
-    vox_cfg: preset.tts.vox_cfg !== undefined ? preset.tts.vox_cfg : p.audio.vox_cfg,
-    vox_seed: preset.tts.vox_seed !== undefined ? preset.tts.vox_seed : p.audio.vox_seed,
     drama_prompt: preset.tts.drama_prompt !== undefined ? preset.tts.drama_prompt : p.audio.drama_prompt,
     drama_temp: preset.tts.drama_temp !== undefined ? preset.tts.drama_temp : p.audio.drama_temp,
     drama_seed: preset.tts.drama_seed !== undefined ? preset.tts.drama_seed : p.audio.drama_seed,
@@ -267,10 +255,6 @@ export function isProjectMatchingPreset(p: Project, preset: GenPreset): boolean 
   // Проверка TTS
   if (preset.tts.higgs_temp !== undefined && (preset.tts.higgs_temp ?? null) !== (p.audio?.higgs_temp ?? null)) return false;
   if (preset.tts.higgs_seed !== undefined && (preset.tts.higgs_seed ?? null) !== (p.audio?.higgs_seed ?? null)) return false;
-  if (preset.tts.vox_prompt !== undefined && (preset.tts.vox_prompt || "") !== (p.audio?.vox_prompt || "")) return false;
-  if (preset.tts.vox_steps !== undefined && (preset.tts.vox_steps ?? 20) !== (p.audio?.vox_steps ?? 20)) return false;
-  if (preset.tts.vox_cfg !== undefined && Math.abs((preset.tts.vox_cfg ?? 1.6) - (p.audio?.vox_cfg ?? 1.6)) > 0.01) return false;
-  if (preset.tts.vox_seed !== undefined && (preset.tts.vox_seed ?? null) !== (p.audio?.vox_seed ?? null)) return false;
   if (preset.tts.drama_prompt !== undefined && (preset.tts.drama_prompt || "") !== (p.audio?.drama_prompt || "")) return false;
   if (preset.tts.drama_temp !== undefined && (preset.tts.drama_temp ?? null) !== (p.audio?.drama_temp ?? null)) return false;
   if (preset.tts.drama_seed !== undefined && (preset.tts.drama_seed ?? null) !== (p.audio?.drama_seed ?? null)) return false;
@@ -299,10 +283,6 @@ export async function applyPresetToBackend(
       op: "tts_settings",
       higgs_temp: preset.tts.higgs_temp,
       higgs_seed: preset.tts.higgs_seed,
-      vox_prompt: preset.tts.vox_prompt,
-      vox_steps: preset.tts.vox_steps,
-      vox_cfg: preset.tts.vox_cfg,
-      vox_seed: preset.tts.vox_seed,
       drama_prompt: preset.tts.drama_prompt,
       drama_temp: preset.tts.drama_temp,
       drama_seed: preset.tts.drama_seed,
