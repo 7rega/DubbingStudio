@@ -93,6 +93,7 @@ const VARIANT_SLOT: Record<string, [string, string]> = {
   "nemotron-bf16": ["diar_model", "nemotron-bf16"],
   "nemotron-q8_0": ["diar_model", "nemotron-q8_0"],
   "qwen3-asr": ["asr_engine", "qwen3"],
+  "crisperwhisper-turbo": ["asr_engine", "crisperwhisper"],
   "crisperwhisper-q8": ["asr_engine", "crisperwhisper"],
 };
 // Какой из ids сейчас активен по выбору (active.json из capabilities.selection).
@@ -168,7 +169,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
     setErr(null);
     try {
       const ids = [id];
-      if (id === "crisperwhisper-q8") {
+      if (id === "crisperwhisper-turbo" || id === "crisperwhisper-q8") {
         for (const dep of ["audiocpp-engine", "langid", "transcribe-engine"]) {
           if (get(dep) && !get(dep)?.installed && !ids.includes(dep)) {
             ids.push(dep);
@@ -555,7 +556,8 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
               </div>
             </div>
             {(() => {
-              const crisperDeps = ["crisperwhisper-q8", "audiocpp-engine", "langid", "transcribe-engine"];
+              const crisperModelId = get("crisperwhisper-turbo") ? "crisperwhisper-turbo" : "crisperwhisper-q8";
+              const crisperDeps = [crisperModelId, "audiocpp-engine", "langid", "transcribe-engine"];
               const missingDeps = crisperDeps.filter((id) => get(id) && !get(id)?.installed);
               if (missingDeps.length > 0) {
                 return (
@@ -565,7 +567,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
                       <div className="mono text-[10px] text-amber-300/70 truncate">Требуются: {missingDeps.join(", ")}</div>
                     </div>
                     <button
-                      onClick={() => dl("crisperwhisper-q8")}
+                      onClick={() => dl(crisperModelId)}
                       disabled={isDownloading}
                       className="shrink-0 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 text-[11px] font-medium transition-colors disabled:opacity-50"
                     >
@@ -576,7 +578,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
               }
               return null;
             })()}
-            {rowOf("crisperwhisper-q8")}
+            {rowOf(get("crisperwhisper-turbo") ? "crisperwhisper-turbo" : "crisperwhisper-q8")}
             {rowOf("audiocpp-engine")}
             {rowOf("langid")}
             {rowOf("transcribe-engine")}
@@ -10984,7 +10986,7 @@ export default function App() {
       useStore.getState().setMcpEnabled(sel.mcp_on !== "0");
     }
     const asrLabel = sel.asr_engine === "crisperwhisper"
-      ? `CrisperWhisper 2.0 Large (${sel.crisper_mode || "verbatim"})`
+      ? `CrisperWhisper 2.0 turbo (${sel.crisper_mode || "verbatim"})`
       : sel.asr_engine === "qwen3"
       ? "Qwen3 ASR"
       : sel.asr_engine === "whisper"

@@ -728,22 +728,94 @@ pub fn manifest() -> Vec<Component> {
             external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
         },
         Component {
-            id: "crisperwhisper-q8",
-            name: "CrisperWhisper 2.0 Large Q8_0",
-            purpose: "Распознавание речи на 99 языках с пословными таймкодами (audio.cpp GGUF Q8_0)",
+            id: "crisperwhisper-turbo",
+            name: "CrisperWhisper 2.0 turbo",
+            purpose: "Распознавание речи на 99 языках с пословными таймкодами (audio.cpp Safetensors)",
             requirement: Requirement::Optional,
             delivery: Delivery::Download,
-            size: 1_716_306_528,
+            size: 1_623_586_704,
             files: &[
                 FileSpec {
-                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/CrisperWhisper2.0-GGUF/crisperwhisper-2-large-q8_0.gguf?download=true",
-                    dest_rel: "models/crisperwhisper/crisperwhisper-2-large-q8_0.gguf",
-                    size: 1_716_306_528,
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/LICENSE.md",
+                    dest_rel: "models/crisperwhisper2-turbo/LICENSE.md",
+                    size: 17_784,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/README.md",
+                    dest_rel: "models/crisperwhisper2-turbo/README.md",
+                    size: 10_974,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/added_tokens.json",
+                    dest_rel: "models/crisperwhisper2-turbo/added_tokens.json",
+                    size: 35_319,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/config.json",
+                    dest_rel: "models/crisperwhisper2-turbo/config.json",
+                    size: 1_211,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/generation_config.json",
+                    dest_rel: "models/crisperwhisper2-turbo/generation_config.json",
+                    size: 3_880,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/merges.txt",
+                    dest_rel: "models/crisperwhisper2-turbo/merges.txt",
+                    size: 493_869,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/model.safetensors",
+                    dest_rel: "models/crisperwhisper2-turbo/model.safetensors",
+                    size: 1_617_907_538,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/normalizer.json",
+                    dest_rel: "models/crisperwhisper2-turbo/normalizer.json",
+                    size: 52_666,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/preprocessor_config.json",
+                    dest_rel: "models/crisperwhisper2-turbo/preprocessor_config.json",
+                    size: 357,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/special_tokens_map.json",
+                    dest_rel: "models/crisperwhisper2-turbo/special_tokens_map.json",
+                    size: 2_186,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/tokenizer.json",
+                    dest_rel: "models/crisperwhisper2-turbo/tokenizer.json",
+                    size: 3_937_105,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/tokenizer_config.json",
+                    dest_rel: "models/crisperwhisper2-turbo/tokenizer_config.json",
+                    size: 288_287,
+                    extract: Extract::None,
+                },
+                FileSpec {
+                    url: "https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo/resolve/de0369c8a68025b7f6e86387b6eb5a3b369787c8/vocab.json",
+                    dest_rel: "models/crisperwhisper2-turbo/vocab.json",
+                    size: 835_528,
                     extract: Extract::None,
                 },
             ],
-            markers: &[Marker { rel: "models/crisperwhisper/crisperwhisper-2-large-q8_0.gguf", expect: 1_716_306_528 }],
-            external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
+            markers: &[Marker { rel: "models/crisperwhisper2-turbo/model.safetensors", expect: 1_617_907_538 }],
+            external_url: Some("https://huggingface.co/nyralabs/CrisperWhisper2.0_turbo"),
         },
         Component {
             id: "transcribe-engine",
@@ -1214,12 +1286,16 @@ pub fn component_status(repo_root: &Path, c: &Component) -> ComponentStatus {
                 p.metadata().map(|m| m.len() >= 2_400_000_000).unwrap_or(false)
             });
         (ok, if ok { Some("CUDA / CPU · 1.7B Q8_0 · GGUF".into()) } else { None })
-    } else if c.id == "crisperwhisper-q8" {
+    } else if c.id == "crisperwhisper-turbo" || c.id == "crisperwhisper-q8" {
         let ok = c.markers.iter().all(|m| marker_ok(repo_root, m))
             || crate::models::resolve_crisperwhisper_path(&repo_root.join("models")).is_some_and(|p| {
-                p.metadata().map(|m| m.len() >= 1_700_000_000).unwrap_or(false)
+                if p.is_dir() {
+                    p.join("model.safetensors").metadata().map(|m| m.len() >= 1_600_000_000).unwrap_or(false)
+                } else {
+                    p.metadata().map(|m| m.len() >= 1_600_000_000).unwrap_or(false)
+                }
             });
-        (ok, if ok { Some("CUDA / CPU · 2.0 Large Q8_0 · GGUF".into()) } else { None })
+        (ok, if ok { Some("CUDA / CPU · 2.0 turbo · Safetensors".into()) } else { None })
     } else if c.id == "silero-vad" {
         let ok = c.markers.iter().all(|m| marker_ok(repo_root, m))
             || crate::models::resolve_silero_vad_path(repo_root).is_some_and(|p| {
@@ -1257,10 +1333,15 @@ pub fn component_status(repo_root: &Path, c: &Component) -> ComponentStatus {
             .and_then(|p| std::fs::metadata(p).ok())
             .map(|m| m.len())
             .unwrap_or(0)
-    } else if c.id == "crisperwhisper-q8" {
+    } else if c.id == "crisperwhisper-turbo" || c.id == "crisperwhisper-q8" {
         crate::models::resolve_crisperwhisper_path(&repo_root.join("models"))
-            .and_then(|p| std::fs::metadata(p).ok())
-            .map(|m| m.len())
+            .map(|p| {
+                if p.is_dir() {
+                    p.join("model.safetensors").metadata().map(|m| m.len()).unwrap_or(0)
+                } else {
+                    std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0)
+                }
+            })
             .unwrap_or(0)
     } else if c.id == "silero-vad" {
         crate::models::resolve_silero_vad_path(repo_root)
@@ -1449,6 +1530,7 @@ pub fn setup_status(repo_root: &Path) -> SetupStatus {
         let is_asr = c.id.starts_with("parakeet")
             || c.id.starts_with("whisper")
             || c.id == "qwen3-asr"
+            || c.id == "crisperwhisper-turbo"
             || c.id == "crisperwhisper-q8"
             || c.id == "transcribe-engine"
             || c.id == "langid";

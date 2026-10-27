@@ -596,7 +596,7 @@ async fn capabilities(State(st): State<AppState>) -> Json<Value> {
         "voice_modes": ["clone","autocast","auto","voice"],
         // Выбор ASR: движок (parakeet|whisper), модель Whisper, квант Whisper (compute_type).
         "selection": models::public_selection(&st.models_root),
-        "asr_engines": ["parakeet","whisper","qwen3"],
+        "asr_engines": ["parakeet","whisper","qwen3","crisperwhisper"],
         "alignment": { "languages": ["ru","en","zh","de","fr","es","it","ja","ko","pt","yue"], "ready": dub_asr::forced::verified_model_ready(&st.models_root), "component": "alignment-q8_0" },
         "whisper_models": ["tiny","base","small","medium","large-v3","large-v3-turbo"],
         // Кванты Whisper (compute_type): float16 / int8_float16 задействуют Tensor Cores на CUDA GPU.
@@ -1951,7 +1951,7 @@ async fn analyze_project(
         let missing = models::crisper_missing_components(&st.repo_root, &st.models_root);
         if !missing.is_empty() {
             let names: Vec<&'static str> = missing.iter().map(|id| match *id {
-                "crisperwhisper-q8" => "«CrisperWhisper 2.0 Large Q8_0»",
+                "crisperwhisper-turbo" | "crisperwhisper-q8" => "«CrisperWhisper 2.0 turbo»",
                 "audiocpp-engine" => "«audio.cpp движок (audiocpp_server)»",
                 "langid" => "«VoxLingua107 ECAPA (детектор языка)»",
                 "transcribe-engine" => "«transcribe.cpp рантайм»",

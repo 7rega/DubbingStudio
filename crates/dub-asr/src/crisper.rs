@@ -10,7 +10,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use audiocpp::{AudiocppClient, AudiocppServer, AudiocppServerOpts};
-use crate::segment::{segment_words, segment_words_with_diarization, Segment, Word, SEG_MAX_DUR, SEG_MAX_GAP};
+use crate::segment::{
+    clean_bracket_tag, segment_words, segment_words_with_diarization, Segment, Word, SEG_MAX_DUR,
+    SEG_MAX_GAP,
+};
 use crate::whisper_lang::whisper_code;
 use crate::{AsrEngine, AsrError, SpeakerSegment, Turn};
 
@@ -200,11 +203,19 @@ impl AsrEngine for CrisperWhisperAsr {
         Ok(transcript
             .words
             .into_iter()
-            .map(|w| Word {
-                word: w.word,
-                start: w.start,
-                end: w.end,
-                is_asr_boundary: false,
+            .filter_map(|w| {
+                // Игнорируем паразитные нулевые токены (длительность < 0.001с), возникающие на тишине
+                if (w.end - w.start) < 0.001 {
+                    return None;
+                }
+                // Очистка от неречевых тегов ([breath], [laughter], [UM], [cough] и т.д.)
+                let clean_text = clean_bracket_tag(&w.word)?;
+                Some(Word {
+                    word: clean_text,
+                    start: w.start,
+                    end: w.end,
+                    is_asr_boundary: false,
+                })
             })
             .collect())
     }

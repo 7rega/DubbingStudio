@@ -135,14 +135,84 @@ fn ends_clause(word: &str) -> bool {
     trimmed.ends_with([',', ';', ':', '-', '—', '–', '、', '，', '；', '：', '،'])
 }
 
+/// Очистить строку от разметки в квадратных скобках (например, "[breath]", "[laughter]", "[UM]").
+pub fn strip_bracket_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut depth = 0;
+    for c in s.chars() {
+        if c == '[' {
+            depth += 1;
+        } else if c == ']' {
+            if depth > 0 {
+                depth -= 1;
+            }
+        } else if depth == 0 {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Проверить и вернуть очищенный токен, если он содержит реальные буквы или цифры.
+/// Возвращает None для чисто неречевых тегов (например, "[breath]", "[laughter]") и их пунктуации.
+pub fn clean_bracket_tag(word: &str) -> Option<String> {
+    let stripped = strip_bracket_tags(word);
+    let trimmed = stripped.trim();
+    if !trimmed.chars().any(char::is_alphanumeric) {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Мягкое расширение границы конца сегмента в тишину (tail cushion):
+/// до +0.18с (180 мс) в последующую тишину, оставляя безопасный зазор не менее 50 мс
+/// до начала следующего сегмента и не выходя за лимит turns диаризации (если задан).
+pub fn apply_tail_cushion_with_limits(
+    segs: &mut [Segment],
+    limits: &[f64],
+    cushion_sec: f64,
+    min_gap_sec: f64,
+) {
+    let len = segs.len();
+    for i in 0..len {
+        let cur_end = segs[i].end;
+        let limit = limits.get(i).copied().unwrap_or(f64::MAX);
+        let max_end = if i + 1 < len {
+            segs[i + 1].start - min_gap_sec
+        } else {
+            cur_end + cushion_sec
+        };
+        let target_end = (cur_end + cushion_sec).min(max_end).min(limit);
+        if target_end > cur_end {
+            segs[i].end = target_end;
+            if let Some(last_w) = segs[i].words.last_mut() {
+                last_w.end = target_end;
+            }
+        }
+    }
+}
+
+pub fn apply_tail_cushion(segs: &mut [Segment], cushion_sec: f64, min_gap_sec: f64) {
+    apply_tail_cushion_with_limits(segs, &[], cushion_sec, min_gap_sec);
+}
+
 /// Склейка слов сегмента через пробел (эквивалент `join(" ").trim()`, без промежуточного Vec).
+/// Автоматически очищает от неречевых тегов в квадратных скобках ([breath], [laughter]).
 fn join_words(ws: &[Word]) -> String {
     let mut s = String::new();
     for x in ws {
+        let Some(clean) = clean_bracket_tag(&x.word) else {
+            continue;
+        };
+        let trimmed = clean.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
         if !s.is_empty() {
             s.push(' ');
         }
-        s.push_str(&x.word);
+        s.push_str(trimmed);
     }
     s.trim().to_string()
 }
@@ -184,15 +254,37 @@ pub fn segment_words(words: &[Word], max_gap: f64, max_dur: f64) -> Vec<Segment>
         segs.push(cur);
     }
 
-    segs.into_iter()
-        .map(|ws| Segment {
-            start: ws.first().unwrap().start,
-            end: ws.last().unwrap().end,
-            text: join_words(&ws),
-            words: ws,
-            speaker: None,
+    let mut out: Vec<Segment> = segs
+        .into_iter()
+        .filter_map(|ws| {
+            let clean_ws: Vec<Word> = ws
+                .into_iter()
+                .filter_map(|mut w| {
+                    let clean = clean_bracket_tag(&w.word)?;
+                    w.word = clean;
+                    Some(w)
+                })
+                .collect();
+            if clean_ws.is_empty() {
+                return None;
+            }
+            let text = join_words(&clean_ws);
+            if text.is_empty() || !text.chars().any(char::is_alphanumeric) {
+                return None;
+            }
+            let start = clean_ws.first().unwrap().start;
+            let end = clean_ws.last().unwrap().end;
+            Some(Segment {
+                start,
+                end,
+                text,
+                words: clean_ws,
+                speaker: None,
+            })
         })
-        .collect()
+        .collect();
+    apply_tail_cushion(&mut out, 0.18, 0.05);
+    out
 }
 
 /// Разбить поток слов на сегменты с учётом спикеров из диаризации (Word-Level Diarization):
@@ -292,37 +384,62 @@ pub fn segment_words_with_diarization(
 
     // Для каждого сегмента определяем доминантного спикера по всему интервалу [start, end].
     // Акустические пословные метки Whisper являются абсолютным авторитетом для начала и конца речи.
-    raw_segs
+    let mut turn_limits = Vec::with_capacity(raw_segs.len());
+    let mut out: Vec<Segment> = raw_segs
         .into_iter()
-        .filter(|ws| !ws.is_empty())
-        .map(|mut ws| {
-            let start = ws.first().unwrap().start;
-            let mut end = ws.last().unwrap().end;
+        .filter_map(|ws| {
+            let clean_ws: Vec<Word> = ws
+                .into_iter()
+                .filter_map(|mut w| {
+                    let clean = clean_bracket_tag(&w.word)?;
+                    w.word = clean;
+                    Some(w)
+                })
+                .collect();
+            if clean_ws.is_empty() {
+                return None;
+            }
+            let text = join_words(&clean_ws);
+            if text.is_empty() || !text.chars().any(char::is_alphanumeric) {
+                return None;
+            }
+            let start = clean_ws.first().unwrap().start;
+            let mut end = clean_ws.last().unwrap().end;
             let spk = diar_index.assign(start, end);
 
+            let mut max_allowed_end = f64::MAX;
+            if let Some(turn_end) = diar_index.active_turn_end(start, spk) {
+                max_allowed_end = turn_end + 0.20;
+            }
+
+            let mut mut_ws = clean_ws;
             // Защита от багов отдельных ASR-моделей (напр. Parakeet), когда последнее слово аномально
             // растянуто в тишину (>2.0с длительности одного слова и вылезает далеко за turn_end).
             // Обычные слова никогда не обрезаются.
-            if let Some(last_w) = ws.last_mut() {
+            if let Some(last_w) = mut_ws.last_mut() {
                 if let Some(turn_end) = diar_index.active_turn_end(start, spk) {
                     if last_w.end > turn_end + 1.0 && (last_w.end - last_w.start) > 2.0 {
                         let clamped = (turn_end + 0.20).max(last_w.start + 0.30);
                         if clamped < last_w.end {
                             last_w.end = clamped;
                             end = clamped;
+                            max_allowed_end = clamped;
                         }
                     }
                 }
             }
-            Segment {
+            turn_limits.push(max_allowed_end);
+            Some(Segment {
                 start,
                 end,
-                text: join_words(&ws),
-                words: ws,
+                text,
+                words: mut_ws,
                 speaker: Some(spk.to_string()),
-            }
+            })
         })
-        .collect()
+        .collect();
+    apply_tail_cushion_with_limits(&mut out, &turn_limits, 0.18, 0.05);
+    out
 }
 
 #[cfg(test)]
@@ -486,5 +603,41 @@ mod tests {
         assert_eq!(segs[0].text, "There!");
         assert!(segs[0].end <= 15.5, "Конец реплики должен быть притянут к turn.end (<=15.5с), факт: {}", segs[0].end);
         assert!(segs[0].words[0].end <= 15.5, "Конец слова также должен быть ограничен, факт: {}", segs[0].words[0].end);
+    }
+
+    #[test]
+    fn bracket_tags_cleaned_and_empty_dropped() {
+        assert_eq!(clean_bracket_tag("[breath]"), None);
+        assert_eq!(clean_bracket_tag("[laughter]"), None);
+        assert_eq!(clean_bracket_tag("[UM]"), None);
+        assert_eq!(clean_bracket_tag("[sigh]!"), None);
+        assert_eq!(clean_bracket_tag("Hello"), Some("Hello".to_string()));
+        assert_eq!(clean_bracket_tag("[breath]world."), Some("world.".to_string()));
+
+        let words = vec![
+            w("[laughter]", 0.0, 0.4),
+            w("Hello", 0.5, 0.8),
+            w("[breath]", 0.85, 1.0),
+            w("world.", 1.05, 1.4),
+        ];
+        let segs = segment_words(&words, 0.8, 15.0);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].text, "Hello world.");
+    }
+
+    #[test]
+    fn tail_cushion_expands_into_silence() {
+        let words = vec![
+            w("First", 0.0, 0.5),
+            w("sentence.", 0.5, 1.0),
+            w("Second", 2.0, 2.5),
+            w("sentence.", 2.5, 3.0),
+        ];
+        let segs = segment_words(&words, 0.8, 15.0);
+        assert_eq!(segs.len(), 2);
+        // Первый сегмент расширяется на +180 мс (1.0 -> 1.18), не доходя до 2.0с
+        assert!((segs[0].end - 1.18).abs() < 0.001);
+        // Второй (последний) сегмент тоже расширяется на +180 мс (3.0 -> 3.18)
+        assert!((segs[1].end - 3.18).abs() < 0.001);
     }
 }

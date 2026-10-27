@@ -134,7 +134,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "nemotron-q8_0" => vec![("diar_model", "nemotron-q8_0".into())],
         "alignment-q8_0" => vec![("align_model", "q8_0".into())],
         "qwen3-asr" => vec![("asr_engine", "qwen3".into())],
-        "crisperwhisper-q8" => vec![("asr_engine", "crisperwhisper".into())],
+        "crisperwhisper-turbo" | "crisperwhisper-q8" => vec![("asr_engine", "crisperwhisper".into())],
         _ => vec![],
     }
 }
@@ -705,7 +705,7 @@ impl AsrChoice {
                 format!("Qwen3 ASR (audiocpp, backend={backend})")
             }
             AsrChoice::CrisperWhisper { backend, mode, .. } => {
-                format!("CrisperWhisper 2.0 Large Q8_0 (audio.cpp, backend={backend}, mode={mode})")
+                format!("CrisperWhisper 2.0 turbo (audio.cpp, backend={backend}, mode={mode})")
             }
         }
     }
@@ -821,14 +821,27 @@ pub fn qwen3_missing_components(repo_root: &Path, mroot: &Path) -> Vec<&'static 
     missing
 }
 
-/// Поиск GGUF-модели CrisperWhisper 2.0 Large Q8_0.
+/// Поиск модели CrisperWhisper 2.0 turbo (Safetensors) или legacy GGUF.
 pub fn resolve_crisperwhisper_path(mroot: &Path) -> Option<PathBuf> {
     if let Ok(env) = std::env::var("DUB_STUDIO_CRISPERWHISPER_MODEL") {
         let p = PathBuf::from(env);
-        if p.is_file() {
+        if p.join("model.safetensors").is_file() || p.is_file() {
             return Some(p);
         }
     }
+    // 1. Приоритет: официальная папка модели crisperwhisper2-turbo (Safetensors)
+    let turbo_dirs = [
+        mroot.join("crisperwhisper2-turbo"),
+        mroot.join("models").join("crisperwhisper2-turbo"),
+        mroot.join("crisperwhisper"),
+        mroot.join("models").join("crisperwhisper"),
+    ];
+    for d in &turbo_dirs {
+        if d.join("model.safetensors").is_file() {
+            return Some(d.clone());
+        }
+    }
+    // 2. Fallback на legacy GGUF
     let filename = "crisperwhisper-2-large-q8_0.gguf";
     let candidates = [
         mroot.join("crisperwhisper").join(filename),
@@ -908,7 +921,7 @@ pub fn crisper_missing_components(repo_root: &Path, mroot: &Path) -> Vec<&'stati
         missing.push("audiocpp-engine");
     }
     if resolve_crisperwhisper_path(mroot).is_none() {
-        missing.push("crisperwhisper-q8");
+        missing.push("crisperwhisper-turbo");
     }
     if resolve_transcribe_engine_dll(mroot).is_none() {
         missing.push("transcribe-engine");
