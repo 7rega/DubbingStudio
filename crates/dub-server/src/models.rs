@@ -134,6 +134,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "nemotron-q8_0" => vec![("diar_model", "nemotron-q8_0".into())],
         "alignment-q8_0" => vec![("align_model", "q8_0".into())],
         "qwen3-asr" => vec![("asr_engine", "qwen3".into())],
+        "crisperwhisper-q8" => vec![("asr_engine", "crisperwhisper".into())],
         _ => vec![],
     }
 }
@@ -198,6 +199,7 @@ pub fn is_selection_key(key: &str) -> bool {
             // Whisper extra
             | "whisper_executable"
             | "whisper_xxl_args"
+            | "crisper_mode"
             // Quality & switches
             | "auto_cast_on"
             | "vision_on"
@@ -674,6 +676,14 @@ pub enum AsrChoice {
         vad_model: PathBuf,
         backend: String,
     },
+    CrisperWhisper {
+        server_bin: PathBuf,
+        model_path: PathBuf,
+        tcpp_dll: PathBuf,
+        langid_model: PathBuf,
+        backend: String,
+        mode: String,
+    },
 }
 
 impl AsrChoice {
@@ -693,6 +703,9 @@ impl AsrChoice {
             }
             AsrChoice::Qwen3 { backend, .. } => {
                 format!("Qwen3 ASR (audiocpp, backend={backend})")
+            }
+            AsrChoice::CrisperWhisper { backend, mode, .. } => {
+                format!("CrisperWhisper 2.0 Large Q8_0 (audio.cpp, backend={backend}, mode={mode})")
             }
         }
     }
@@ -808,9 +821,132 @@ pub fn qwen3_missing_components(repo_root: &Path, mroot: &Path) -> Vec<&'static 
     missing
 }
 
-/// Резолв активного ASR: если выбран qwen3 И все компоненты на диске — Qwen3 ASR;
+/// Поиск GGUF-модели CrisperWhisper 2.0 Large Q8_0.
+pub fn resolve_crisperwhisper_path(mroot: &Path) -> Option<PathBuf> {
+    if let Ok(env) = std::env::var("DUB_STUDIO_CRISPERWHISPER_MODEL") {
+        let p = PathBuf::from(env);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let filename = "crisperwhisper-2-large-q8_0.gguf";
+    let candidates = [
+        mroot.join("crisperwhisper").join(filename),
+        mroot.join("models").join("crisperwhisper").join(filename),
+        mroot.join(filename),
+    ];
+    for c in &candidates {
+        if c.is_file() {
+            return Some(c.clone());
+        }
+    }
+    None
+}
+
+/// Поиск рантайма transcribe.cpp (transcribe_engine.dll).
+pub fn resolve_transcribe_engine_dll(mroot: &Path) -> Option<PathBuf> {
+    if let Ok(env) = std::env::var("DUB_STUDIO_TRANSCRIBE_ENGINE") {
+        let p = PathBuf::from(env);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let name = if cfg!(windows) { "transcribe_engine.dll" } else { "libtranscribe_engine.so" };
+    let candidates = [
+        mroot.join("transcribe-engine").join(name),
+        mroot.join("models").join("transcribe-engine").join(name),
+        mroot.join(name),
+    ];
+    for c in &candidates {
+        if c.is_file() {
+            return Some(c.clone());
+        }
+    }
+    None
+}
+
+/// Поиск модели VoxLingua107 ECAPA (GGUF).
+pub fn resolve_langid_model_path(mroot: &Path) -> Option<PathBuf> {
+    if let Ok(env) = std::env::var("DUB_STUDIO_LANGID_MODEL") {
+        let p = PathBuf::from(env);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let filename = "lang-id-voxlingua107-ecapa-Q8_0.gguf";
+    let candidates = [
+        mroot.join("langid-voxlingua107").join(filename),
+        mroot.join("models").join("langid-voxlingua107").join(filename),
+        mroot.join(filename),
+    ];
+    for c in &candidates {
+        if c.is_file() {
+            return Some(c.clone());
+        }
+    }
+    None
+}
+
+/// Поиск бинарника audiocpp_server.exe.
+pub fn resolve_audiocpp_server_bin(repo_root: &Path, mroot: &Path) -> Option<PathBuf> {
+    let p = audiocpp::resolve_audiocpp_bin(repo_root);
+    if p.is_file() {
+        return Some(p);
+    }
+    let p = audiocpp::resolve_audiocpp_bin(mroot);
+    if p.is_file() {
+        return Some(p);
+    }
+    None
+}
+
+/// Список недостающих компонентов для CrisperWhisper ASR (id из setup::manifest).
+pub fn crisper_missing_components(repo_root: &Path, mroot: &Path) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    let srv = resolve_audiocpp_server_bin(repo_root, mroot);
+    if srv.is_none() {
+        missing.push("audiocpp-engine");
+    }
+    if resolve_crisperwhisper_path(mroot).is_none() {
+        missing.push("crisperwhisper-q8");
+    }
+    if resolve_transcribe_engine_dll(mroot).is_none() {
+        missing.push("transcribe-engine");
+    }
+    if resolve_langid_model_path(mroot).is_none() {
+        missing.push("langid");
+    }
+    missing
+}
+
+/// Резолв активного ASR: если выбран crisperwhisper И модель на диске — CrisperWhisper;
+/// если выбран qwen3 И все компоненты на диске — Qwen3 ASR;
 /// если выбран движок whisper И бинарь+модель на диске — Whisper; иначе — Parakeet.
 pub fn resolve_asr_choice(repo_root: &Path, mroot: &Path, sel: &Value) -> AsrChoice {
+    if pick(sel, "asr_engine") == Some("crisperwhisper") {
+        let server_bin = resolve_audiocpp_server_bin(repo_root, mroot);
+        let model_path = resolve_crisperwhisper_path(mroot);
+        let tcpp_dll = resolve_transcribe_engine_dll(mroot);
+        let langid_model = resolve_langid_model_path(mroot);
+        if let (Some(server_bin), Some(model_path)) = (server_bin, model_path) {
+            let backend = if stage_backend(mroot, "asr_backend") == "cpu" {
+                "cpu".to_string()
+            } else {
+                "gpu".to_string()
+            };
+            let mode = pick(sel, "crisper_mode").unwrap_or("verbatim").to_string();
+            let tcpp_dll = tcpp_dll.unwrap_or_else(|| mroot.join("transcribe-engine/transcribe_engine.dll"));
+            let langid_model = langid_model.unwrap_or_else(|| mroot.join("langid-voxlingua107/lang-id-voxlingua107-ecapa-Q8_0.gguf"));
+            return AsrChoice::CrisperWhisper {
+                server_bin,
+                model_path,
+                tcpp_dll,
+                langid_model,
+                backend,
+                mode,
+            };
+        }
+    }
     if pick(sel, "asr_engine") == Some("qwen3") {
         let cli = dub_asr::forced::resolve_audiocpp_cli(repo_root)
             .or_else(|| dub_asr::forced::resolve_audiocpp_cli(mroot));
@@ -908,6 +1044,9 @@ pub fn build_engine(choice: &AsrChoice) -> Box<dyn dub_asr::AsrEngine> {
         }
         AsrChoice::Qwen3 { cli, asr_model, aligner_model, vad_model, backend } => {
             Box::new(dub_asr::Qwen3Asr::new(cli, asr_model, aligner_model, vad_model, backend))
+        }
+        AsrChoice::CrisperWhisper { server_bin, model_path, tcpp_dll, langid_model, backend, mode } => {
+            Box::new(dub_asr::CrisperWhisperAsr::new(server_bin, model_path, tcpp_dll, langid_model, backend, mode))
         }
     }
 }

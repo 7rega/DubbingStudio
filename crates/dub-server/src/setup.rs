@@ -728,6 +728,60 @@ pub fn manifest() -> Vec<Component> {
             external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
         },
         Component {
+            id: "crisperwhisper-q8",
+            name: "CrisperWhisper 2.0 Large Q8_0",
+            purpose: "Распознавание речи на 99 языках с пословными таймкодами (audio.cpp GGUF Q8_0)",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: 1_716_306_528,
+            files: &[
+                FileSpec {
+                    url: "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/CrisperWhisper2.0-GGUF/crisperwhisper-2-large-q8_0.gguf?download=true",
+                    dest_rel: "models/crisperwhisper/crisperwhisper-2-large-q8_0.gguf",
+                    size: 1_716_306_528,
+                    extract: Extract::None,
+                },
+            ],
+            markers: &[Marker { rel: "models/crisperwhisper/crisperwhisper-2-large-q8_0.gguf", expect: 1_716_306_528 }],
+            external_url: Some("https://huggingface.co/audio-cpp/audio.cpp-gguf"),
+        },
+        Component {
+            id: "transcribe-engine",
+            name: "transcribe.cpp (CUDA)",
+            purpose: "Движок распознавания речи и языка VoxLingua107 (CUDA)",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: 144_430_592,
+            files: &[
+                FileSpec {
+                    url: "https://github.com/timoncool/transcribe.cpp/releases/download/engine-0.1.4/transcribe_engine.dll",
+                    dest_rel: "models/transcribe-engine/transcribe_engine.dll",
+                    size: 144_430_592,
+                    extract: Extract::None,
+                },
+            ],
+            markers: &[Marker { rel: "models/transcribe-engine/transcribe_engine.dll", expect: 144_430_592 }],
+            external_url: Some("https://github.com/timoncool/transcribe.cpp"),
+        },
+        Component {
+            id: "langid",
+            name: "VoxLingua107 ECAPA (Q8_0, transcribe.cpp)",
+            purpose: "Определение языка речи: язык оригинала «авто» для CrisperWhisper",
+            requirement: Requirement::Optional,
+            delivery: Delivery::Download,
+            size: 26_693_632,
+            files: &[
+                FileSpec {
+                    url: "https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/e59f0f3847e77723b7d58447ef9456fa0c7e9436/lang-id-voxlingua107-ecapa-Q8_0.gguf",
+                    dest_rel: "models/langid-voxlingua107/lang-id-voxlingua107-ecapa-Q8_0.gguf",
+                    size: 26_693_632,
+                    extract: Extract::None,
+                },
+            ],
+            markers: &[Marker { rel: "models/langid-voxlingua107/lang-id-voxlingua107-ecapa-Q8_0.gguf", expect: 26_693_632 }],
+            external_url: Some("https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf"),
+        },
+        Component {
             id: "sortformer",
             name: "Sortformer v2 (диаризация)",
             purpose: "Разделение спикеров (кто когда говорит)",
@@ -1160,6 +1214,12 @@ pub fn component_status(repo_root: &Path, c: &Component) -> ComponentStatus {
                 p.metadata().map(|m| m.len() >= 2_400_000_000).unwrap_or(false)
             });
         (ok, if ok { Some("CUDA / CPU · 1.7B Q8_0 · GGUF".into()) } else { None })
+    } else if c.id == "crisperwhisper-q8" {
+        let ok = c.markers.iter().all(|m| marker_ok(repo_root, m))
+            || crate::models::resolve_crisperwhisper_path(&repo_root.join("models")).is_some_and(|p| {
+                p.metadata().map(|m| m.len() >= 1_700_000_000).unwrap_or(false)
+            });
+        (ok, if ok { Some("CUDA / CPU · 2.0 Large Q8_0 · GGUF".into()) } else { None })
     } else if c.id == "silero-vad" {
         let ok = c.markers.iter().all(|m| marker_ok(repo_root, m))
             || crate::models::resolve_silero_vad_path(repo_root).is_some_and(|p| {
@@ -1194,6 +1254,11 @@ pub fn component_status(repo_root: &Path, c: &Component) -> ComponentStatus {
         dir_size(&repo_root.join("tools").join("Faster-Whisper-XXL"))
     } else if c.id == "qwen3-asr" {
         crate::models::resolve_qwen3_asr_path(&repo_root.join("models"))
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .unwrap_or(0)
+    } else if c.id == "crisperwhisper-q8" {
+        crate::models::resolve_crisperwhisper_path(&repo_root.join("models"))
             .and_then(|p| std::fs::metadata(p).ok())
             .map(|m| m.len())
             .unwrap_or(0)
@@ -1381,7 +1446,12 @@ pub fn setup_status(repo_root: &Path) -> SetupStatus {
         }
         let is_gemma = c.id.starts_with("gemma") || c.id == "llama";
         let is_higgs = c.id.starts_with("higgs");
-        let is_asr = c.id.starts_with("parakeet") || c.id.starts_with("whisper") || c.id == "qwen3-asr";
+        let is_asr = c.id.starts_with("parakeet")
+            || c.id.starts_with("whisper")
+            || c.id == "qwen3-asr"
+            || c.id == "crisperwhisper-q8"
+            || c.id == "transcribe-engine"
+            || c.id == "langid";
         if (cloud_llm && is_gemma) || (cloud_tts && is_higgs) || (cloud_asr && is_asr) {
             c.requirement = Requirement::Optional;
         }

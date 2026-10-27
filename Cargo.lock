@@ -889,6 +889,7 @@ dependencies = [
 name = "dub-asr"
 version = "5.0.0"
 dependencies = [
+ "audiocpp",
  "blake3",
  "hound",
  "ort",

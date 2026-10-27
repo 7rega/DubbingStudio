@@ -93,6 +93,7 @@ const VARIANT_SLOT: Record<string, [string, string]> = {
   "nemotron-bf16": ["diar_model", "nemotron-bf16"],
   "nemotron-q8_0": ["diar_model", "nemotron-q8_0"],
   "qwen3-asr": ["asr_engine", "qwen3"],
+  "crisperwhisper-q8": ["asr_engine", "crisperwhisper"],
 };
 // Какой из ids сейчас активен по выбору (active.json из capabilities.selection).
 const activeVariantId = (ids: string[], sel: Selection): string | undefined =>
@@ -128,6 +129,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
   const [whisperCompute, setWhisperCompute] = useState<string>("int8");
   const [whisperExecutable, setWhisperExecutable] = useState<string>("standard");
   const [xxlArgs, setXxlArgs] = useState<string>("");
+  const [crisperMode, setCrisperMode] = useState<string>("verbatim");
   // Выбор варианта в дропдаунах поднят СЮДА (а не в локальный useState VariantPicker) — иначе ре-рендер
   // секции ремаунтил пикер и сбрасывал выбор на дефолт. Ключ = ids[0] группы.
   const [picks, setPicks] = useState<Record<string, string>>({});
@@ -143,6 +145,7 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
     setWhisperCompute(slot(s, "whisper_compute") ?? "int8");
     setWhisperExecutable(slot(s, "whisper_executable") ?? "standard");
     setXxlArgs(slot(s, "whisper_xxl_args") ?? "");
+    setCrisperMode(slot(s, "crisper_mode") ?? "verbatim");
   }).catch(() => {});
   const refresh = () => { refreshStatus().catch(() => {}); loadCap(); };
   useEffect(() => { refresh(); }, []);
@@ -165,6 +168,13 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
     setErr(null);
     try {
       const ids = [id];
+      if (id === "crisperwhisper-q8") {
+        for (const dep of ["audiocpp-engine", "langid", "transcribe-engine"]) {
+          if (get(dep) && !get(dep)?.installed && !ids.includes(dep)) {
+            ids.push(dep);
+          }
+        }
+      }
       if (id === "qwen3-asr") {
         for (const dep of ["audiocpp-engine", "alignment-q8_0", "silero-vad"]) {
           if (get(dep) && !get(dep)?.installed && !ids.includes(dep)) {
@@ -458,9 +468,15 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
         )}
       </Group>
       <Group label={t("settings.roleAsr")}>
-        {/* Движок ASR: Parakeet-TDT (GPU, дефолт) / Qwen3 ASR (audio.cpp) / Whisper (локально, CPU) / OpenRouter (облако). */}
+        {/* Движок ASR: Parakeet-TDT (GPU, дефолт) / CrisperWhisper (audio.cpp) / Qwen3 ASR (audio.cpp) / Whisper (локально, CPU) / OpenRouter (облако). */}
         <div className="flex gap-1.5 mb-2">
-          {[{ id: "parakeet", label: "Parakeet-TDT", cloud: false }, { id: "qwen3", label: "Qwen3 ASR", cloud: false }, { id: "whisper", label: "Whisper", cloud: false }, { id: "openrouter", label: "OpenRouter", cloud: true }].map((e) => {
+          {[
+            { id: "parakeet", label: "Parakeet-TDT", cloud: false },
+            { id: "crisperwhisper", label: "CrisperWhisper", cloud: false },
+            { id: "qwen3", label: "Qwen3 ASR", cloud: false },
+            { id: "whisper", label: "Whisper", cloud: false },
+            { id: "openrouter", label: "OpenRouter", cloud: true },
+          ].map((e) => {
             const asrCloud = selv("or_asr_on") === "1";
             const active = e.cloud ? asrCloud : (!asrCloud && asrEngine === e.id);
             const dis = e.cloud && !hasOrKey;
@@ -493,6 +509,77 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
           <div className={`${orRowCls} space-y-2`}>
             {orModelSelect("asr", "or_asr", t("providers.pickAsrModel"))}
             <div className="text-[11px] text-[var(--color-muted)]">Транскрипция через облако — тяжёлые локальные ASR-модели качать не нужно.</div>
+          </div>
+        ) : asrEngine === "crisperwhisper" ? (
+          <div className="space-y-2">
+            <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08] flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-[12px] font-medium text-[var(--color-text)]">
+                  CrisperWhisper 2.0 Large + VoxLingua107
+                </div>
+                <div className="mono text-[10px] text-[var(--color-muted)] leading-tight mt-0.5">
+                  {crisperMode === "intended"
+                    ? "Режим Intended: очищенный литературный текст без слов-паразитов и запинок."
+                    : "Режим Verbatim: 100% дословный текст без пропуска запинок (нарезка и точность WhisperXXL)."}
+                </div>
+              </div>
+              <div className="flex bg-[#12141a] p-0.5 rounded-lg border border-white/[0.10] shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCrisperMode("verbatim");
+                    setSel("crisper_mode", "verbatim");
+                  }}
+                  className={`px-3 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                    crisperMode !== "intended"
+                      ? "bg-[#3e5628] text-[#c4f082] shadow-sm font-semibold"
+                      : "text-[var(--color-muted)] hover:text-white"
+                  }`}
+                >
+                  Verbatim
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCrisperMode("intended");
+                    setSel("crisper_mode", "intended");
+                  }}
+                  className={`px-3 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                    crisperMode === "intended"
+                      ? "bg-[#3e5628] text-[#c4f082] shadow-sm font-semibold"
+                      : "text-[var(--color-muted)] hover:text-white"
+                  }`}
+                >
+                  Intended
+                </button>
+              </div>
+            </div>
+            {(() => {
+              const crisperDeps = ["crisperwhisper-q8", "audiocpp-engine", "langid", "transcribe-engine"];
+              const missingDeps = crisperDeps.filter((id) => get(id) && !get(id)?.installed);
+              if (missingDeps.length > 0) {
+                return (
+                  <div className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-medium text-amber-200">Не установлены компоненты для CrisperWhisper ({missingDeps.length})</div>
+                      <div className="mono text-[10px] text-amber-300/70 truncate">Требуются: {missingDeps.join(", ")}</div>
+                    </div>
+                    <button
+                      onClick={() => dl("crisperwhisper-q8")}
+                      disabled={isDownloading}
+                      className="shrink-0 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 text-[11px] font-medium transition-colors disabled:opacity-50"
+                    >
+                      Скачать всё
+                    </button>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+            {rowOf("crisperwhisper-q8")}
+            {rowOf("audiocpp-engine")}
+            {rowOf("langid")}
+            {rowOf("transcribe-engine")}
           </div>
         ) : asrEngine === "qwen3" ? (
           <div className="space-y-2">
@@ -10896,7 +10983,13 @@ export default function App() {
     if (sel.mcp_on !== undefined) {
       useStore.getState().setMcpEnabled(sel.mcp_on !== "0");
     }
-    const asrLabel = sel.asr_engine === "qwen3" ? "Qwen3 ASR" : sel.asr_engine === "whisper" ? `whisper ${sel.whisper_model || "auto"}` : (sel.asr === "ultra" ? "Parakeet Ultra" : c.asr_model);
+    const asrLabel = sel.asr_engine === "crisperwhisper"
+      ? `CrisperWhisper 2.0 Large (${sel.crisper_mode || "verbatim"})`
+      : sel.asr_engine === "qwen3"
+      ? "Qwen3 ASR"
+      : sel.asr_engine === "whisper"
+      ? `whisper ${sel.whisper_model || "auto"}`
+      : (sel.asr === "ultra" ? "Parakeet Ultra" : c.asr_model);
     const parts = [c.device, `ASR ${asrLabel}`];
     if (c.models?.llm) parts.push(`MT+vision ${base(c.models.llm)}`);
     if (c.models?.tts) parts.push(`TTS ${c.models.tts}${c.tts_quant ? ` ${c.tts_quant}` : ""}`);

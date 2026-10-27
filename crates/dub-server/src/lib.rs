@@ -770,6 +770,15 @@ fn ensure_job_components(
         }
     }
 
+    // ASR CrisperWhisper: audiocpp-engine + crisperwhisper-q8 + transcribe-engine + langid
+    if asr_engine == Some("crisperwhisper") {
+        for id in models::crisper_missing_components(repo_root, models_root) {
+            if !need.iter().any(|x| x == id) {
+                need.push(id.to_string());
+            }
+        }
+    }
+
     if need.is_empty() {
         return Ok(());
     }
@@ -1935,6 +1944,22 @@ async fn analyze_project(
             return (
                 StatusCode::CONFLICT,
                 format!("QWEN_COMPONENTS_MISSING: Для распознавания Qwen ASR необходимо установить: {}. Перейдите в меню «Модели и компоненты» для их установки.", names.join(", "))
+            ).into_response();
+        }
+    }
+    if models::pick(&sel, "asr_engine") == Some("crisperwhisper") && !models::openrouter_asr_on(&st.models_root) {
+        let missing = models::crisper_missing_components(&st.repo_root, &st.models_root);
+        if !missing.is_empty() {
+            let names: Vec<&'static str> = missing.iter().map(|id| match *id {
+                "crisperwhisper-q8" => "«CrisperWhisper 2.0 Large Q8_0»",
+                "audiocpp-engine" => "«audio.cpp движок (audiocpp_server)»",
+                "langid" => "«VoxLingua107 ECAPA (детектор языка)»",
+                "transcribe-engine" => "«transcribe.cpp рантайм»",
+                _ => *id,
+            }).collect();
+            return (
+                StatusCode::CONFLICT,
+                format!("CRISPER_COMPONENTS_MISSING: Для распознавания CrisperWhisper необходимо установить: {}. Перейдите в меню «Модели и компоненты» для их установки.", names.join(", "))
             ).into_response();
         }
     }

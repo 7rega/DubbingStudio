@@ -55,12 +55,14 @@ fn tail_text(tail: &LogTail) -> String {
 }
 
 /// Параметры запуска сайдкар-сервера audiocpp_server.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AudiocppServerOpts {
     pub bin: PathBuf,
     pub model_path: PathBuf,
     pub model_family: String,
     pub model_id: String,
+    pub task: String,
+    pub default_request_options: Option<serde_json::Value>,
     pub backend: String,
     pub device: i32,
     pub threads: i32,
@@ -74,6 +76,8 @@ impl AudiocppServerOpts {
             model_path: model_path.into(),
             model_family: "higgs".to_string(),
             model_id: "higgs".to_string(),
+            task: "tts".to_string(),
+            default_request_options: None,
             backend: "cuda".to_string(),
             device: 0,
             threads: 4,
@@ -233,6 +237,118 @@ impl AudiocppClient {
         let (samples, sr) = decode_wav_mono_f32(&wav_bytes)?;
         Ok((samples, sr, wav_bytes))
     }
+
+    /// Транскрибация речи через POST /v1/audio/transcriptions/details.
+    pub fn transcribe_details(
+        &self,
+        model_id: &str,
+        wav_path: &Path,
+        language: Option<&str>,
+        prompt: Option<&str>,
+        mode: &str,
+    ) -> Result<Transcript, AudiocppServerError> {
+        let url = format!("{}/v1/audio/transcriptions/details", self.base_url);
+
+        let mut body = serde_json::json!({
+            "model": model_id,
+            "audio": wav_path.to_string_lossy().to_string(),
+            "options": {
+                "transcription_mode": mode,
+                "return_timestamps": true
+            }
+        });
+
+        if let Some(l) = language {
+            if !l.trim().is_empty() {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("language".to_string(), serde_json::json!(l.trim()));
+            }
+        }
+
+        if let Some(p) = prompt {
+            if !p.trim().is_empty() {
+                body.as_object_mut()
+                    .unwrap()
+                    .insert("text".to_string(), serde_json::json!(p.trim()));
+            }
+        }
+
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .timeout(Duration::from_secs(600))
+            .send()
+            .map_err(|e| AudiocppServerError::Http(format!("POST /v1/audio/transcriptions/details: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let err_txt = resp.text().unwrap_or_default();
+            return Err(AudiocppServerError::Api(format!(
+                "HTTP {status} при транскрибации {model_id}: {err_txt}"
+            )));
+        }
+
+        let val: serde_json::Value = resp
+            .json()
+            .map_err(|e| AudiocppServerError::Api(format!("декодирование ответа JSON транскрибации: {e}")))?;
+
+        let text = val.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let lang = val.get("language").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let sample_rate = val.get("sample_rate").and_then(|v| v.as_f64()).unwrap_or(16000.0);
+        let sr = if sample_rate > 0.0 { sample_rate } else { 16000.0 };
+
+        let mut words = Vec::new();
+        if let Some(items) = val.get("words").and_then(|v| v.as_array()) {
+            for item in items {
+                let w_text = item
+                    .get("word")
+                    .or_else(|| item.get("text"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if w_text.is_empty() {
+                    continue;
+                }
+                let start_sample = item.get("start_sample").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let end_sample = item.get("end_sample").and_then(|v| v.as_f64()).unwrap_or(start_sample);
+                let conf = item.get("confidence").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                let start = start_sample / sr;
+                let end = (end_sample / sr).max(start);
+                words.push(TranscriptWord {
+                    word: w_text,
+                    start,
+                    end,
+                    confidence: conf,
+                });
+            }
+        }
+
+        Ok(Transcript {
+            text,
+            language: lang,
+            words,
+        })
+    }
+}
+
+/// Распознанное слово с пословными таймкодами (секунды).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TranscriptWord {
+    pub word: String,
+    pub start: f64,
+    pub end: f64,
+    pub confidence: f32,
+}
+
+/// Результат транскрибации с пословными таймкодами.
+#[derive(Clone, Debug, Default)]
+pub struct Transcript {
+    pub text: String,
+    pub language: Option<String>,
+    pub words: Vec<TranscriptWord>,
 }
 
 /// Управляемый процесс сайдкар-сервера audiocpp_server.
@@ -244,6 +360,16 @@ pub struct AudiocppServer {
     drain_handles: Vec<std::thread::JoinHandle<()>>,
     config_path: PathBuf,
     pub opts: AudiocppServerOpts,
+}
+
+impl std::fmt::Debug for AudiocppServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AudiocppServer")
+            .field("port", &self.port)
+            .field("config_path", &self.config_path)
+            .field("opts", &self.opts)
+            .finish()
+    }
 }
 
 impl AudiocppServer {
@@ -301,13 +427,16 @@ impl AudiocppServer {
         let _ = std::fs::create_dir_all(&config_dir);
         let config_path = config_dir.join(format!("server_{port}.json"));
 
-        let model_entry = serde_json::json!({
+        let mut model_entry = serde_json::json!({
             "id": opts.model_id,
             "family": opts.model_family,
             "path": opts.model_path.to_string_lossy().to_string(),
-            "task": "tts",
+            "task": opts.task,
             "mode": "offline"
         });
+        if let Some(def_opts) = &opts.default_request_options {
+            model_entry["default_request_options"] = def_opts.clone();
+        }
 
         let cfg = serde_json::json!({
             "host": "127.0.0.1",

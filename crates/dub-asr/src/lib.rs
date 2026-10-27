@@ -29,6 +29,9 @@ pub use speaker_global::{
 pub use whisper::WhisperAsr;
 pub mod qwen3;
 pub use qwen3::Qwen3Asr;
+pub mod whisper_lang;
+pub mod crisper;
+pub use crisper::CrisperWhisperAsr;
 pub use window::{
     detect_active_spans, merge_windows, plan_windows, speech_envelope, Window, WindowConfig,
 };

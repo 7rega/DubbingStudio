@@ -7,6 +7,7 @@
 mod engine;
 pub mod job_object;
 pub mod server;
+pub mod tcpp;
 
 pub use engine::{
     add_dll_directory, backend_id, AudioChunkCallback, AudioResult, Engine, EngineError, ModelInfo,
