@@ -1,5 +1,5 @@
 //! Whisper-движок ASR как альтернатива Parakeet: обёртка над standalone-бинарём Purfview
-//! (whisper-standalone-win, faster-whisper на CTranslate2). Запускаем `whisper-faster.exe` сабпроцессом,
+//! (Faster-Whisper-XXL на CTranslate2). Запускаем `faster-whisper-xxl.exe` сабпроцессом,
 //! просим `--output_format json --word_timestamps True`, парсим словные таймстемпы -> те же Word/Segment,
 //! что у Parakeet (единый контракт сегментации `segment_words`). Так пользователь может выбрать движок
 //! ASR (Parakeet/Whisper), РАЗНЫЕ модели (tiny…large-v3/turbo) и РАЗНЫЕ кванты (compute_type).
@@ -19,7 +19,7 @@ const PAR_MIN_DUR: f64 = 600.0;
 const PAR_WIN_SECS: f64 = 300.0;
 /// Радиус поиска самой тихой точки вокруг номинальной границы окна (smart-split из transcribe-rs), сек.
 const PAR_SEARCH_SECS: f64 = 8.0;
-/// Максимум одновременных сабпроцессов whisper-faster (CPU-инференс; больше — RAM×N и диминишинг).
+/// Максимум одновременных сабпроцессов Whisper (CPU-инференс; больше — RAM×N и диминишинг).
 const PAR_MAX_WORKERS: usize = 4;
 
 /// Длительность WAV по заголовку (сек) — дёшево, без чтения сэмплов.
@@ -74,11 +74,11 @@ fn quietest_near(samples: &[f32], sr: usize, nominal: usize, search_secs: f64) -
 /// на каждый вызов (бинарь — отдельный процесс, состояние между вызовами не держим).
 ///
 /// `Clone` дёшев (только пути/строки) — нужен для ПАРАЛЛЕЛЬНОГО оконного прогона: каждое окно
-/// транскрибируется отдельным сабпроцессом `whisper-faster.exe` в своём потоке (движок CPU-bound,
+/// транскрибируется отдельным сабпроцессом `faster-whisper-xxl.exe` в своём потоке (движок CPU-bound,
 /// монолитный прогон простаивал ядра). Общего состояния между вызовами нет — распараллеливание тривиально.
 #[derive(Clone)]
 pub struct WhisperAsr {
-    /// Путь к whisper-faster.exe.
+    /// Путь к faster-whisper-xxl.exe.
     bin: PathBuf,
     /// Каталог с моделями (внутри — `faster-whisper-<size>`).
     model_dir: PathBuf,
@@ -133,7 +133,7 @@ impl WhisperAsr {
         self.run_words_windowed(wav, lang)
     }
 
-    /// ПАРАЛЛЕЛЬНЫЙ оконный прогон длинного файла (PARALLEL_FINDINGS §1-2). Наш whisper-faster.exe
+    /// ПАРАЛЛЕЛЬНЫЙ оконный прогон длинного файла (PARALLEL_FINDINGS §1-2). Сабпроцесс
     /// v1.0.1 НЕ имеет `--batched` (проверено --help; флаг появился в XXL r239.1), а движок у нас
     /// CPU-bound (device=cpu из настроек) и монолитный прогон простаивает ядра. Поэтому параллель =
     /// N НЕЗАВИСИМЫХ сабпроцессов по окнам ~PAR_WIN_SECS: для CPU-инференса «VRAM ×N» из ресёрча не
@@ -233,7 +233,7 @@ impl WhisperAsr {
         Ok(all)
     }
 
-    /// Прогнать whisper-faster.exe на WAV, вернуть словный поток (абсолютные секунды). lang="auto" ->
+    /// Прогнать faster-whisper-xxl.exe на WAV, вернуть словный поток (абсолютные секунды). lang="auto" ->
     /// авто-детект (флаг --language не передаём). Оффлайн: HF_HUB_OFFLINE=1, модель из --model_dir.
     /// `threads`: Some(n) -> явный `--threads n` (оконная параллель делит ядра); None -> дефолт движка
     /// (короткий путь БЕЗ изменений — паритет).
@@ -267,31 +267,20 @@ impl WhisperAsr {
             .arg("--word_timestamps").arg("True")
             .arg("--beep_off")
             .arg("--print_progress");
-        // Анти-галлюцинации (ENGINES_FINDINGS §3, arxiv 2501.11378: VAD до декодера = 0.2% галлюцинаций
-        // против 21.3%; condition_on_previous_text тянет «Субтитры создавал…» через паузы; temp-fallback
-        // на no_speech = петли). Флаги подтверждены по --help нашего XXL r245.4.
-        // XXL-сборка: батч-инференс внутри движка (--batched, Silero-VAD окна ≤30с пачками; появился в
-        // r239.1 — старый onefile r192 флага НЕ знает, ему не передаём). Главный рычаг скорости на GPU.
-        let is_xxl = self.bin.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.to_ascii_lowercase().contains("xxl"));
-        if is_xxl {
-            let mut has_batched = false;
-            if let Some(args_str) = &self.xxl_args {
-                for arg in args_str.split_whitespace() {
-                    if !arg.is_empty() {
-                        if arg == "--batched" {
-                            has_batched = true;
-                        }
-                        cmd.arg(arg);
+        // Батч-инференс WhisperXXL (--batched, Silero-VAD окна ≤30с пачками). Главный рычаг скорости на GPU.
+        let mut has_batched = false;
+        if let Some(args_str) = &self.xxl_args {
+            for arg in args_str.split_whitespace() {
+                if !arg.is_empty() {
+                    if arg == "--batched" {
+                        has_batched = true;
                     }
+                    cmd.arg(arg);
                 }
             }
-            if self.device == "cuda" && !has_batched {
-                cmd.arg("--batched");
-            }
-        } else {
-            // Для классического faster-whisper (не XXL) жестко включаем Silero VAD и защиту от зацикливания
-            cmd.arg("--vad_filter").arg("True")
-                .arg("--condition_on_previous_text").arg("False");
+        }
+        if self.device == "cuda" && !has_batched {
+            cmd.arg("--batched");
         }
         // Явные CPU-потоки (флаг есть в v1.0.1): оконная параллель делит ядра между сабпроцессами.
         if let Some(n) = threads {
@@ -413,22 +402,19 @@ impl AsrEngine for WhisperAsr {
         if !l.is_empty() && l != "auto" {
             cmd.arg("--language").arg(l);
         }
-        let is_xxl = self.bin.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.to_ascii_lowercase().contains("xxl"));
-        if is_xxl {
-            let mut has_batched = false;
-            if let Some(args_str) = &self.xxl_args {
-                for arg in args_str.split_whitespace() {
-                    if !arg.is_empty() {
-                        if arg == "--batched" {
-                            has_batched = true;
-                        }
-                        cmd.arg(arg);
+        let mut has_batched = false;
+        if let Some(args_str) = &self.xxl_args {
+            for arg in args_str.split_whitespace() {
+                if !arg.is_empty() {
+                    if arg == "--batched" {
+                        has_batched = true;
                     }
+                    cmd.arg(arg);
                 }
             }
-            if self.device == "cuda" && !has_batched {
-                cmd.arg("--batched");
-            }
+        }
+        if self.device == "cuda" && !has_batched {
+            cmd.arg("--batched");
         }
         cmd.env("HF_HUB_OFFLINE", "1").env("TRANSFORMERS_OFFLINE", "1");
         if let Some(dir) = self.bin.parent() {

@@ -195,7 +195,6 @@ pub fn is_selection_key(key: &str) -> bool {
             | "diar_model"
             | "diar_nemotron_threshold"
             // Whisper extra
-            | "whisper_executable"
             | "whisper_xxl_args"
             | "crisper_mode"
             // Quality & switches
@@ -701,47 +700,16 @@ impl AsrChoice {
     }
 }
 
-/// Путь к бинарю Whisper: env DUB_STUDIO_WHISPER_BIN, иначе приоритетом XXL-сборка
-/// (<repo>/tools/whisper/Faster-Whisper-XXL/faster-whisper-xxl.exe — свежий движок, CUDA-DLL в
-/// комплекте (_xxl_data), умеет --batched), фолбэк — старый onefile whisper-faster.exe (CPU).
-pub fn whisper_bin(repo_root: &Path, sel: Option<&Value>) -> PathBuf {
+/// Путь к бинарю Whisper: env DUB_STUDIO_WHISPER_BIN, иначе Faster-Whisper-XXL
+/// (<repo>/tools/Faster-Whisper-XXL/faster-whisper-xxl.exe).
+pub fn whisper_bin(repo_root: &Path, _sel: Option<&Value>) -> PathBuf {
     if let Ok(p) = std::env::var("DUB_STUDIO_WHISPER_BIN") {
         return PathBuf::from(p);
     }
-    let wdir = repo_root.join("tools").join("whisper");
     if cfg!(windows) {
-        let xxl_exe_new = repo_root.join("tools").join("Faster-Whisper-XXL").join("faster-whisper-xxl.exe");
-        let xxl_exe_old = wdir.join("Faster-Whisper-XXL").join("faster-whisper-xxl.exe");
-
-        let mut prefer_xxl = false;
-        if let Some(s) = sel {
-            if pick(s, "whisper_executable") == Some("xxl") {
-                prefer_xxl = true;
-            }
-        }
-
-        if prefer_xxl {
-            if xxl_exe_new.is_file() {
-                return xxl_exe_new;
-            }
-            if xxl_exe_old.is_file() {
-                return xxl_exe_old;
-            }
-        }
-
-        let std_exe = wdir.join("whisper-faster.exe");
-        if std_exe.is_file() {
-            return std_exe;
-        }
-        if xxl_exe_new.is_file() {
-            return xxl_exe_new;
-        }
-        if xxl_exe_old.is_file() {
-            return xxl_exe_old;
-        }
-        return std_exe;
+        return repo_root.join("tools").join("Faster-Whisper-XXL").join("faster-whisper-xxl.exe");
     }
-    wdir.join("whisper-faster")
+    repo_root.join("tools").join("Faster-Whisper-XXL").join("faster-whisper-xxl")
 }
 
 /// Каталог Whisper-моделей: <mroot>/whisper (внутри — faster-whisper-<size>). Есть ли модель на диске.
@@ -1013,10 +981,9 @@ pub fn resolve_asr_choice(repo_root: &Path, mroot: &Path, sel: &Value) -> AsrCho
     AsrChoice::Parakeet(resolve_asr(mroot, sel))
 }
 
-/// Лежат ли рядом с whisper-faster.exe CUDA-библиотеки CTranslate2 (cuBLAS 11/12 + cuDNN).
-/// Ровно те имена, что требует движок; без них cuda-запуск гарантированно падает.
-/// XXL-сборка — self-contained: cublas64_12 + cudnn64_8 лежат внутри её _xxl_data (проверено по
-/// содержимому архива r245.4) -> для неё сразу true.
+/// Доступны ли CUDA-библиотеки для Whisper.
+/// Faster-Whisper-XXL — self-contained: cublas64_12 + cudnn64_8 лежат внутри её каталога _xxl_data
+/// -> для неё сразу true.
 fn whisper_cuda_libs_present(bin: &std::path::Path) -> bool {
     if bin
         .file_name()
@@ -1026,16 +993,7 @@ fn whisper_cuda_libs_present(bin: &std::path::Path) -> bool {
         return true;
     }
     let Some(dir) = bin.parent() else { return false };
-    let cublas = dir.join("cublas64_11.dll").is_file() || dir.join("cublas64_12.dll").is_file();
-    let cudnn = std::fs::read_dir(dir)
-        .map(|rd| {
-            rd.flatten().any(|e| {
-                let n = e.file_name().to_string_lossy().to_lowercase();
-                n.starts_with("cudnn") && n.ends_with(".dll")
-            })
-        })
-        .unwrap_or(false);
-    cublas && cudnn
+    dir.join("_xxl_data").is_dir() || dir.join("cublas64_12.dll").is_file()
 }
 
 /// Построить ASR-движок из выбора (boxed trait-object): analyze не знает деталей резолва.

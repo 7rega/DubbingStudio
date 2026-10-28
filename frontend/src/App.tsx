@@ -88,7 +88,6 @@ const VARIANT_SLOT: Record<string, [string, string]> = {
   "whisper-tiny": ["whisper_model", "tiny"], "whisper-base": ["whisper_model", "base"],
   "whisper-small": ["whisper_model", "small"], "whisper-medium": ["whisper_model", "medium"],
   "whisper-large-v3": ["whisper_model", "large-v3"], "whisper-large-v3-turbo": ["whisper_model", "large-v3-turbo"],
-  "whisper-engine": ["whisper_executable", "standard"], "whisper-xxl": ["whisper_executable", "xxl"],
   "nemotron-bf16": ["diar_model", "nemotron-bf16"],
   "qwen3-asr": ["asr_engine", "qwen3"],
   "crisperwhisper-turbo": ["asr_engine", "crisperwhisper"],
@@ -126,7 +125,6 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
   const [cap, setCap] = useState<Capabilities | null>(null);
   const [asrEngine, setAsrEngine] = useState<string>("parakeet");
   const [whisperCompute, setWhisperCompute] = useState<string>("int8");
-  const [whisperExecutable, setWhisperExecutable] = useState<string>("standard");
   const [xxlArgs, setXxlArgs] = useState<string>("");
   const [crisperMode, setCrisperMode] = useState<string>("verbatim");
   // Выбор варианта в дропдаунах поднят СЮДА (а не в локальный useState VariantPicker) — иначе ре-рендер
@@ -142,7 +140,6 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
     const s = c.selection ?? {};
     setAsrEngine(slot(s, "asr_engine") ?? "parakeet");
     setWhisperCompute(slot(s, "whisper_compute") ?? "int8");
-    setWhisperExecutable(slot(s, "whisper_executable") ?? "standard");
     setXxlArgs(slot(s, "whisper_xxl_args") ?? "");
     setCrisperMode(slot(s, "crisper_mode") ?? "verbatim");
   }).catch(() => {});
@@ -620,55 +617,39 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
           <VariantPicker base="Parakeet-TDT 0.6B v3" ids={["parakeet", "parakeet-fp32", "parakeet-ultra"]} />
         ) : (
           <>
-            <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]">
-              <div className="flex items-center gap-2.5">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[var(--color-accent)]" />
+            {rowOf("whisper-xxl")}
+            <VariantPicker base={t("settings.whisperModel")} ids={["whisper-tiny", "whisper-base", "whisper-small", "whisper-medium", "whisper-large-v3", "whisper-large-v3-turbo"]} />
+            <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08] space-y-2">
+              <div className="flex items-center justify-between">
                 <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-medium truncate text-[var(--color-text)]">{t("settings.whisperExecutable")}</div>
-                  <div className="mono text-[10px] text-[var(--color-muted)] truncate">{t("settings.whisperExecutableHint")}</div>
+                  <div className="text-[12px] font-medium text-[var(--color-text)]">Дополнительные флаги WhisperXXL</div>
+                  <div className="mono text-[10px] text-[var(--color-muted)]">настройки CLI аргументов для основного ASR</div>
                 </div>
-                <select value={whisperExecutable} onChange={(e) => { setWhisperExecutable(e.target.value); api.setSelection("whisper_executable", e.target.value).then(refresh).catch(() => {}); }}
-                  className="shrink-0 bg-[#12141a] border border-white/[0.12] text-[var(--color-text)] rounded-lg px-2.5 py-1 text-[11px] mono focus:border-[var(--color-accent)] focus:outline-none">
-                  <option value="standard">{t("settings.whisperExecStandard")}</option>
-                  <option value="xxl">{t("settings.whisperExecXxl")}</option>
-                </select>
+              </div>
+              <textarea rows={3} value={xxlArgs} onChange={(e) => setXxlArgs(e.target.value)} onBlur={() => setSel("whisper_xxl_args", xxlArgs)} placeholder="Например:&#10;--standard&#10;--batched"
+                className="w-full px-2.5 py-1.5 rounded-lg bg-[#12141a] border border-white/[0.12] text-[12px] mono text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none resize-none" />
+              <div className="flex flex-wrap gap-1">
+                {[
+                  { label: "Дефолт", val: "" },
+                  { label: "Дубляж", val: "--device cuda --compute_type float16 --vad_filter True --vad_method silero_v5_fw --ff_speechnorm --word_timestamps True --hallucination_silence_threshold 1.0 --condition_on_previous_text False --beam_size 5 --temperature 0 --batched" },
+                  { label: "Субтитры", val: "--standard --batched" },
+                  { label: "Скорость", val: "--batched" },
+                  { label: "Анти-галлюцинации", val: "--vad_filter True --vad_method silero_v5_fw --condition_on_previous_text False --beam_size 1 --temperature 0 --hallucination_silence_threshold 2 --batched" }
+                ].map((p) => (
+                  <button key={p.label} type="button" onClick={() => {
+                    setXxlArgs(p.val);
+                    setSel("whisper_xxl_args", p.val);
+                    if (p.label === "Дубляж") {
+                      setWhisperCompute("float16");
+                      api.setSelection("whisper_compute", "float16").catch(() => {});
+                    }
+                  }}
+                    className="px-2 py-1 rounded-md text-[10px] bg-white/[0.04] border border-white/[0.08] text-[var(--color-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors">
+                    {p.label}
+                  </button>
+                ))}
               </div>
             </div>
-            {whisperExecutable === "xxl" ? rowOf("whisper-xxl") : rowOf("whisper-engine")}
-            <VariantPicker base={t("settings.whisperModel")} ids={["whisper-tiny", "whisper-base", "whisper-small", "whisper-medium", "whisper-large-v3", "whisper-large-v3-turbo"]} />
-            {whisperExecutable === "xxl" && (
-              <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08] space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[12px] font-medium text-[var(--color-text)]">Дополнительные флаги WhisperXXL</div>
-                    <div className="mono text-[10px] text-[var(--color-muted)]">настройки CLI аргументов для основного ASR</div>
-                  </div>
-                </div>
-                <textarea rows={3} value={xxlArgs} onChange={(e) => setXxlArgs(e.target.value)} onBlur={() => setSel("whisper_xxl_args", xxlArgs)} placeholder="Например:&#10;--standard&#10;--batched"
-                  className="w-full px-2.5 py-1.5 rounded-lg bg-[#12141a] border border-white/[0.12] text-[12px] mono text-[var(--color-text)] focus:border-[var(--color-accent)] outline-none resize-none" />
-                <div className="flex flex-wrap gap-1">
-                  {[
-                    { label: "Дефолт", val: "" },
-                    { label: "Дубляж", val: "--device cuda --compute_type float16 --vad_filter True --vad_method silero_v5_fw --ff_speechnorm --word_timestamps True --hallucination_silence_threshold 1.0 --condition_on_previous_text False --beam_size 5 --temperature 0 --batched" },
-                    { label: "Субтитры", val: "--standard --batched" },
-                    { label: "Скорость", val: "--batched" },
-                    { label: "Анти-галлюцинации", val: "--vad_filter True --vad_method silero_v5_fw --condition_on_previous_text False --beam_size 1 --temperature 0 --hallucination_silence_threshold 2 --batched" }
-                  ].map((p) => (
-                    <button key={p.label} type="button" onClick={() => {
-                      setXxlArgs(p.val);
-                      setSel("whisper_xxl_args", p.val);
-                      if (p.label === "Дубляж") {
-                        setWhisperCompute("float16");
-                        api.setSelection("whisper_compute", "float16").catch(() => {});
-                      }
-                    }}
-                      className="px-2 py-1 rounded-md text-[10px] bg-white/[0.04] border border-white/[0.08] text-[var(--color-muted)] hover:text-white hover:border-[var(--color-accent)] transition-colors">
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
             {/* Квант Whisper (compute_type) — точность/скорость вычислений, без отдельной скачки. */}
             <div className="px-3 py-2.5 rounded-xl bg-white/[0.035] border border-white/[0.08]">
               <div className="flex items-center gap-2.5">
@@ -9738,7 +9719,7 @@ const QUANT_GROUP: Record<string, string> = {
   gemma: "gemma", "gemma-q5_0": "gemma", "gemma-q6_k": "gemma", "gemma-q8_0": "gemma",
   parakeet: "parakeet", "parakeet-fp32": "parakeet", "parakeet-ultra": "parakeet",
   roformer: "roformer", "roformer-q5": "roformer", "roformer-q4": "roformer",
-  "whisper-engine": "whisper_engine", "whisper-xxl": "whisper_engine",
+  "whisper-xxl": "whisper_engine",
   "nemotron-bf16": "nemotron",
 };
 

@@ -725,25 +725,14 @@ fn ensure_job_components(
             }
         }
     }
-    // Whisper на GPU: CTranslate2 требует cuBLAS12 + cuDNN8 РЯДОМ с whisper-faster.exe (наш ONNX-стек
-    // выше — CUDA 13, whisper'у не подходит). Без них whisper молча идёт на CPU. Тянем их только когда
-    // движок ASR = Whisper И стадия ASR на GPU.
+    // Whisper ASR: Faster-Whisper-XXL
     let sel = models::load_selection(models_root);
     let asr_whisper = sel
         .get("asr_engine")
         .and_then(|v| v.as_str())
         == Some("whisper");
-    let bin = models::whisper_bin(repo_root, Some(&sel));
-    let is_xxl = bin
-        .file_name()
-        .and_then(|s| s.to_str())
-        .is_some_and(|n| n.to_ascii_lowercase().contains("xxl"));
-    if asr_whisper
-        && models::stage_backend(models_root, "asr_backend") == "gpu"
-        && !is_xxl
-        && missing("whisper-cuda")
-    {
-        need.push("whisper-cuda".to_string());
+    if asr_whisper && missing("whisper-xxl") {
+        need.push("whisper-xxl".to_string());
     }
 
     // TTS Drama 3: движок drama-engine + модель drama3
