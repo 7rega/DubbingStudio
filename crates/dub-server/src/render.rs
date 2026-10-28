@@ -412,14 +412,15 @@ impl TtsEngine {
     }
 }
 
-/// Параметры Drama 3 из JSON опций: seed, max_new (21.5 к/с) и температура.
+/// Параметры Drama 3 из JSON опций: seed, max_new (21.5 к/с), top_k и температура.
 fn drama_params(opts: &str) -> drama::Params {
     let v: serde_json::Value = serde_json::from_str(opts).unwrap_or_default();
     let seed = v.get("seed").and_then(|s| s.as_u64()).unwrap_or_else(|| uuid::Uuid::new_v4().as_u64_pair().0);
     let tokens = v.get("max_new_tokens").and_then(|t| t.as_u64()).unwrap_or(2048) as f64;
     let max_new = ((tokens * drama::FRAMES_PER_SECOND * 2.0 / (75.0 * 1.5)).ceil() as u32).clamp(64, 2048);
-    let temperature = v.get("temperature").and_then(|t| t.as_f64()).map_or(1.0, |t| t.clamp(0.10, 1.50)) as f32;
-    drama::Params { temperature, seed, max_new, ..Default::default() }
+    let temperature = v.get("temperature").and_then(|t| t.as_f64()).map_or(0.80, |t| t.clamp(0.10, 1.50)) as f32;
+    let top_k = v.get("top_k").and_then(|k| k.as_i64()).map(|k| k as i32).unwrap_or(4097);
+    drama::Params { temperature, top_k, seed, max_new, ..Default::default() }
 }
 
 /// Вычисляет эффективный текст референса для Drama 3.
@@ -702,7 +703,7 @@ pub fn build_speech_options(
             max_tokens,
         }
     } else if tts_engine == "drama3" {
-        let base_temp = custom_temp.or(audio.drama_temp).unwrap_or(1.00);
+        let base_temp = custom_temp.or(audio.drama_temp).unwrap_or(0.80);
         let effective_temp = if seed_offset == 0 {
             (base_temp.clamp(0.10, 1.50) * 100.0).round() / 100.0
         } else {
@@ -2003,14 +2004,14 @@ fn build_dub(
                 };
                 let seed = spk_seed_base + attempt as u64;
                 let opts = if paths.tts_engine == "drama3" {
-                    let d_temp = custom_temp.or(proj.audio.drama_temp).unwrap_or(1.00);
+                    let d_temp = custom_temp.or(proj.audio.drama_temp).unwrap_or(0.80);
                     let eff_d_temp = if attempt == 0 {
                         d_temp.clamp(0.10, 1.50)
                     } else {
                         (d_temp * (1.0 + 0.05 * (attempt as f64).min(4.0))).clamp(0.10, 1.50)
                     };
                     let d_seed = proj.audio.drama_seed.map(|s| s.wrapping_add(attempt as u64)).unwrap_or(seed);
-                    format!("{{\"temperature\":{eff_d_temp:.2}{tok_part},\"seed\":{d_seed}}}")
+                    format!("{{\"temperature\":{eff_d_temp:.2},\"top_k\":4097{tok_part},\"seed\":{d_seed}}}")
                 } else {
                     match attempt {
                         0 | 3 => format!(
@@ -2255,10 +2256,10 @@ fn build_dub(
                         if take_i == 1 { 0.25 } else { 0.35 }
                     };
                     let opts = if paths.tts_engine == "drama3" {
-                        let d_temp = custom_temp.or(proj.audio.drama_temp).unwrap_or(1.00);
+                        let d_temp = custom_temp.or(proj.audio.drama_temp).unwrap_or(0.80);
                         let eff_temp = if take_i == 1 { (d_temp * 0.95).clamp(0.10, 1.50) } else { (d_temp * 1.05).clamp(0.10, 1.50) };
                         let d_seed = proj.audio.drama_seed.map(|s| s.wrapping_add(take_i * 100 + 77)).unwrap_or(seed);
-                        format!("{{\"temperature\":{eff_temp:.2}{tok_part_mt},\"seed\":{d_seed}}}")
+                        format!("{{\"temperature\":{eff_temp:.2},\"top_k\":4097{tok_part_mt},\"seed\":{d_seed}}}")
                     } else {
                         format!(
                             "{{\"temperature\":{temp:.2},\"top_p\":0.95,\"top_k\":50{tok_part_mt},\"ras_win_len\":7,\"return_audio_in_tokens\":true,\"seed\":{seed}}}"
@@ -4273,7 +4274,7 @@ mod tests {
         // 6. build_speech_options для Drama 3
         let mut audio_drama = dub_core::Audio::default();
         let opts_drama = build_speech_options("drama3", &audio_drama, None, 0, None);
-        assert_eq!(opts_drama.temperature, Some(1.00));
+        assert_eq!(opts_drama.temperature, Some(0.80));
         assert_eq!(opts_drama.seed, None);
 
         audio_drama.drama_temp = Some(1.20);

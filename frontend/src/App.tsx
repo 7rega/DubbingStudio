@@ -7738,7 +7738,7 @@ function Editor() {
                       <div className="text-[9px] text-[var(--color-muted)] truncate w-full mt-0.5">
                         {p.audio.drama_prompt
                           ? `${p.audio.drama_prompt}${p.audio.drama_audio_only ? " • AO" : ""}`
-                          : `t: ${(p.audio.drama_temp ?? 1.0).toFixed(2)}${p.audio.drama_seed != null ? " • сид" : ""}${p.audio.drama_audio_only ? " • AO" : ""}`}
+                          : `t: ${(p.audio.drama_temp ?? 0.80).toFixed(2)}${p.audio.drama_seed != null ? " • сид" : ""}${p.audio.drama_audio_only ? " • AO" : ""}`}
                       </div>
                     </button>
                   </div>
@@ -8892,7 +8892,7 @@ function DramaSettingsModal({
 }) {
   const { t } = useTranslation();
   const [prompt, setPrompt] = useState(p.audio.drama_prompt ?? "");
-  const [temp, setTemp] = useState<number>(p.audio.drama_temp ?? 1.0);
+  const [temp, setTemp] = useState<number>(p.audio.drama_temp ?? 0.80);
   const [seedFixed, setSeedFixed] = useState<boolean>(p.audio.drama_seed != null);
   const [seed, setSeed] = useState<number>(p.audio.drama_seed ?? 42);
   const [audioOnly, setAudioOnly] = useState<boolean>(p.audio.drama_audio_only ?? false);
@@ -8978,13 +8978,13 @@ function DramaSettingsModal({
                 {t("voice.dramaTempLabel", "Температура сэмплинга")}
               </span>
               <div className="flex items-center gap-2">
-                {Math.abs(temp - 1.0) > 0.001 && (
+                {Math.abs(temp - 0.80) > 0.001 && (
                   <button
                     type="button"
-                    onClick={() => setTemp(1.0)}
+                    onClick={() => setTemp(0.80)}
                     className="text-[10px] text-[var(--color-accent)] hover:underline"
                   >
-                    {t("voice.dramaTempReset", "Сбросить к 1.00")}
+                    {t("voice.dramaTempReset", "Сбросить к 0.80")}
                   </button>
                 )}
                 <span className="mono text-xs font-semibold px-2 py-0.5 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)]">
@@ -9002,7 +9002,7 @@ function DramaSettingsModal({
               className="w-full accent-[var(--color-accent)] cursor-pointer"
             />
             <div className="text-[10px] text-[var(--color-muted)] leading-snug">
-              {t("voice.dramaTempHint", "Дефолт модели: 1.00. Рабочий диапазон 0.10–1.50 с шагом 0.05. Более высокая температура добавляет экспрессии, низкая — стабильности.")}
+              {t("voice.dramaTempHint", "По умолчанию: 0.80. Рабочий диапазон 0.10–1.50 с шагом 0.05. Более высокая температура добавляет экспрессии, низкая — стабильности тембра.")}
             </div>
           </div>
 

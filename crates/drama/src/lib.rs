@@ -32,7 +32,7 @@ pub struct Params {
 
 impl Default for Params {
     fn default() -> Self {
-        Self { temperature: 1.0, top_k: 30, top_p: 0.9, seed: 0, max_new: 2048 }
+        Self { temperature: 0.80, top_k: 4097, top_p: 0.9, seed: 0, max_new: 2048 }
     }
 }
 
