@@ -33,6 +33,16 @@ fn fill_ref_texts(
         if ref_texts.contains_key(spk) {
             continue;
         }
+        let txt_path = refp.with_extension("txt");
+        if txt_path.is_file() {
+            if let Ok(cached) = std::fs::read_to_string(&txt_path) {
+                let t = cached.trim();
+                if !t.is_empty() {
+                    ref_texts.insert(spk.clone(), t.to_string());
+                    continue;
+                }
+            }
+        }
         if let Ok(rsegs) = asr.transcribe(refp, "auto") {
             let txt = rsegs
                 .iter()
@@ -42,6 +52,7 @@ fn fill_ref_texts(
                 .join(" ");
             // токены уже trim'нуты и непусты, join(" ") не даёт краевых пробелов -> повторный trim не нужен.
             if !txt.is_empty() {
+                let _ = std::fs::write(&txt_path, &txt);
                 ref_texts.insert(spk.clone(), txt);
             }
         }
@@ -1173,15 +1184,67 @@ fn build_dub(
     let (spk_refs, mut ref_texts, alt_refs) = if dirty_count == 0 || segs_needing_vocal_clone.is_empty() {
         (std::collections::BTreeMap::new(), std::collections::BTreeMap::new(), std::collections::BTreeMap::new())
     } else {
-        // Скоринг кандидатов + REF-QC ТОЛЬКО для спикеров, реально нуждающихся в клоне из вокала
-        let mut asr = crate::models::build_engine(&paths.asr);
-        build_speaker_refs(&segs_needing_vocal_clone, &vocals16, wd, paths.ref_secs, smart_ref_on, asr.as_mut(), progress)?
+        let needed_speakers: Vec<String> = segs_needing_vocal_clone
+            .iter()
+            .map(|(_, s)| s.speaker.clone().unwrap_or_else(|| "0".into()))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        let ((mut cached_refs, mut cached_texts, mut cached_alts), missing_speakers) =
+            load_cached_speaker_refs(wd, &needed_speakers);
+
+        if missing_speakers.is_empty() {
+            emit(progress, "tts", "Референсы голосов спикеров загружены из кэша (ASR-сверка пропущена)");
+            (cached_refs, cached_texts, cached_alts)
+        } else {
+            // Скоринг кандидатов + REF-QC ТОЛЬКО для спикеров, у которых нет готового кэша
+            let segs_for_missing: Vec<(usize, &dub_core::Segment)> = segs_needing_vocal_clone
+                .iter()
+                .filter(|(_, s)| {
+                    let spk = s.speaker.as_deref().unwrap_or("0");
+                    missing_speakers.iter().any(|m| m == spk)
+                })
+                .cloned()
+                .collect();
+            let mut asr = crate::models::build_engine(&paths.asr);
+            let (new_refs, new_texts, new_alts) =
+                build_speaker_refs(&segs_for_missing, &vocals16, wd, paths.ref_secs, smart_ref_on, asr.as_mut(), progress)?;
+            for (k, v) in new_refs {
+                cached_refs.insert(k, v);
+            }
+            for (k, v) in new_texts {
+                cached_texts.insert(k, v);
+            }
+            for (k, v) in new_alts {
+                cached_alts.insert(k, v);
+            }
+            (cached_refs, cached_texts, cached_alts)
+        }
     };
     if dirty_count > 0 && use_pack {
-        // Реф-транскрипция выбранным движком (Parakeet/Whisper), а НЕ захардкоженным Parakeet — иначе у
-        // Whisper-only юзера (без Parakeet-модели) ref_text молча не считался бы. build_engine сам решает.
-        let mut asr = crate::models::build_engine(&paths.asr);
-        fill_ref_texts(asr.as_mut(), &pack_refs, &mut ref_texts);
+        let mut needs_asr = false;
+        for (spk, refp) in &pack_refs {
+            if ref_texts.contains_key(spk) {
+                continue;
+            }
+            let txt_path = refp.with_extension("txt");
+            if let Ok(cached) = std::fs::read_to_string(&txt_path) {
+                let t = cached.trim();
+                if !t.is_empty() {
+                    ref_texts.insert(spk.clone(), t.to_string());
+                    continue;
+                }
+            }
+            needs_asr = true;
+            break;
+        }
+        if needs_asr {
+            // Реф-транскрипция выбранным движком (Parakeet/Whisper), а НЕ захардкоженным Parakeet — иначе у
+            // Whisper-only юзера (без Parakeet-модели) ref_text молча не считался бы. build_engine сам решает.
+            let mut asr = crate::models::build_engine(&paths.asr);
+            fill_ref_texts(asr.as_mut(), &pack_refs, &mut ref_texts);
+        }
     }
     let first_ref = pack_refs
         .values()
@@ -2998,6 +3061,47 @@ fn safe_spk_tag(spk: &str) -> String {
     }
 }
 
+/// Загрузить закэшированные референсы спикеров из каталога проекта (ref_spk{stag}.wav + ref_spk{stag}.txt).
+/// Возвращает ((refs, texts, alts), missing_speakers).
+pub(crate) fn load_cached_speaker_refs(
+    wd: &Path,
+    speakers: &[String],
+) -> (SpkRefs, Vec<String>) {
+    let mut refs: std::collections::BTreeMap<String, PathBuf> = std::collections::BTreeMap::new();
+    let mut texts: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut alts: std::collections::BTreeMap<String, (PathBuf, Option<String>)> =
+        std::collections::BTreeMap::new();
+    let mut missing = Vec::new();
+
+    for spk in speakers {
+        let stag = safe_spk_tag(spk);
+        let ref_wav = wd.join(format!("ref_spk{stag}.wav"));
+        let ref_txt = wd.join(format!("ref_spk{stag}.txt"));
+
+        let wav_valid = ref_wav.is_file() && ref_wav.metadata().map(|m| m.len() > 0).unwrap_or(false);
+        let txt_valid = ref_txt.is_file();
+
+        if wav_valid && txt_valid {
+            let t = std::fs::read_to_string(&ref_txt).unwrap_or_default().trim().to_string();
+            refs.insert(spk.clone(), ref_wav);
+            if !t.is_empty() {
+                texts.insert(spk.clone(), t);
+            }
+
+            let alt_wav = wd.join(format!("ref_alt_spk{stag}.wav"));
+            if alt_wav.is_file() && alt_wav.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+                let alt_txt = wd.join(format!("ref_alt_spk{stag}.txt"));
+                let at = std::fs::read_to_string(&alt_txt).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                alts.insert(spk.clone(), (alt_wav, at));
+            }
+        } else {
+            missing.push(spk.clone());
+        }
+    }
+
+    ((refs, texts, alts), missing)
+}
+
 fn build_speaker_refs(
     segs: &[(usize, &dub_core::Segment)],
     vocals16: &Path,
@@ -3023,8 +3127,14 @@ fn build_speaker_refs(
             let ref_wav = wd.join(format!("ref_spk{stag}.wav"));
             media::trim(vocals16, &ref_wav, pick.start, pick.end.max(pick.start + 0.05), 16_000)?;
             refs.insert(spk.clone(), ref_wav);
-            if pick.exact_cover && !pick.src_text.is_empty() {
-                texts.insert(spk, pick.src_text);
+            let t = if pick.exact_cover && !pick.src_text.is_empty() {
+                pick.src_text
+            } else {
+                String::new()
+            };
+            let _ = std::fs::write(wd.join(format!("ref_spk{stag}.txt")), &t);
+            if !t.is_empty() {
+                texts.insert(spk, t);
             }
         }
         return Ok((refs, texts, alts));
@@ -3153,6 +3263,7 @@ fn build_speaker_refs(
             .filter(|h| !h.trim().is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| main_seg.src_text.trim().to_string());
+        let _ = std::fs::write(wd.join(format!("ref_spk{stag}.txt")), &t);
         if !t.is_empty() {
             texts.insert(spk.clone(), t);
         }
@@ -3170,8 +3281,16 @@ fn build_speaker_refs(
                     .filter(|h| !h.trim().is_empty())
                     .map(str::to_string)
                     .or_else(|| Some(cands[ai].src_text.trim().to_string()).filter(|s| !s.is_empty()));
+                if let Some(ref text) = at {
+                    let _ = std::fs::write(wd.join(format!("ref_alt_spk{stag}.txt")), text);
+                } else {
+                    let _ = std::fs::remove_file(wd.join(format!("ref_alt_spk{stag}.txt")));
+                }
                 alts.insert(spk.clone(), (alt_wav, at));
             }
+        } else {
+            let _ = std::fs::remove_file(wd.join(format!("ref_alt_spk{stag}.wav")));
+            let _ = std::fs::remove_file(wd.join(format!("ref_alt_spk{stag}.txt")));
         }
         // Прибрать невостребованных кандидатов.
         for (i, _) in cands.iter().enumerate() {
@@ -4304,5 +4423,47 @@ mod tests {
         assert_eq!(drama_effective_ref_text(false, None), ".");
         assert_eq!(drama_effective_ref_text(false, Some("")), ".");
         assert_eq!(drama_effective_ref_text(false, Some("   \t\n  ")), ".");
+    }
+
+    #[test]
+    fn test_speaker_ref_cache_hit_and_miss() {
+        let tmp = std::env::temp_dir().join(format!("test_spk_ref_cache_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Спикер 0: создаём валидный кэш (непустой wav + txt)
+        let stag0 = safe_spk_tag("0");
+        let wav0 = tmp.join(format!("ref_spk{stag0}.wav"));
+        let txt0 = tmp.join(format!("ref_spk{stag0}.txt"));
+        std::fs::write(&wav0, b"RIFF....WAVEfmt ....data....").unwrap();
+        std::fs::write(&txt0, "Привет, мир!").unwrap();
+
+        // Альтернативный реф для спикера 0
+        let alt_wav0 = tmp.join(format!("ref_alt_spk{stag0}.wav"));
+        let alt_txt0 = tmp.join(format!("ref_alt_spk{stag0}.txt"));
+        std::fs::write(&alt_wav0, b"RIFF....WAVEfmt ....data....").unwrap();
+        std::fs::write(&alt_txt0, "Запасной вариант").unwrap();
+
+        // Спикер 1: только пустой WAV (невалидный кэш)
+        let stag1 = safe_spk_tag("1");
+        let wav1 = tmp.join(format!("ref_spk{stag1}.wav"));
+        std::fs::write(&wav1, b"").unwrap();
+
+        // Спикер 2: вообще нет файлов
+
+        let needed = vec!["0".to_string(), "1".to_string(), "2".to_string()];
+        let ((refs, texts, alts), missing) = load_cached_speaker_refs(&tmp, &needed);
+
+        // Спикер 0 должен быть в кэше
+        assert_eq!(refs.get("0"), Some(&wav0));
+        assert_eq!(texts.get("0"), Some(&"Привет, мир!".to_string()));
+        assert_eq!(alts.get("0"), Some(&(alt_wav0, Some("Запасной вариант".to_string()))));
+
+        // Спикеры 1 и 2 должны быть в missing
+        assert!(missing.contains(&"1".to_string()));
+        assert!(missing.contains(&"2".to_string()));
+        assert!(!missing.contains(&"0".to_string()));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
