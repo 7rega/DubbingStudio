@@ -279,7 +279,7 @@ fn held(mode: &str, speakers: [&str; 2], voice: Value) -> Value {
 fn setup(ocr_missing: &[&str], diarizer: bool) -> Value {
     json!({ "components": [
         { "id": "ocr", "installed": ocr_missing.is_empty(), "missing": ocr_missing },
-        { "id": "sortformer", "installed": diarizer, "missing": [] },
+        { "id": "nemotron-bf16", "installed": diarizer, "missing": [] },
     ] })
 }
 

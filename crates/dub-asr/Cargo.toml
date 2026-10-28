@@ -3,13 +3,13 @@ name = "dub-asr"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "ASR + диаризация над parakeet-rs (Parakeet-TDT + Sortformer)"
+description = "ASR над parakeet-rs (Parakeet-TDT) + диаризация Nemotron-3"
 
 [dependencies]
 # load-dynamic: onnxruntime подгружается из onnxruntime.dll в рантайме, а не линкуется статически.
 # Это обходит рассинхрон MSVC STL (статическая libort_sys собрана новее локального тулчейна) и заодно
 # делает движок портативным (DLL кладётся рядом с бинарём / ищется по ORT_DYLIB_PATH).
-parakeet-rs = { version = "0.3.6", features = ["sortformer", "load-dynamic"] }
+parakeet-rs = { version = "0.3.6", features = ["load-dynamic"] }
 # ort через load-dynamic (disable-linking): onnxruntime.dll 1.24.2 грузится в рантайме через
 # ORT_DYLIB_PATH (ensure_ort_dylib), а не линкуется (статическая libort_sys собрана новее локального
 # MSVC STL 14.42 и не слинкуется). Версия строго rc.12 — под onnxruntime 1.24.2; чужие 1.22/1.23 DLL

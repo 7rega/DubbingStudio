@@ -10,7 +10,7 @@
 //!
 //! Классы источников (все URL — ровно те, что уже использованы; см. crates/README.md, PORT-CONTRACT.md,
 //! Higgs voiceclean.rs):
-//!   • модели — прямые файлы HF (higgs-q8_0/*, gemma-4 + mmproj, parakeet-tdt int8, sortformer, roformer
+//!   • модели — прямые файлы HF (higgs-q8_0/*, gemma-4 + mmproj, parakeet-tdt int8, nemotron-3, roformer
 //!     voc_fv6-Q8_0);
 //!   • сайдкары/движки — zip-релизы GitHub (BSRoformer.cpp, llama.cpp win-cuda-13.4, onnxruntime 1.28.2,
 //!     ffmpeg BtbN) + audiocpp_engine.dll (HF);
@@ -118,17 +118,11 @@ pub struct Marker {
 //  URL-константы (источник истины; сверены HEAD-запросами, размеры = байт-в-байт с диском)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// HF: Sortformer v2 диаризация (altunenes/parakeet-rs).
-const HF_SORTFORMER: &str =
-    "https://huggingface.co/altunenes/parakeet-rs/resolve/main/diar_streaming_sortformer_4spk-v2.onnx";
 // HF: Nemotron-3 Diarization GGUF (audio-cpp/Nemotron-3-Diarization-GGUF).
 pub const HF_NEMOTRON_BF16: &str =
     "https://huggingface.co/audio-cpp/Nemotron-3-Diarization-GGUF/resolve/main/nemotron-3-diarization-bf16.gguf?download=true";
-pub const HF_NEMOTRON_Q8_0: &str =
-    "https://huggingface.co/audio-cpp/Nemotron-3-Diarization-GGUF/resolve/main/nemotron-3-diarization-q8_0.gguf?download=true";
 
 pub const NEMOTRON_BF16_SIZE: u64 = 198_720_032; // ~189.5 МБ
-pub const NEMOTRON_Q8_0_SIZE: u64 = 106_674_240; // ~101.7 МБ
 
 // HF: Mel-Band Roformer voc_fv6-Q8_0 (chenmozhijin/BSRoformer-GGUF).
 const HF_ROFORMER: &str = "https://huggingface.co/chenmozhijin/BSRoformer-GGUF/resolve/main/GaboxR67/MelBandRoformers/melbandroformers/vocals/voc_fv6-Q8_0.gguf";
@@ -146,7 +140,7 @@ const GH_LLAMA: &str =
 // GitHub: onnxruntime 1.28.2 win-x64 (microsoft/onnxruntime).
 const GH_ORT: &str =
     "https://github.com/microsoft/onnxruntime/releases/download/v1.28.2/onnxruntime-win-x64-1.28.2.zip";
-// GitHub: onnxruntime 1.28.2 GPU-сборка под CUDA 13 (gpu_cuda13) — CUDA-EP для Parakeet/Sortformer на
+// GitHub: onnxruntime 1.28.2 GPU-сборка под CUDA 13 (gpu_cuda13) — CUDA-EP для Parakeet на
 // GPU. Вариант cuda13 переиспользует наши _13-DLL (cudart/cublas), нужен только cuDNN 9 (WHEEL_CUDNN).
 // Содержит onnxruntime.dll(GPU) + onnxruntime_providers_cuda.dll + onnxruntime_providers_shared.dll.
 const GH_ORT_GPU: &str =
@@ -157,7 +151,7 @@ const GH_FFMPEG: &str =
 // PyPI-wheel'ы NVIDIA CUDA 13 runtime (те же, что Higgs envdeps.rs — байт-в-байт с локальным CUDA 13.3).
 const WHEEL_CUDART: &str = "https://files.pythonhosted.org/packages/d2/27/b53a5e0397842a5c11f0e1a39d4e5b2f22638a4126e83b3c4e196f62c969/nvidia_cuda_runtime-13.3.29-py3-none-win_amd64.whl";
 const WHEEL_CUBLAS: &str = "https://files.pythonhosted.org/packages/08/8f/890a96ea1ff615100296977cce23296052dcb8c114d4e451201ec39df9bf/nvidia_cublas-13.6.0.2-py3-none-win_amd64.whl";
-// PyPI: cuDNN 9 под CUDA 13 (nvidia-cudnn-cu13) — нужен для CUDA-EP onnxruntime (Parakeet/Sortformer на
+// PyPI: cuDNN 9 под CUDA 13 (nvidia-cudnn-cu13) — нужен для CUDA-EP onnxruntime (Parakeet на
 // GPU). Даёт cudnn64_9.dll + split-либы. ≈389 МБ. cudart/cublas _13 уже есть (cuda-runtime выше).
 const WHEEL_CUDNN: &str = "https://files.pythonhosted.org/packages/18/d4/c09b11336981836c3183f28a6ca309e08ad080311edb6ff6c28cecdb5f24/nvidia_cudnn_cu13-9.25.0.15-py3-none-win_amd64.whl";
 // NVIDIA CUDA-13 redist (официальный): cuFFT 12.0.0.61 → даёт cufft64_12.dll. onnxruntime_providers_cuda.dll
@@ -854,23 +848,10 @@ pub fn manifest() -> Vec<Component> {
             external_url: Some("https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf"),
         },
         Component {
-            id: "sortformer",
-            name: "Sortformer v2 (диаризация)",
-            purpose: "Разделение спикеров (кто когда говорит)",
-            requirement: Requirement::Recommended,
-            delivery: Delivery::Download,
-            size: 492_243_002,
-            files: &[
-                FileSpec { url: HF_SORTFORMER, dest_rel: "models/sortformer/diar_streaming_sortformer_4spk-v2.onnx", size: 492_243_002, extract: Extract::None },
-            ],
-            markers: &[Marker { rel: "models/sortformer/diar_streaming_sortformer_4spk-v2.onnx", expect: 492_243_002 }],
-            external_url: None,
-        },
-        Component {
             id: "nemotron-bf16",
             name: "Nemotron-3 Diarization BF16 (до 8 спикеров)",
             purpose: "Высокоточное разделение до 8 спикеров (рекомендуется для фильмов и трейлеров)",
-            requirement: Requirement::Optional,
+            requirement: Requirement::Recommended,
             delivery: Delivery::Download,
             size: NEMOTRON_BF16_SIZE,
             files: &[
@@ -884,27 +865,6 @@ pub fn manifest() -> Vec<Component> {
             markers: &[Marker {
                 rel: "models/diarization/nemotron-3-diarization-bf16.gguf",
                 expect: NEMOTRON_BF16_SIZE,
-            }],
-            external_url: Some("https://huggingface.co/audio-cpp/Nemotron-3-Diarization-GGUF"),
-        },
-        Component {
-            id: "nemotron-q8_0",
-            name: "Nemotron-3 Diarization Q8_0 (101 МБ)",
-            purpose: "Компактная квантованная модель разделения спикеров (быстрая загрузка)",
-            requirement: Requirement::Optional,
-            delivery: Delivery::Download,
-            size: NEMOTRON_Q8_0_SIZE,
-            files: &[
-                FileSpec {
-                    url: HF_NEMOTRON_Q8_0,
-                    dest_rel: "models/diarization/nemotron-3-diarization-q8_0.gguf",
-                    size: NEMOTRON_Q8_0_SIZE,
-                    extract: Extract::None,
-                },
-            ],
-            markers: &[Marker {
-                rel: "models/diarization/nemotron-3-diarization-q8_0.gguf",
-                expect: NEMOTRON_Q8_0_SIZE,
             }],
             external_url: Some("https://huggingface.co/audio-cpp/Nemotron-3-Diarization-GGUF"),
         },
@@ -1185,9 +1145,7 @@ fn vram_estimate(id: &str) -> u64 {
         "parakeet" => gb(1.1),
         "parakeet-fp32" => gb(2.7),
         "parakeet-ultra" => gb(2.7),
-        "sortformer" => gb(0.6),
         "nemotron-bf16" => gb(0.2),
-        "nemotron-q8_0" => gb(0.15),
         "roformer" => gb(0.5),
         "roformer-q5" => gb(0.45),
         "roformer-q4" => gb(0.4),
@@ -1209,11 +1167,7 @@ fn resolve_marker_metadata(repo_root: &Path, rel: &str) -> std::io::Result<std::
             };
             std::fs::metadata(&alt)
         } else if rel.contains("nemotron-3-diarization") {
-            let fname = if rel.contains("bf16") {
-                "nemotron-3-diarization-bf16.gguf"
-            } else {
-                "nemotron-3-diarization-q8_0.gguf"
-            };
+            let fname = "nemotron-3-diarization-bf16.gguf";
             let cands = [
                 repo_root.join("models").join(fname),
                 repo_root.join("models").join("diarization").join(fname),

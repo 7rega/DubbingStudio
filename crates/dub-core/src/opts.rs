@@ -68,9 +68,6 @@ pub struct EngineOpts {
     pub tts_steps: i32,
     pub tts_cuda_graphs: bool,
     pub tts_triton: bool,
-    // диаризация — Sortformer (в Rust через parakeet-rs sortformer, в Python — NeMo subprocess)
-    pub sortformer_model: String,
-    pub sortformer_python: Option<PathBuf>,
     // voice packs (клон-референсы / голоса пакета)
     pub voice_pack: PathBuf,
     // render knobs
@@ -90,10 +87,6 @@ impl Default for EngineOpts {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(r"D:\voice pack\examples"));
 
-        let sortformer_python = std::env::var("SHORTS_DUB_SORTFORMER_PY")
-            .map(PathBuf::from)
-            .ok();
-
         EngineOpts {
             device: "cuda".to_string(),
             provider: "cuda".to_string(),
@@ -108,8 +101,6 @@ impl Default for EngineOpts {
             tts_steps: 10,
             tts_cuda_graphs: true,
             tts_triton: true,
-            sortformer_model: "diar_streaming_sortformer_4spk-v2".to_string(),
-            sortformer_python,
             voice_pack,
             burn_cq: 24,
             blur_sigma: 60,

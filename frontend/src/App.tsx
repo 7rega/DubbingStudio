@@ -89,9 +89,7 @@ const VARIANT_SLOT: Record<string, [string, string]> = {
   "whisper-small": ["whisper_model", "small"], "whisper-medium": ["whisper_model", "medium"],
   "whisper-large-v3": ["whisper_model", "large-v3"], "whisper-large-v3-turbo": ["whisper_model", "large-v3-turbo"],
   "whisper-engine": ["whisper_executable", "standard"], "whisper-xxl": ["whisper_executable", "xxl"],
-  sortformer: ["diar_model", "sortformer"],
   "nemotron-bf16": ["diar_model", "nemotron-bf16"],
-  "nemotron-q8_0": ["diar_model", "nemotron-q8_0"],
   "qwen3-asr": ["asr_engine", "qwen3"],
   "crisperwhisper-turbo": ["asr_engine", "crisperwhisper"],
   "crisperwhisper-q8": ["asr_engine", "crisperwhisper"],
@@ -720,47 +718,18 @@ function ModelsSection({ part = "models" }: { part?: "models" | "cloud" }) {
         </div>
       </Group>
       <Group label={t("settings.roleDiar")}>
-        {/* 1. Общие табы бэкенда для обеих моделей: Авто / GPU (CUDA) / CPU */}
         <BackendTabs k="diar_backend" />
-
-        {/* 2. Выбор активной модели диаризации */}
         <div className="mt-2 pt-2 border-t border-white/[0.08]">
           <div className="mb-1.5">
             <div className="text-[12px] font-medium text-[var(--color-text)]">{t("settings.diarModelTitle")}</div>
             <div className="text-[10px] text-[var(--color-muted)]">{t("settings.diarModelHint")}</div>
           </div>
-          <div className="flex gap-1.5">
-            {([
-              ["sortformer", "Sortformer v2 (4spk ONNX)"],
-              ["nemotron-bf16", "Nemotron-3 BF16 (8spk)"],
-              ["nemotron-q8_0", "Nemotron-3 Q8_0 (101 МБ)"]
-            ] as const).map(([id, label]) => {
-              const cur = selv("diar_model") || "sortformer";
-              return (
-                <button
-                  key={id}
-                  onClick={() => setSel("diar_model", id)}
-                  className={`flex-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-colors ${
-                    cur === id
-                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/12 text-white"
-                      : "border-white/[0.08] bg-white/[0.02] text-[var(--color-muted)] hover:text-white hover:bg-white/[0.04]"
-                  }`}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
         </div>
-
-        {/* 3. Строки загрузки и статуса моделей из менеджера компонентов */}
-        <div className="mt-2.5 space-y-1.5">
-          {rowOf("sortformer")}
+        <div className="mt-2 space-y-1.5">
           {rowOf("nemotron-bf16")}
-          {rowOf("nemotron-q8_0")}
         </div>
       </Group>
-      <Group label={t("settings.roleRuntime")}>{rowOf("onnxruntime")}{(selv("diar_backend") === "gpu" || selv("asr_backend") === "gpu") && rowOf("onnxruntime-gpu")}{(selv("diar_backend") === "gpu" || selv("asr_backend") === "gpu") && rowOf("cudnn")}{rowOf("ffmpeg")}{rowOf("cuda-runtime")}{rowOf("vcruntime")}{rowOf("ocr")}</Group>
+      <Group label={t("settings.roleRuntime")}>{rowOf("onnxruntime")}{selv("asr_backend") === "gpu" && rowOf("onnxruntime-gpu")}{selv("asr_backend") === "gpu" && rowOf("cudnn")}{rowOf("ffmpeg")}{rowOf("cuda-runtime")}{rowOf("vcruntime")}{rowOf("ocr")}</Group>
       {/* Производительность / экономия RAM — ВИДИМЫЕ контролы (не авто-магия): против OOM на слабой памяти. */}
       <Group label={t("settings.perfTitle")}>
         {[
@@ -9770,7 +9739,7 @@ const QUANT_GROUP: Record<string, string> = {
   parakeet: "parakeet", "parakeet-fp32": "parakeet", "parakeet-ultra": "parakeet",
   roformer: "roformer", "roformer-q5": "roformer", "roformer-q4": "roformer",
   "whisper-engine": "whisper_engine", "whisper-xxl": "whisper_engine",
-  "nemotron-bf16": "nemotron", "nemotron-q8_0": "nemotron",
+  "nemotron-bf16": "nemotron",
 };
 
 // ── «Первый запуск»: панель автозакачки компонентов (модели/движки/системные библиотеки) ──
@@ -10995,7 +10964,7 @@ export default function App() {
     const parts = [c.device, `ASR ${asrLabel}`];
     if (c.models?.llm) parts.push(`MT+vision ${base(c.models.llm)}`);
     if (c.models?.tts) parts.push(`TTS ${c.models.tts}${c.tts_quant ? ` ${c.tts_quant}` : ""}`);
-    parts.push("sep BSRoformer", "diar Sortformer", "OCR PP-OCR");   // фикс-движки пайплайна
+    parts.push("sep BSRoformer", "diar Nemotron-3", "OCR PP-OCR");   // фикс-движки пайплайна
     setCap(parts.join(" · "));
   }).catch(() => setCap("backend offline")); }, []);
   // boot: resume ?pid=… project, else show main screen (DropZone).

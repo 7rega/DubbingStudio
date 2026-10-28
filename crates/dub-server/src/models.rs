@@ -129,9 +129,7 @@ pub fn component_selection(id: &str) -> Vec<(&'static str, String)> {
         "roformer" => vec![("sep", "Q8_0".into())],
         "roformer-q5" => vec![("sep", "Q5_0".into())],
         "roformer-q4" => vec![("sep", "Q4_0".into())],
-        "sortformer" => vec![("diar_model", "sortformer".into())],
         "nemotron-bf16" => vec![("diar_model", "nemotron-bf16".into())],
-        "nemotron-q8_0" => vec![("diar_model", "nemotron-q8_0".into())],
         "alignment-q8_0" => vec![("align_model", "q8_0".into())],
         "qwen3-asr" => vec![("asr_engine", "qwen3".into())],
         "crisperwhisper-turbo" | "crisperwhisper-q8" => vec![("asr_engine", "crisperwhisper".into())],
@@ -147,7 +145,7 @@ pub fn is_selection_key(key: &str) -> bool {
         "tts" | "higgs_quant" | "asr" | "mt" | "sep" | "asr_engine" | "whisper_model" | "whisper_compute" | "whisper_device" | "align_model" | "align_lang"
             // Backend КАЖДОЙ локальной стадии независимо (auto|gpu|cpu): любой движок на любой инстанс.
             // gpu = CUDA, cpu = без NVIDIA. sep=сепарация(BSRoformer CUDA/CPU-сборка), diar=диаризация
-            // (Sortformer onnx CUDA-EP/CPU), asr=локальный ASR (Parakeet onnx / Whisper CTranslate2).
+            // (Nemotron CUDA/CPU), asr=локальный ASR (Parakeet onnx / Whisper CTranslate2).
             | "local_backend" | "sep_backend" | "diar_backend" | "asr_backend"
             // Лимиты RAM (видимые контролы в настройках, НЕ авто-магия): против OOM на слабой памяти.
             | "llama_ubatch"    // размер prefill-батча Gemma (меньше = меньше пиковый буфер графа prefill)
@@ -257,14 +255,9 @@ pub fn sep_mode(mroot: &Path) -> dub_sep::SepMode {
     }
 }
 
-/// Выбор активной модели диаризации ("nemotron-bf16", "nemotron-q8_0" или "sortformer").
-pub fn diar_model_selection(mroot: &Path) -> &'static str {
-    let sel = load_selection(mroot);
-    match pick(&sel, "diar_model") {
-        Some("nemotron-q8_0") => "nemotron-q8_0",
-        Some("nemotron-bf16") | Some("nemotron") => "nemotron-bf16",
-        _ => "sortformer",
-    }
+/// Выбор активной модели диаризации (всегда "nemotron-bf16").
+pub fn diar_model_selection(_mroot: &Path) -> &'static str {
+    "nemotron-bf16"
 }
 
 /// Порог активности спикера для Nemotron-3 (по умолчанию 0.48).
@@ -276,17 +269,14 @@ pub fn diar_nemotron_threshold(mroot: &Path) -> f32 {
 }
 
 /// Поиск файла весов Nemotron-3 Diarization (GGUF).
-pub fn resolve_nemotron_path(mroot: &Path, quant: &str) -> Option<std::path::PathBuf> {
+pub fn resolve_nemotron_path(mroot: &Path, _quant: &str) -> Option<std::path::PathBuf> {
     if let Ok(env_path) = std::env::var("DUB_STUDIO_NEMOTRON_PATH") {
         let p = std::path::PathBuf::from(env_path);
         if p.is_file() {
             return Some(p);
         }
     }
-    let filename = match quant {
-        "q8_0" | "nemotron-q8_0" => "nemotron-3-diarization-q8_0.gguf",
-        _ => "nemotron-3-diarization-bf16.gguf",
-    };
+    let filename = "nemotron-3-diarization-bf16.gguf";
     let candidates = [
         mroot.join("diarization").join(filename),
         mroot.join("models").join("diarization").join(filename),
@@ -1240,9 +1230,7 @@ mod asr_variant_tests {
     fn tts_and_diar_components_map_to_their_slots() {
         assert_eq!(component_selection("drama3"), vec![("tts_engine", "drama3".to_string())]);
         assert_eq!(component_selection("higgs-bf16"), vec![("tts_engine", "higgs".to_string()), ("higgs_quant", "bf16".to_string())]);
-        assert_eq!(component_selection("sortformer"), vec![("diar_model", "sortformer".to_string())]);
         assert_eq!(component_selection("nemotron-bf16"), vec![("diar_model", "nemotron-bf16".to_string())]);
-        assert_eq!(component_selection("nemotron-q8_0"), vec![("diar_model", "nemotron-q8_0".to_string())]);
         assert_eq!(component_selection("qwen3-asr"), vec![("asr_engine", "qwen3".to_string())]);
     }
 

@@ -765,8 +765,9 @@ fn degradations(project: &Value, made: &Value, setup: &Value, voices: &Voices) -
     }
     let speakers = speakers(project);
     if speakers.len() == 1 {
-        let detail = if component(setup, "sortformer")?["installed"] == false {
-            "the diarizer is not installed (models_status: sortformer), so the speakers were not told apart: every line is voiced as one speaker"
+        let diar_installed = component(setup, "nemotron-bf16")?["installed"] == true;
+        let detail = if !diar_installed {
+            "the diarizer is not installed (models_status: nemotron-bf16), so the speakers were not told apart: every line is voiced as one speaker"
         } else if !finished("diarize") {
             "the diarization failed during the analysis (its job's messages say why), so the speakers were not told apart: every line is voiced as one speaker"
         } else {

@@ -202,7 +202,6 @@ pub fn verify_captions_e2e(
         work_dir: work_dir.to_path_buf(),
         repo_root: repo_root.to_path_buf(),
         asr: models::AsrChoice::Parakeet(unused.clone()), // ocr::stage не трогает ASR (verify-путь)
-        sortformer_onnx: unused.clone(),
         llama_bin: dub_llm::resolve_llama_bin(&repo_root.join("tools").join("llama")),
         mt_model,
         mmproj,
@@ -240,8 +239,6 @@ pub struct AppState {
     pub jobs: JobQueue,
     /// Каталог TDT-модели ASR (analyze). Env DUB_STUDIO_TDT, иначе <models_root>/tdt.
     pub tdt_dir: PathBuf,
-    /// Путь к Sortformer .onnx (диаризация). Env DUB_STUDIO_SORTFORMER, иначе <models_root>/sortformer/…v2.onnx.
-    pub sortformer_onnx: PathBuf,
     /// llama-server(.exe) — сайдкар перевода/vision. Env DUB_STUDIO_LLAMA_BIN, иначе <repo>/tools/llama/llama-server(.exe).
     pub llama_bin: PathBuf,
     /// BSRoformer CLI (сепарация). Env DUB_STUDIO_BSROFORMER_DIR/<cli>, иначе <repo>/tools/bsroformer/bs_roformer-cli.exe.
@@ -348,13 +345,6 @@ impl AppState {
         let tdt_dir = std::env::var("DUB_STUDIO_TDT")
             .map(PathBuf::from)
             .unwrap_or_else(|_| mroot.join("tdt"));
-        let sortformer_onnx = std::env::var("DUB_STUDIO_SORTFORMER")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                mroot
-                    .join("sortformer")
-                    .join("diar_streaming_sortformer_4spk-v2.onnx")
-            });
         // llama-server: env-override, иначе <repo>/tools/llama/llama-server(.exe) (негитуемый каталог,
         // кладёт установщик/раунд 3). Существование проверяет сама стадия перевода (fail-safe).
         let llama_bin = dub_llm::resolve_llama_bin(&repo_root.join("tools").join("llama"));
@@ -384,7 +374,6 @@ impl AppState {
             opts: Arc::new(EngineOpts::default()),
             jobs: JobQueue::new(),
             tdt_dir,
-            sortformer_onnx,
             llama_bin,
             bsroformer_cli,
             bsroformer_model,
@@ -716,15 +705,23 @@ fn ensure_job_components(
     if casting && missing("casting") {
         need.push("casting".to_string());
     }
-    // Любая локальная стадия на GPU → полный CUDA-стек: диаризация/ASR грузят onnxruntime-GPU + cuDNN,
-    // ggml-движки (сепарация/Higgs) — cuda-runtime (cudart/cublas/cuFFT). Без cuFFT CUDA-EP не поднимется.
+    // Любая локальная стадия на GPU → CUDA-стек:
+    // ASR (Parakeet) на GPU требует onnxruntime-GPU + cuDNN.
+    // ggml-движки (Nemotron через audio.cpp, BSRoformer, Higgs) требуют cuda-runtime (cudart/cublas).
     let gpu = ["sep_backend", "diar_backend", "asr_backend"]
         .iter()
         .any(|k| models::stage_backend(models_root, k) == "gpu");
     if gpu {
-        for id in ["cuda-runtime", "onnxruntime-gpu", "cudnn", "bsroformer-engine"] {
+        for id in ["cuda-runtime", "bsroformer-engine"] {
             if missing(id) {
                 need.push(id.to_string());
+            }
+        }
+        if models::stage_backend(models_root, "asr_backend") == "gpu" {
+            for id in ["onnxruntime-gpu", "cudnn"] {
+                if missing(id) {
+                    need.push(id.to_string());
+                }
             }
         }
     }
@@ -1963,7 +1960,7 @@ async fn analyze_project(
             ).into_response();
         }
     }
-    // Backend локальных ONNX-стадий (диаризация Sortformer / Parakeet): exec_config читает DUB_ASR_BACKEND
+    // Backend локальных ONNX-стадий (Parakeet ASR): exec_config читает DUB_ASR_BACKEND
     // при создании сессии — gpu регистрирует CUDA-EP с error_on_failure (недоступность = ошибка, не тихий
     // CPU-фоллбек), иначе CPU-провайдер. Задаём из local_backend на КАЖДУЮ джобу (переключение без рестарта).
     std::env::set_var("DUB_ASR_BACKEND", models::local_backend(&st.models_root));
@@ -1975,7 +1972,6 @@ async fn analyze_project(
         work_dir: dir.clone(),
         repo_root: st.repo_root.clone(),
         asr,
-        sortformer_onnx: st.sortformer_onnx.clone(),
         llama_bin: st.llama_bin.clone(),
         mt_model,
         mmproj,

@@ -1,7 +1,7 @@
 //! Analyze-ядро (транскрипт-стадия). Порт ASR-части dubengine/pipeline._build_dub + сборки Project
 //! из api.analyze/Project.from_artifacts, но БЕЗ перевода/vision/captions (раунд 3).
 //!
-//! Что покрыто: ffmpeg -> wav 16k mono; диаризация Sortformer (turns); при 1 спикере / пустой
+//! Что покрыто: ffmpeg -> wav 16k mono; диаризация Nemotron-3 (turns); при 1 спикере / пустой
 //! диаризации — штатная single-speaker ветка (как в питоне); транскрипция со словными таймстемпами;
 //! Project с сегментами (src-текст, words в extra, speaker, mode-дефолты). Поля перевода/капшенов
 //! остаются пустыми (tgt_text="", subs.mode как задано, captions по умолчанию).
@@ -302,7 +302,6 @@ pub struct AnalyzePaths {
     pub work_dir: std::path::PathBuf, // workspace/<pid>
     pub repo_root: std::path::PathBuf, // корень репо (для app-библиотеки кастингов: <repo>/casting_library)
     pub asr: crate::models::AsrChoice, // выбранный ASR-движок (Parakeet/Whisper) на эту джобу
-    pub sortformer_onnx: std::path::PathBuf, // sortformer .onnx
     pub llama_bin: std::path::PathBuf, // llama-server(.exe) — сайдкар перевода/vision
     pub mt_model: std::path::PathBuf, // Gemma GGUF
     pub mmproj: std::path::PathBuf,   // mmproj GGUF (vision-проектор)
@@ -440,7 +439,7 @@ fn win_target_sec() -> f64 {
 }
 
 const EXTRACT_VER: &str = "extract-16kmono-v1";
-const DIAR_VER: &str = "sortformer-4spk-v2 · merge_gap=0.8 · min_spk=2.5";
+const DIAR_VER: &str = "nemotron-3-diar · merge_gap=0.8 · min_spk=1.0";
 const ASR_VER: &str = "asr-v1";
 const TRANSLATE_VER: &str = "gemma-ctx-v1";
 const OCR_VER: &str = "ppocr-onnx-v1";
@@ -611,7 +610,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     }
 
     // 3) диаризация. merge_gap=0.8, min_speaker_dur=2.5 — дефолты diarize.turns питона (asr.py-контракт).
-    //    Если модель sortformer недоступна ИЛИ вернула <2 спикеров -> single-speaker (штатная ветка).
+    //    Если диаризация недоступна ИЛИ вернула <2 спикеров -> single-speaker (штатная ветка).
     //    ГЕЙТ. Два случая: (1) dub/auto — ПАРИТЕТ с питоном (pipeline.py:169 `cfg.dub and _per_spk`; голос по
     //    умолчанию clone -> _per_spk=true, поэтому диаризуем). (2) transcribe — НАМЕРЕННОЕ РАСШИРЕНИЕ порта:
     //    в питоне transcribe ставит cfg.dub=False и НЕ диаризует, но у нас это отдельный режим «транскрипт+
@@ -660,7 +659,7 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
         vocals16.clone()
     };
     bench.stage("diarize");
-    // Backend диаризации (CUDA / CPU) — общий для Nemotron и Sortformer
+    // Backend диаризации (CUDA / CPU)
     let diar_bk = crate::models::stage_backend(&paths.models_root, "diar_backend");
     std::env::set_var("DUB_ASR_BACKEND", diar_bk);
 
@@ -669,12 +668,10 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
     let audiocpp_cli = audiocpp::resolve_audiocpp_cli(&paths.models_root);
     let nemotron_model = crate::models::resolve_nemotron_path(&paths.models_root, chosen_model);
 
-    let is_nemotron = chosen_model == "nemotron-bf16" || chosen_model == "nemotron-q8_0";
-
     let diar = if !want_diar {
         emit(progress, "diarize", "субтитры: без диаризации (single-speaker)");
         None
-    } else if is_nemotron && audiocpp_cli.is_file() {
+    } else if audiocpp_cli.is_file() {
         if let Some(mpath) = nemotron_model {
             emit(progress, "diarize", &format!("диаризация Nemotron-3 (backend: {diar_bk}, до 8 спикеров)"));
             match dub_asr::diarize_nemotron_simple(
@@ -688,40 +685,19 @@ pub fn run(args: &AnalyzeArgs, paths: &AnalyzePaths, progress: &Progress) -> Res
             ) {
                 Ok(d) => Some(d),
                 Err(e) => {
-                    emit(progress, "diarize", &format!("сбой Nemotron-3 ({e}), откат на Sortformer..."));
-                    if paths.sortformer_onnx.is_file() {
-                        dub_asr::turns(&asr_wav, &paths.sortformer_onnx, 0.8, 2.5).ok()
-                    } else {
-                        None
-                    }
+                    emit(progress, "diarize", &format!("диаризация Nemotron-3 не удалась ({e}); single-speaker путь"));
+                    None
                 }
             }
         } else {
-            emit(progress, "diarize", "модель Nemotron-3 не найдена; запуск Sortformer...");
-            if paths.sortformer_onnx.is_file() {
-                dub_asr::turns(&asr_wav, &paths.sortformer_onnx, 0.8, 2.5).ok()
-            } else {
-                None
-            }
-        }
-    } else if paths.sortformer_onnx.is_file() {
-        emit(progress, "diarize", &format!("диаризация Sortformer v2 (backend: {diar_bk}, до 4 спикеров)"));
-        match dub_asr::turns(&asr_wav, &paths.sortformer_onnx, 0.8, 2.5) {
-            Ok(d) => Some(d),
-            Err(e) => {
-                emit(
-                    progress,
-                    "diarize",
-                    &format!("диаризация не удалась ({e}); single-speaker путь"),
-                );
-                None
-            }
+            emit(progress, "diarize", "модель Nemotron-3 не найдена; single-speaker путь");
+            None
         }
     } else {
         emit(
             progress,
             "diarize",
-            "модели диаризации не найдены; single-speaker путь",
+            "audiocpp_cli не найден; single-speaker путь",
         );
         None
     };
