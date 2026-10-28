@@ -400,6 +400,7 @@ impl Aligner {
                 } else {
                     let mut timed_words = Vec::with_capacity(raw_words.len());
                     let mut prev_word_end = 0.0f64;
+                    let mut exceeds_bounds = false;
 
                     for (k, w) in raw_words.iter().enumerate() {
                         let mut w_start = round_ms(meta.win_start + (w.start_sample as f64 / 16000.0));
@@ -418,9 +419,15 @@ impl Aligner {
                         w_start = w_start.min(duration);
                         w_end = w_end.min(duration);
                         if k + 1 == raw_words.len() {
-                            w_end = w_end.min(meta.next_start);
-                            if w_start > w_end {
-                                w_start = w_end;
+                            if w_end > meta.next_start {
+                                if meta.next_start < prev_word_end {
+                                    exceeds_bounds = true;
+                                } else {
+                                    w_end = meta.next_start;
+                                    if w_start > w_end {
+                                        w_start = w_end;
+                                    }
+                                }
                             }
                         }
                         prev_word_end = w_end;
@@ -434,24 +441,30 @@ impl Aligner {
                         });
                     }
 
+                    if exceeds_bounds {
+                        outcomes[meta.index] = Outcome::skipped(&inputs[meta.index].id, "text_exceeds_audio");
+                        progress(step + 1, total_requests);
+                        continue;
+                    }
+
                     // Акустическое уточнение (защита от мертвой тишины + Guarded Expand):
                     // 1) Старт первого слова: если слово началось в мертвой тишине (например, на коротких выкриках "Oi!"),
                     // подтягиваем его к акустическому началу:
                     let trimmed_start = envelope.trim_start_silence(timed_words[0].start, timed_words[0].end);
-                    timed_words[0].start = trimmed_start;
+                    timed_words[0].start = round_ms(trimmed_start);
 
                     let lo_start = meta.prev_end.max(0.0);
                     let adj_start = envelope.smart_trim_expand_start(timed_words[0].start, timed_words[0].end, lo_start);
-                    timed_words[0].start = adj_start;
+                    timed_words[0].start = round_ms(adj_start);
 
                     // 2) Конец последнего слова: если слово затянулось в тишину, подтягиваем его к акустическому концу:
                     let last_idx = timed_words.len() - 1;
                     let trimmed_end = envelope.trim_end_silence(timed_words[last_idx].start, timed_words[last_idx].end);
-                    timed_words[last_idx].end = trimmed_end;
+                    timed_words[last_idx].end = round_ms(trimmed_end);
 
                     let hi_end = meta.next_start.min(duration).max(timed_words[last_idx].end);
                     let adj_end = envelope.smart_trim_expand_end(timed_words[last_idx].start, timed_words[last_idx].end, hi_end);
-                    timed_words[last_idx].end = adj_end.max(timed_words[last_idx].start).min(hi_end);
+                    timed_words[last_idx].end = round_ms(adj_end.max(timed_words[last_idx].start).min(hi_end));
 
                     let first_start = timed_words[0].start;
                     let last_end = timed_words.last().unwrap().end;
@@ -489,19 +502,25 @@ impl Aligner {
                 let c_start = outcomes[i].aligned.as_ref().unwrap().start;
                 if p_end > c_start && inputs[i - 1].end <= inputs[i].start {
                     let overlap = p_end - c_start;
-                    // Если нахлёст умеренный (<= 250 мс), делим границу пополам (midpoint) без сброса выравнивания
+                    // Если нахлёст умеренный (<= 250 мс), делим границу пополам (midpoint) без сброса выравнивания,
+                    // но только если midpoint не рассекает тело слов (сохраняя инварианты границ).
                     if overlap <= 0.250 {
                         let mid = round_ms((p_end + c_start) / 2.0);
-                        if let Some(a_prev) = outcomes[i - 1].aligned.as_mut() {
-                            a_prev.end = mid;
-                            if let Some(last_w) = a_prev.words.last_mut() {
-                                last_w.end = mid.max(last_w.start);
+                        let prev_last_start = outcomes[i - 1].aligned.as_ref().and_then(|a| a.words.last()).map(|w| w.start).unwrap_or(p_end);
+                        let cur_first_end = outcomes[i].aligned.as_ref().and_then(|a| a.words.first()).map(|w| w.end).unwrap_or(c_start);
+
+                        if mid >= prev_last_start && mid <= cur_first_end {
+                            if let Some(a_prev) = outcomes[i - 1].aligned.as_mut() {
+                                a_prev.end = mid;
+                                if let Some(last_w) = a_prev.words.last_mut() {
+                                    last_w.end = mid;
+                                }
                             }
-                        }
-                        if let Some(a_cur) = outcomes[i].aligned.as_mut() {
-                            a_cur.start = mid;
-                            if let Some(first_w) = a_cur.words.first_mut() {
-                                first_w.start = mid.min(first_w.end);
+                            if let Some(a_cur) = outcomes[i].aligned.as_mut() {
+                                a_cur.start = mid;
+                                if let Some(first_w) = a_cur.words.first_mut() {
+                                    first_w.start = mid;
+                                }
                             }
                         }
                     }
@@ -529,6 +548,50 @@ impl Aligner {
             }
             for i in reject {
                 outcomes[i] = Outcome::skipped(&inputs[i].id, "neighbour_conflict");
+            }
+        }
+
+        // 9. Внутренняя самовалидация каждого сегмента перед отдачей
+        for (i, o) in outcomes.iter_mut().enumerate() {
+            if let Some(a) = &o.aligned {
+                let s_text = &inputs[i].text;
+                let orig_tokens: Vec<&str> = s_text.split_whitespace().collect();
+                let words = &a.words;
+                let ok = a.start.is_finite() && a.end.is_finite() && a.start >= 0.0 && a.end > a.start
+                    && words.len() == orig_tokens.len()
+                    && words.iter().map(|w| w.word.as_str()).eq(orig_tokens.iter().copied())
+                    && words.iter().all(|w| {
+                        w.start.is_finite() && w.end.is_finite()
+                            && w.score.is_finite() && (0.0..=1.0).contains(&w.score)
+                            && w.start >= a.start && w.end <= a.end && w.end >= w.start
+                    })
+                    && words.windows(2).all(|w| w[0].end <= w[1].start);
+                if !ok {
+                    *o = Outcome::skipped(&inputs[i].id, "alignment_drift");
+                }
+            }
+        }
+
+        // Гарантия межсегментной упорядоченности left <= right для непротиворечивости
+        loop {
+            let mut reject = Vec::new();
+            for i in 1..inputs.len() {
+                let left = outcomes[i - 1].aligned.as_ref().map(|a| a.end).unwrap_or(inputs[i - 1].end);
+                let right = outcomes[i].aligned.as_ref().map(|a| a.start).unwrap_or(inputs[i].start);
+                if inputs[i - 1].end <= inputs[i].start && left > right {
+                    if outcomes[i - 1].aligned.is_some() {
+                        reject.push(i - 1);
+                    }
+                    if outcomes[i].aligned.is_some() {
+                        reject.push(i);
+                    }
+                }
+            }
+            if reject.is_empty() {
+                break;
+            }
+            for i in reject {
+                outcomes[i] = Outcome::skipped(&inputs[i].id, "inter_segment_overlap");
             }
         }
 

@@ -265,6 +265,7 @@ impl WhisperAsr {
             .arg("--compute_type").arg(&self.compute)
             .arg("--device").arg(&self.device)
             .arg("--word_timestamps").arg("True")
+            .arg("--condition_on_previous_text").arg("False")
             .arg("--beep_off")
             .arg("--print_progress");
         // Батч-инференс WhisperXXL (--batched, Silero-VAD окна ≤30с пачками). Главный рычаг скорости на GPU.
@@ -395,6 +396,7 @@ impl AsrEngine for WhisperAsr {
             .arg("--output_dir").arg(&out_dir)
             .arg("--compute_type").arg(&self.compute)
             .arg("--device").arg(&self.device)
+            .arg("--condition_on_previous_text").arg("False")
             .arg("--beep_off")
             .arg("--print_progress");
 
