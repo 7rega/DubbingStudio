@@ -3852,12 +3852,20 @@ pub(crate) fn build_ass(proj: &Project, out_ass: &Path, vw: i64, vh: i64, total:
             .filter(|(_, l)| !l.primary.is_empty())
             .map(|(s, l)| {
                 let end = if s.end > 0.0 { s.end } else { total };
+                let words: Option<Vec<(String, f64, f64)>> = s.extra.get("words").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter().filter_map(|w| {
+                        let text = w.get("word").or_else(|| w.get("w")).or_else(|| w.get("text")).and_then(|x| x.as_str())?;
+                        let st = w.get("start").or_else(|| w.get("s")).and_then(|x| x.as_f64())?;
+                        let en = w.get("end").or_else(|| w.get("e")).and_then(|x| x.as_f64())?;
+                        Some((text.to_string(), st, en))
+                    }).collect()
+                }).filter(|v: &Vec<(String, f64, f64)>| !v.is_empty());
                 Sub {
                     start: s.start,
                     end,
                     tgt: l.primary,
                     y: Some(seg_y(s.start, end)),
-                    words: None,
+                    words,
                     secondary: l.secondary,
                 }
             })

@@ -68,8 +68,16 @@ fn karaoke_preset_emits_kf() {
 fn word_and_pop_emit_alpha_transition() {
     let word = gen(Some("candy"), None); // candy: reveal=word
     assert!(word.contains("\\alpha&HFF&") && word.contains("\\t("), "word reveal: alpha+transition");
-    let pop = gen(Some("mrbeast"), None); // mrbeast: reveal=pop
-    assert!(pop.contains("\\fscx55") || pop.contains("\\fscy55"), "pop reveal: scale-in");
+    let pop = gen(Some("pop"), None); // pop: reveal=pop
+    assert!(pop.contains("\\alpha&HFF&") && pop.contains("\\t("), "pop reveal: alpha+transition");
+}
+
+#[test]
+fn mrbeast_uses_highlight_reveal_with_yellow_accent() {
+    let ass = gen(Some("mrbeast"), None); // mrbeast: reveal=highlight, accent #FFE000 (&H00E0FF&)
+    assert!(ass.contains("{\\1c&H00E0FF&\\fscx108\\fscy108}"), "mrbeast должен использовать highlight с масштабированием 108% и желтым акцентом &H00E0FF&");
+    assert!(ass.contains("\\fscx100\\fscy100"), "mrbeast должен сбрасывать масштаб в 100%");
+    assert!(ass.contains(",KT,,"), "mrbeast-текст идёт стилем KT");
 }
 
 #[test]
@@ -221,12 +229,31 @@ fn highlight_events_start_when_each_word_is_spoken() {
         secondary: None,
     }];
     let ass = gen_with_words("hormozi", subs);
-    let starts: Vec<&str> = ass
+    let events: Vec<(&str, &str)> = ass
         .lines()
         .filter(|l| l.starts_with("Dialogue: 1,") && l.contains(",KT,"))
-        .map(|l| l.split(',').nth(1).unwrap())
+        .map(|l| {
+            let mut it = l.split(',');
+            (it.nth(1).unwrap(), it.next().unwrap())
+        })
         .collect();
-    assert_eq!(starts, vec!["0:00:00.00", "0:00:00.50", "0:00:01.50", "0:00:02.00"], "{ass}");
+    assert_eq!(
+        events,
+        vec![
+            ("0:00:00.00", "0:00:00.50"),
+            ("0:00:00.50", "0:00:01.50"),
+            ("0:00:01.50", "0:00:02.00"),
+            ("0:00:02.00", "0:00:03.00"),
+        ],
+        "{ass}"
+    );
+}
+
+#[test]
+fn hormozi_template_automatically_uppercases() {
+    let ass = gen(Some("hormozi"), None);
+    assert!(ass.contains("ONE") && ass.contains("TWO") && ass.contains("THREE"), "hormozi-пресет должен быть в UPPERCASE");
+    assert!(!ass.contains("one") && !ass.contains("two") && !ass.contains("three"), "не должно быть строчных букв");
 }
 
 #[test]

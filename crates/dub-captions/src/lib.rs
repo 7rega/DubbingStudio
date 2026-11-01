@@ -94,6 +94,7 @@ pub fn presets_catalog() -> (serde_json::Map<String, serde_json::Value>, Vec<Str
             if let Some(a) = t.accent {
                 d.insert("accent".into(), serde_json::Value::from(a));
             }
+            d.insert("uppercase".into(), serde_json::Value::from(t.uppercase));
             presets.insert(name.to_string(), serde_json::Value::Object(d));
         }
     }
@@ -319,10 +320,10 @@ pub fn build(width: i64, height: i64, out_ass: &Path, mut args: BuildArgs) -> Re
         } else if let Some(sf) = szf {
             (sf * height as f64).round() as i64
         } else {
-            (height as f64 / 16.0).round() as i64
+            (height as f64 / 22.0).round() as i64
         };
-        // min(max(44, seed), height/10): frame-cap выигрывает на МАЛОМ кадре (h10<44) -> без паники clamp.
-        seed.max(44).min(h10)
+        // min(max(34, seed), height/10): frame-cap выигрывает на МАЛОМ кадре (h10<34) -> без паники clamp.
+        seed.max(34).min(h10)
     };
     let margin_v = (height as f64 * 0.13).round() as i64;
 
@@ -423,7 +424,8 @@ pub fn build(width: i64, height: i64, out_ass: &Path, mut args: BuildArgs) -> Re
     } else {
         ass::font_path_for(&fontname)
     };
-    let up = sub_style.map(|s| s.uppercase).unwrap_or(false);
+    let up = sub_style.map(|s| s.uppercase).unwrap_or(false)
+        || look_resolved.as_ref().map(|l| l.uppercase).unwrap_or(false);
 
     // Блюр-подложку ПОД нашим текстом собираем, только когда стиль сам НЕ даёт непрозрачную плашку
     // (plate_opaque) и нет cover-крышки плоской сцены — иначе фон и так закрыт. Пресеты (look_resolved)

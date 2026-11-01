@@ -242,7 +242,10 @@ fn styled_frame(
         "\\an5\\pos({cx},{cy})\\fn{fontname}\\fs{fs_font}{}\\3c{oc}",
         if bold { "\\b1" } else { "\\b0" }
     );
-    if plate == "none" || plate == "soft" {
+    if plate == "glow" {
+        // Неоновый ореол вокруг букв: размытый акцентный контур
+        lead.push_str(&format!("\\blur4\\bord4\\3c{}\\shad0", look.accent6));
+    } else if plate == "none" || plate == "soft" {
         let bord = ((fs_font as f32 * 0.11) as i64).max(3);
         let shad = ((fs_font as f32 * 0.06) as i64).max(2);
         lead.push_str(&format!("\\bord{bord}\\shad{shad}\\4c&H000000&"));
@@ -345,41 +348,52 @@ pub fn emit_styled(
                     screen.join("\\N")
                 ));
             }
-            for (k, (_, _, ws, we)) in spans.iter().enumerate() {
+            let n_spans = spans.len();
+            for (k, (_, _, ws, _we)) in spans.iter().enumerate() {
                 let mut parts = String::new();
                 let mut cur = 0usize;
                 for (j, (lj, wj, _, _)) in spans.iter().enumerate() {
                     nl(&mut parts, *lj, &mut cur);
                     if j == k {
-                        parts.push_str(&format!("{{\\1c{accent6}}}{wj}{{\\1c{base6}}} "));
+                        parts.push_str(&format!(
+                            "{{\\1c{accent6}\\fscx108\\fscy108}}{wj}{{\\1c{base6}\\fscx100\\fscy100}} "
+                        ));
                     } else {
                         parts.push_str(&format!("{wj} "));
                     }
                 }
-                out.push(format!(
-                    "Dialogue: 1,{},{},KT,,0,0,0,,{{{lead}\\1c{base6}}}{parts}",
-                    ts(*ws),
-                    ts(*we)
-                ));
+                // Подсветка непрерывно удерживается до старта следующего слова,
+                // а последнее слово — до конца экрана b (без паразитных сбросов в белый цвет)
+                let step_end = if k + 1 < n_spans {
+                    spans[k + 1].2
+                } else {
+                    b
+                };
+                if step_end > *ws + 0.005 {
+                    out.push(format!(
+                        "Dialogue: 1,{},{},KT,,0,0,0,,{{{lead}\\1c{base6}}}{parts}",
+                        ts(*ws),
+                        ts(step_end)
+                    ));
+                }
             }
         }
         "word" | "pop" => {
             let mut parts = String::new();
             let mut cur = 0usize;
-            for (li, w, ws, _we) in &spans {
+            for (li, w, ws, we) in &spans {
                 nl(&mut parts, *li, &mut cur);
                 let ms = (((ws - a) * 1000.0) as i64).max(0);
-                if reveal == "pop" {
-                    parts.push_str(&format!(
-                        "{{\\alpha&HFF&\\fscx55\\fscy55\\t({ms},{},\\alpha&H00&\\fscx100\\fscy100)}}{w} ",
-                        ms + 130
-                    ));
+                let dur = if reveal == "pop" {
+                    (((we - ws) * 1000.0) as i64).max(180)
                 } else {
-                    parts.push_str(&format!(
-                        "{{\\alpha&HFF&\\t({ms},{},\\alpha&H00&)}}{w} ",
-                        ms + 90
-                    ));
-                }
+                    90
+                };
+                // Акцентное появление слова с подсветкой цветом accent и плавным переходом в базовый цвет
+                parts.push_str(&format!(
+                    "{{\\alpha&HFF&\\1c{accent6}\\t({ms},{},\\alpha&H00&\\1c{base6})}}{w} ",
+                    ms + dur
+                ));
             }
             out.push(format!(
                 "Dialogue: 1,{},{},KT,,0,0,0,,{{{lead}\\1c{base6}}}{parts}",

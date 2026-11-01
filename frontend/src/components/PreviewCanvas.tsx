@@ -53,21 +53,21 @@ const PRESET_LOOKS: Record<
   card: { font: "Montserrat", color: "#FFFFFF", plate: "card", plate_c: "#16110D", reveal: "whole" },
   hormozi: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#FFD400", bold: true, uppercase: true, reveal: "highlight" },
   hormozi_green: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#28E0A8", bold: true, uppercase: true, reveal: "highlight" },
-  mrbeast: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#FFE000", bold: true, uppercase: true, reveal: "pop" },
+  mrbeast: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#0C0C0C", accent: "#FFE000", bold: true, uppercase: true, reveal: "highlight" },
   impact: { font: "Russo One", color: "#FFFFFF", plate: "box", plate_c: "#101010", accent: "#FF3B30", bold: true, uppercase: true, reveal: "highlight" },
-  pop: { font: "Oswald", color: "#FFFFFF", plate: "pill", plate_c: "#141414", bold: true, uppercase: true, reveal: "pop" },
+  pop: { font: "Oswald", color: "#FFFFFF", plate: "pill", plate_c: "#141414", accent: "#FFE000", bold: true, uppercase: true, reveal: "pop" },
   karaoke: { font: "Oswald", color: "#FFFFFF", plate: "pill", plate_c: "#181818", accent: "#28E0A8", bold: true, reveal: "karaoke" },
   karaoke_gold: { font: "Montserrat", color: "#FFFFFF", plate: "box", plate_c: "#101010", accent: "#FFD400", bold: true, reveal: "karaoke" },
   karaoke_neon: { font: "Montserrat", color: "#FFFFFF", plate: "glow", plate_c: "#0A0A14", accent: "#00E5FF", bold: true, reveal: "karaoke" },
   bubble: { font: "Caveat", color: "#201018", plate: "blob", plate_c: "#FF5DA2", bold: true, reveal: "whole" },
-  bubble_pop: { font: "Pacifico", color: "#201018", plate: "blob", plate_c: "#FFC857", reveal: "pop" },
-  candy: { font: "Pacifico", color: "#2A0E1E", plate: "pill", plate_c: "#FF6FB5", reveal: "word" },
+  bubble_pop: { font: "Pacifico", color: "#201018", plate: "blob", plate_c: "#FFC857", accent: "#FFC857", reveal: "pop" },
+  candy: { font: "Pacifico", color: "#2A0E1E", plate: "pill", plate_c: "#FF6FB5", accent: "#00E5FF", reveal: "word" },
   neon: { font: "Montserrat", color: "#00E5FF", plate: "glow", plate_c: "#0A0A14", accent: "#00E5FF", bold: true, reveal: "whole" },
   neon_pink: { font: "Oswald", color: "#FF54C8", plate: "glow", plate_c: "#100A14", accent: "#FF54C8", bold: true, reveal: "whole" },
   cyber: { font: "Oswald", color: "#7DF9FF", plate: "glow", plate_c: "#07101A", accent: "#00E5FF", bold: true, reveal: "word" },
   fresh: { font: "Montserrat", color: "#FFFFFF", plate: "none", plate_c: "transparent", reveal: "whole" },
-  fresh_bold: { font: "Russo One", color: "#FFFFFF", plate: "none", plate_c: "transparent", bold: true, reveal: "pop" },
-  fresh_pop: { font: "Montserrat", color: "#FFFFFF", plate: "none", plate_c: "transparent", bold: true, reveal: "pop" },
+  fresh_bold: { font: "Russo One", color: "#FFFFFF", plate: "none", plate_c: "transparent", accent: "#FFE000", bold: true, reveal: "pop" },
+  fresh_pop: { font: "Montserrat", color: "#FFFFFF", plate: "none", plate_c: "transparent", accent: "#FFE000", bold: true, reveal: "pop" },
   fresh_karaoke: { font: "Oswald", color: "#FFFFFF", plate: "none", plate_c: "transparent", accent: "#FFD400", bold: true, reveal: "karaoke" },
   fresh_hormozi: { font: "Russo One", color: "#FFFFFF", plate: "none", plate_c: "transparent", accent: "#FFD400", bold: true, uppercase: true, reveal: "highlight" },
   fresh_soft: { font: "Montserrat", color: "#FFFFFF", plate: "soft", plate_c: "transparent", reveal: "whole" },
@@ -82,12 +82,29 @@ const FONT_SCALE: Record<string, number> = {
   Pacifico: 1.42,
   "Playfair Display": 1.06,
   Caveat: 1.55,
+  "Noto Sans": 1.0,
+  "Fira Sans": 1.0,
+  Rubik: 1.02,
+  Comfortaa: 1.15,
+  "Exo 2": 1.04,
+  Philosopher: 1.06,
+  Prata: 1.06,
+  "Yeseva One": 1.08,
+  Pangolin: 1.25,
+  "Marck Script": 1.45,
 };
 
 interface WordTiming {
   word: string;
   start: number;
   end: number;
+}
+
+interface PreviewPage {
+  words: WordTiming[];
+  start: number;
+  end: number;
+  lineCount: number;
 }
 
 const getWordsWithTimings = (seg: Project["segments"][number], customText?: string): WordTiming[] => {
@@ -116,6 +133,112 @@ const getWordsWithTimings = (seg: Project["segments"][number], customText?: stri
     return { word: w, start: st, end: en };
   });
 };
+
+/**
+ * Раскладка субтитров на экраны (страницы) в точности по pages::plan (Netflix Timed Text):
+ * до 42 символов в строке, до 2 строк на экран, максимум 7.0 с на экран.
+ */
+function planPages(
+  words: WordTiming[],
+  segStart: number,
+  segEnd: number,
+  maxChars = 42,
+  maxLines = 2
+): PreviewPage[] {
+  if (words.length === 0) return [];
+
+  // 1. Жадный перенос по числу символов в строке (wrap_chars)
+  const lines: WordTiming[][] = [];
+  let curLine: WordTiming[] = [];
+  let curLen = 0;
+
+  for (const w of words) {
+    const wLen = w.word.length;
+    if (curLen + wLen + (curLine.length > 0 ? 1 : 0) <= maxChars || curLine.length === 0) {
+      curLine.push(w);
+      curLen += wLen + (curLine.length > 1 ? 1 : 0);
+    } else {
+      lines.push(curLine);
+      curLine = [w];
+      curLen = wLen;
+    }
+  }
+  if (curLine.length > 0) {
+    lines.push(curLine);
+  }
+
+  // 2. Группировка строк по экранам (до maxLines строк на экран)
+  const perPage = Math.max(1, maxLines);
+  const rawPages: { words: WordTiming[]; lineCount: number }[] = [];
+  for (let i = 0; i < lines.length; i += perPage) {
+    const pageLines = lines.slice(i, i + perPage);
+    rawPages.push({ words: pageLines.flat(), lineCount: pageLines.length });
+  }
+
+  // 3. Вычисление временных границ каждого экрана
+  const count = rawPages.length;
+  const per = (segEnd - segStart) / count;
+  const initialPages: PreviewPage[] = rawPages.map((p, idx) => {
+    const pageStart = idx === 0 ? segStart : (p.words[0]?.start ?? (segStart + idx * per));
+    const pageEnd = idx === count - 1 ? segEnd : (rawPages[idx + 1]?.words[0]?.start ?? (segStart + (idx + 1) * per));
+    return {
+      words: p.words,
+      start: pageStart,
+      end: Math.max(pageStart, pageEnd),
+      lineCount: p.lineCount,
+    };
+  });
+
+  // 4. Дробление слишком длинных экранов (> 7 с) ближе к середине
+  const MAX_EVENT_SECS = 7.0;
+  const MIN_EVENT_SECS = 5.0 / 6.0;
+  const result: PreviewPage[] = [];
+
+  function splitLong(p: PreviewPage) {
+    if (p.end - p.start <= MAX_EVENT_SECS || p.words.length < 2) {
+      result.push(p);
+      return;
+    }
+    const mid = (p.start + p.end) / 2;
+    let bestK = -1;
+    let minDiff = Infinity;
+    for (let k = 1; k < p.words.length; k++) {
+      const splitTime = p.words[k].start;
+      if (splitTime - p.start >= MIN_EVENT_SECS && p.end - splitTime >= MIN_EVENT_SECS) {
+        const diff = Math.abs(splitTime - mid);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestK = k;
+        }
+      }
+    }
+    if (bestK === -1) {
+      result.push(p);
+      return;
+    }
+    const leftWords = p.words.slice(0, bestK);
+    const rightWords = p.words.slice(bestK);
+    const splitTime = p.words[bestK].start;
+    splitLong({
+      words: leftWords,
+      start: p.start,
+      end: splitTime,
+      lineCount: Math.min(2, Math.ceil(leftWords.length / 5)),
+    });
+    splitLong({
+      words: rightWords,
+      start: splitTime,
+      end: p.end,
+      lineCount: Math.min(2, Math.ceil(rightWords.length / 5)),
+    });
+  }
+
+  for (const page of initialPages) {
+    splitLong(page);
+  }
+
+  return result;
+}
 
 export default function PreviewCanvas({
   pid,
@@ -255,15 +378,15 @@ export default function PreviewCanvas({
   const effectiveFont = preset?.font || ss.font || "Montserrat";
   const effectiveColor = preset?.color || ss.color || "#FFFFFF";
   const effectiveBold = preset ? (preset.bold ?? false) : (ss.bold ?? true);
-  const effectiveUppercase = preset ? (preset.uppercase ?? false) : (ss.uppercase ?? false);
+  const effectiveUppercase = Boolean(preset?.uppercase || ss.uppercase);
   const hasPlate = preset ? preset.plate !== "none" : !!ss.plate;
   const plateColor = preset?.plate_c || ss.plate_color || "rgba(0,0,0,0.75)";
   const plateType = preset?.plate || (ss.plate ? "box" : "none");
 
   // Кинематографический оптический масштаб: в точности повторяет геометрию libass (FreeType)
-  // При 1080p стандартный размер составляет ~32-34px (занимает ~48-52% ширины для строки из 40 символов)
+  // При 1080p стандартный размер составляет Math.max(34, vh / 22.0) (синхронизировано с dub-captions / lib.rs)
   const explicitSize = ss.size_px && ss.size_px > 0 ? ss.size_px : null;
-  const baseFs = explicitSize ? Math.max(16, Math.min(explicitSize, Math.round(vh / 5))) * 0.72 : Math.round(vh / 28.0);
+  const baseFs = explicitSize ? Math.max(16, Math.min(explicitSize, Math.round(vh / 5))) : Math.max(34, Math.round(vh / 22.0));
   const fontMultiplier = FONT_SCALE[effectiveFont] || 1.0;
   const fsFont = Math.max(14, Math.round(baseFs * fontMultiplier));
   const subFontSize = Math.max(10, Math.round(fsFont * sy));
@@ -271,7 +394,13 @@ export default function PreviewCanvas({
   const padX = Math.max(6, Math.round(subFontSize * 0.55));
   const padY = Math.max(2, Math.round(subFontSize * 0.30));
 
-  const lineCount = activeSegText ? Math.max(1, Math.ceil(activeSegText.length / 42) + (activeSegText.includes("\n") ? 1 : 0)) : 1;
+  // Раскладка на страницы субтитров (Netflix: до 42 симв/строка, до 2 строк)
+  const activePages = activeSegText && activeRawSeg
+    ? planPages(getWordsWithTimings(activeRawSeg, activeSegText), activeRawSeg.start, activeRawSeg.end)
+    : [];
+  const activePage = activePages.find((p, i) => scrub >= p.start && (scrub < p.end || i === activePages.length - 1)) || activePages[0];
+
+  const lineCount = activePage ? activePage.lineCount : 1;
   const autoBlurH = Math.max(subFontSize * 1.85, lineCount * subFontSize * 1.35 + 12 * sy);
 
   const shouldRenderAutoSubBlur = project.render.blur && isOriginalPreset && !!activeSegText;
@@ -364,31 +493,40 @@ export default function PreviewCanvas({
                     </div>
                   );
                 })}
-                {activeSegText && activeRawSeg && (() => {
-                  const words = getWordsWithTimings(activeRawSeg, activeSegText);
+                {activePage && activePage.words.length > 0 && (() => {
                   const revealType = preset?.reveal || "whole";
+                  const accentColor = preset?.accent || (
+                    revealType === "highlight" ? "#FFD400" :
+                    revealType === "pop" ? "#FFE000" :
+                    revealType === "karaoke" ? "#28E0A8" :
+                    revealType === "word" ? "#00E5FF" :
+                    "#FFD400"
+                  );
                   return (
                     <div style={{ position: "absolute", left: 0, top: `${subY * sy}px`, transform: "translateY(-50%)", width: `${disp.w}px`, display: "flex", justifyContent: "center", alignItems: "center", textAlign: (ss.align || "center") as React.CSSProperties["textAlign"], fontSize: `${subFontSize}px`, fontFamily: `"${effectiveFont}", "Montserrat", sans-serif`, fontWeight: effectiveBold ? 800 : 700, fontStyle: ss.italic ? "italic" : "normal", textTransform: effectiveUppercase ? "uppercase" : "none", color: effectiveColor, letterSpacing: "-0.015em", lineHeight: 1.15, padding: `0 ${16 * sx}px` }}>
-                      <span style={{ backgroundColor: hasPlate ? plateColor : undefined, padding: hasPlate ? `${padY}px ${padX}px` : undefined, borderRadius: hasPlate ? plateBorderRadius : undefined, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone", display: "inline-flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", maxWidth: "92%", backdropFilter: hasPlate && plateType === "soft" ? "blur(8px)" : undefined, boxShadow: hasPlate && plateType === "glow" && preset?.accent ? `0 0 15px ${preset.accent}, 0 0 30px ${preset.accent}` : hasPlate && plateColor !== "transparent" ? "0 2px 10px rgba(0,0,0,0.35)" : undefined }}>
-                        {words.map((w, idx) => {
-                          const isCurrent = scrub >= w.start && scrub < w.end;
-                          const isPast = scrub >= w.end;
+                      <span style={{ backgroundColor: hasPlate ? plateColor : undefined, padding: hasPlate ? `${padY}px ${padX}px` : undefined, borderRadius: hasPlate ? plateBorderRadius : undefined, boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone", display: "inline-flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", maxWidth: "92%", backdropFilter: hasPlate && plateType === "soft" ? "blur(8px)" : undefined, boxShadow: hasPlate && plateType === "glow" && (preset?.accent || effectiveColor) ? `0 0 15px ${preset?.accent || effectiveColor}, 0 0 30px ${preset?.accent || effectiveColor}` : hasPlate && plateColor !== "transparent" ? "0 2px 10px rgba(0,0,0,0.35)" : undefined }}>
+                        {activePage.words.map((w, idx) => {
+                          const nextW = idx < activePage.words.length - 1 ? activePage.words[idx + 1] : null;
+                          const isCurrent = scrub >= w.start && (
+                            nextW != null ? scrub < nextW.start : scrub <= activePage.end
+                          );
+                          const isPast = scrub >= (nextW != null ? nextW.start : activePage.end);
                           const isFuture = scrub < w.start;
                           let wordColor = effectiveColor;
                           let wordTransform = "none";
                           let wordOpacity = 1;
                           let wordTextShadow = textShadowCSS;
                           if (revealType === "highlight") {
-                            if (isCurrent) { wordColor = preset?.accent || "#FFD400"; wordTransform = "scale(1.08)"; wordTextShadow = `0 0 14px ${preset?.accent || "#FFD400"}, ${textShadowCSS || ""}`; }
+                            if (isCurrent) { wordColor = accentColor; wordTransform = "scale(1.08)"; wordTextShadow = `0 0 14px ${accentColor}, ${textShadowCSS || ""}`; }
                           } else if (revealType === "pop") {
-                            if (isCurrent) { wordColor = preset?.accent || "#FFE000"; wordTransform = "scale(1.15) translateY(-2px)"; }
+                            if (isCurrent) { wordColor = accentColor; wordTransform = "scale(1.10)"; }
                           } else if (revealType === "karaoke") {
-                            if (isCurrent || isPast) wordColor = preset?.accent || "#28E0A8"; else wordOpacity = 0.6;
+                            if (isCurrent || isPast) wordColor = accentColor; else wordOpacity = 0.6;
                           } else if (revealType === "word") {
-                            if (isFuture) wordOpacity = 0; else if (isCurrent) wordColor = preset?.accent || "#00E5FF";
+                            if (isFuture) wordOpacity = 0; else if (isCurrent) wordColor = accentColor;
                           }
                           return (
-                            <span key={idx} style={{ display: "inline-block", color: wordColor, transform: wordTransform, opacity: wordOpacity, ...strokeCSS, textShadow: wordTextShadow, transition: "transform 0.08s ease-out, color 0.08s ease-out, opacity 0.08s ease-out", marginRight: idx < words.length - 1 ? "0.24em" : 0 }}>
+                            <span key={idx} style={{ display: "inline-block", color: wordColor, transform: wordTransform, opacity: wordOpacity, ...strokeCSS, textShadow: wordTextShadow, transition: "transform 0.08s ease-out, color 0.08s ease-out, opacity 0.08s ease-out", marginRight: idx < activePage.words.length - 1 ? "0.24em" : 0 }}>
                               {w.word}
                             </span>
                           );

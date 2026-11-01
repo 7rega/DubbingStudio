@@ -51,7 +51,7 @@ pub fn is_known_font(name: &str) -> bool {
     )
 }
 
-/// Шаблон луковый (TEMPLATES): reveal/plate/font/base/plate_c/accent.
+/// Шаблон луковый (TEMPLATES): reveal/plate/font/base/plate_c/accent/uppercase.
 #[derive(Clone)]
 pub struct Template {
     pub reveal: &'static str,
@@ -60,51 +60,53 @@ pub struct Template {
     pub base: &'static str,
     pub plate_c: &'static str,
     pub accent: Option<&'static str>,
+    pub uppercase: bool,
 }
 
 /// TEMPLATES — 26 готовых луков (дословно из captions.py).
 pub fn template(name: &str) -> Option<Template> {
-    let t = |reveal, plate, font, base, plate_c, accent| Template {
+    let t = |reveal, plate, font, base, plate_c, accent, uppercase| Template {
         reveal,
         plate,
         font,
         base,
         plate_c,
         accent,
+        uppercase,
     };
     Some(match name {
         // minimal / clean
-        "clean" => t("whole", "pill", "Montserrat", "#FFFFFF", "#1A1A1A", None),
-        "minimal" => t("whole", "rounded", "Roboto", "#FFFFFF", "#181818", None),
-        "boxed" => t("whole", "box", "Montserrat", "#FFFFFF", "#101010", None),
-        "headline" => t("whole", "box", "Oswald", "#FFFFFF", "#0C0C0C", None),
-        "serif" => t("whole", "card", "Playfair Display", "#FFFFFF", "#16110D", None),
-        "card" => t("whole", "card", "Montserrat", "#FFFFFF", "#16110D", None),
+        "clean" => t("whole", "pill", "Montserrat", "#FFFFFF", "#1A1A1A", None, false),
+        "minimal" => t("whole", "rounded", "Roboto", "#FFFFFF", "#181818", None, false),
+        "boxed" => t("whole", "box", "Montserrat", "#FFFFFF", "#101010", None, false),
+        "headline" => t("whole", "box", "Oswald", "#FFFFFF", "#0C0C0C", None, true),
+        "serif" => t("whole", "card", "Playfair Display", "#FFFFFF", "#16110D", None, false),
+        "card" => t("whole", "card", "Montserrat", "#FFFFFF", "#16110D", None, false),
         // viral / bold
-        "hormozi" => t("highlight", "box", "Russo One", "#FFFFFF", "#0C0C0C", Some("#FFD400")),
-        "hormozi_green" => t("highlight", "box", "Russo One", "#FFFFFF", "#0C0C0C", Some("#28E0A8")),
-        "mrbeast" => t("pop", "box", "Russo One", "#FFFFFF", "#0C0C0C", Some("#FFE000")),
-        "impact" => t("highlight", "box", "Russo One", "#FFFFFF", "#101010", Some("#FF3B30")),
-        "pop" => t("pop", "pill", "Oswald", "#FFFFFF", "#141414", None),
+        "hormozi" => t("highlight", "box", "Russo One", "#FFFFFF", "#0C0C0C", Some("#FFD400"), true),
+        "hormozi_green" => t("highlight", "box", "Russo One", "#FFFFFF", "#0C0C0C", Some("#28E0A8"), true),
+        "mrbeast" => t("highlight", "box", "Russo One", "#FFFFFF", "#0C0C0C", Some("#FFE000"), true),
+        "impact" => t("highlight", "box", "Russo One", "#FFFFFF", "#101010", Some("#FF3B30"), true),
+        "pop" => t("pop", "pill", "Oswald", "#FFFFFF", "#141414", Some("#FFE000"), true),
         // karaoke
-        "karaoke" => t("karaoke", "pill", "Oswald", "#FFFFFF", "#181818", Some("#28E0A8")),
-        "karaoke_gold" => t("karaoke", "box", "Montserrat", "#FFFFFF", "#101010", Some("#FFD400")),
-        "karaoke_neon" => t("karaoke", "glow", "Montserrat", "#FFFFFF", "#0A0A14", Some("#00E5FF")),
+        "karaoke" => t("karaoke", "pill", "Oswald", "#FFFFFF", "#181818", Some("#28E0A8"), false),
+        "karaoke_gold" => t("karaoke", "box", "Montserrat", "#FFFFFF", "#101010", Some("#FFD400"), false),
+        "karaoke_neon" => t("karaoke", "glow", "Montserrat", "#FFFFFF", "#0A0A14", Some("#00E5FF"), false),
         // playful
-        "bubble" => t("whole", "blob", "Caveat", "#201018", "#FF5DA2", None),
-        "bubble_pop" => t("pop", "blob", "Pacifico", "#201018", "#FFC857", None),
-        "candy" => t("word", "pill", "Pacifico", "#2A0E1E", "#FF6FB5", None),
+        "bubble" => t("whole", "blob", "Caveat", "#201018", "#FF5DA2", None, false),
+        "bubble_pop" => t("pop", "blob", "Pacifico", "#201018", "#FFC857", Some("#FFC857"), false),
+        "candy" => t("word", "pill", "Pacifico", "#2A0E1E", "#FF6FB5", Some("#00E5FF"), false),
         // neon / night
-        "neon" => t("whole", "glow", "Montserrat", "#00E5FF", "#0A0A14", Some("#00E5FF")),
-        "neon_pink" => t("whole", "glow", "Oswald", "#FF54C8", "#100A14", Some("#FF54C8")),
-        "cyber" => t("word", "glow", "Oswald", "#7DF9FF", "#07101A", Some("#00E5FF")),
+        "neon" => t("whole", "glow", "Montserrat", "#00E5FF", "#0A0A14", Some("#00E5FF"), false),
+        "neon_pink" => t("whole", "glow", "Oswald", "#FF54C8", "#100A14", Some("#FF54C8"), false),
+        "cyber" => t("word", "glow", "Oswald", "#7DF9FF", "#07101A", Some("#00E5FF"), false),
         // FRESH (no solid back)
-        "fresh" => t("whole", "none", "Montserrat", "#FFFFFF", "#101010", None),
-        "fresh_bold" => t("pop", "none", "Russo One", "#FFFFFF", "#101010", None),
-        "fresh_pop" => t("pop", "none", "Montserrat", "#FFFFFF", "#101010", None),
-        "fresh_karaoke" => t("karaoke", "none", "Oswald", "#FFFFFF", "#101010", Some("#FFD400")),
-        "fresh_hormozi" => t("highlight", "none", "Russo One", "#FFFFFF", "#101010", Some("#FFD400")),
-        "fresh_soft" => t("whole", "soft", "Montserrat", "#FFFFFF", "#101010", None),
+        "fresh" => t("whole", "none", "Montserrat", "#FFFFFF", "#101010", None, false),
+        "fresh_bold" => t("pop", "none", "Russo One", "#FFFFFF", "#101010", Some("#FFE000"), false),
+        "fresh_pop" => t("pop", "none", "Montserrat", "#FFFFFF", "#101010", Some("#FFE000"), false),
+        "fresh_karaoke" => t("karaoke", "none", "Oswald", "#FFFFFF", "#101010", Some("#FFD400"), false),
+        "fresh_hormozi" => t("highlight", "none", "Russo One", "#FFFFFF", "#101010", Some("#FFD400"), true),
+        "fresh_soft" => t("whole", "soft", "Montserrat", "#FFFFFF", "#101010", None, false),
         _ => return None,
     })
 }
@@ -198,6 +200,7 @@ pub struct ResolvedLook {
     pub base_lum: f32,
     pub accent6: String,  // c6
     pub plate6: String,   // c6
+    pub uppercase: bool,
 }
 
 /// Порт _resolve_look. caption_style (имя TEMPLATE) + опц. plate/reveal/font оверрайды -> лук, либо
@@ -240,6 +243,7 @@ pub fn resolve_look(
         base_lum: lum(t.base),
         accent6: c6(&hex_ass(&accent_hex)),
         plate6: c6(&hex_ass(t.plate_c)),
+        uppercase: t.uppercase,
     })
 }
 
